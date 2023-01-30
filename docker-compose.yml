@@ -1,7 +1,7 @@
 version: '3.3'
 services:
   clash:
-    image: dreamacro/clash:latest
+    image: dreamacro/clash-premium:latest
     container_name: clash
     restart: unless-stopped
     volumes:
