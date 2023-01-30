@@ -28,7 +28,7 @@ services:
     depends_on:
       - clash
   naive:
-    image: ghcr.io/0xf00f00/naiveproxy:client
+    image: ghcr.io/0xf00f00/naiveproxy:latest
     container_name: naive
     restart: unless-stopped
     dns:
