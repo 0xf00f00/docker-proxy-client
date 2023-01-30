@@ -51,6 +51,14 @@ proxy-groups:
     url: 'http://www.gstatic.com/generate_204'
     interval: 200
 
+rule-providers:
+  ir:
+    type: http
+    behavior: classical
+    url: "https://github.com/chiroots/iran-hosted-domains/releases/latest/download/clash_rules.yaml"
+    path: /root/.config/clash/ir-ruleset.yaml
+    interval: 432000
+
 rules:
   # Local address
   - IP-CIDR,127.0.0.0/8,DIRECT
@@ -64,5 +72,6 @@ rules:
 
   - DOMAIN-SUFFIX,.ir,DIRECT
   - GEOIP,IR,DIRECT
+  - RULE-SET,ir,DIRECT
 
   - MATCH,auto
