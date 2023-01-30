@@ -1,0 +1,68 @@
+# HTTP(S) and SOCKS4(A)/SOCKS5 server on the same port
+mixed-port: 7890
+
+# Set to true to allow connections to the local-end server from
+# other LAN IP addresses
+allow-lan: true
+bind-address: '*'
+
+# Clash router working mode
+# rule: rule-based packet routing
+# global: all packets will be forwarded to a single endpoint
+# direct: directly forward the packets to the Internet
+mode: rule
+
+# info / warning / error / debug / silent
+log-level: warning
+ipv6: false
+
+proxies:
+  - name: "ss-shadow-tls"
+    type: socks5
+    server: ss-shadow-tls
+    port: 1080
+    udp: true
+  - name: "ss-cloak"
+    type: socks5
+    server: ss-cloak
+    port: 1080
+    udp: true
+  - name: "ss-cloak-cdn"
+    type: socks5
+    server: ss-cloak-cdn
+    port: 1080
+    udp: true
+  - name: "naive"
+    type: socks5
+    server: naive
+    port: 1080
+    udp: true
+
+proxy-groups:
+  - name: auto
+    type: url-test
+    proxies:
+      - ss-shadow-tls
+      - ss-cloak
+      - ss-cloak-cdn
+      - naive
+    tolerance: 150
+    lazy: true
+    url: 'http://www.gstatic.com/generate_204'
+    interval: 200
+
+rules:
+  # Local address
+  - IP-CIDR,127.0.0.0/8,DIRECT
+  - IP-CIDR,172.16.0.0/12,DIRECT
+  - IP-CIDR,192.168.0.0/16,DIRECT
+  - IP-CIDR,10.0.0.0/8,DIRECT
+  - IP-CIDR,17.0.0.0/8,DIRECT
+  - IP-CIDR,100.64.0.0/10,DIRECT
+
+  - DOMAIN-SUFFIX,.ntp.org,DIRECT
+
+  - DOMAIN-SUFFIX,.ir,DIRECT
+  - GEOIP,IR,DIRECT
+
+  - MATCH,auto

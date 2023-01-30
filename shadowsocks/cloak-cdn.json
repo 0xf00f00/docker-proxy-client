@@ -1,0 +1,9 @@
+{
+    "server":"cloak-cdn",
+    "server_port":1984,
+    "local_address": "0.0.0.0",
+    "local_port": 1080,
+    "password":"${PASSWORD}",
+    "timeout":60,
+    "method":"chacha20-ietf-poly1305"
+}

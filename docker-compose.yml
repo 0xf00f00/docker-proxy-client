@@ -1,0 +1,115 @@
+version: '3.3'
+services:
+  clash:
+    image: dreamacro/clash:latest
+    container_name: clash
+    restart: unless-stopped
+    volumes:
+      - ./clash/config.yaml:/root/.config/clash/config.yaml:ro
+    ports:
+      - 7890:7890
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
+    depends_on:
+      - naive
+      - ss-shadow-tls
+      - ss-cloak
+      - ss-cloak-cdn
+  dnscrypt-proxy:
+    image: gists/dnscrypt-proxy:latest
+    container_name: dnscrypt-proxy
+    restart: unless-stopped
+    volumes:
+      - ./dnscrypt-proxy/dnscrypt-proxy.toml:/etc/dnscrypt-proxy/dnscrypt-proxy.toml:ro
+    ports:
+      - 53:5353/udp
+      - 53:5353/tcp
+    depends_on:
+      - clash
+  naive:
+    image: ghcr.io/0xf00f00/naiveproxy:client
+    container_name: naive
+    restart: unless-stopped
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
+    command: naive --proxy=https://${NAIVE_USER}:${NAIVE_PASSWORD}@${NAIVE_SERVER}
+  ss-shadow-tls:
+    image: ghcr.io/shadowsocks/sslocal-rust:latest
+    container_name: ss-shadow-tls
+    restart: unless-stopped
+    environment:
+      - PASSWORD=${SHADOWSOCKS_PASSWORD}
+    volumes:
+      - ./shadowsocks/shadow-tls.json:/etc/shadowsocks-rust/config.json:ro
+    depends_on:
+      - shadowtls
+  ss-cloak:
+    image: ghcr.io/shadowsocks/sslocal-rust:latest
+    container_name: ss-cloak
+    restart: unless-stopped
+    environment:
+      - PASSWORD=${SHADOWSOCKS_PASSWORD}
+    volumes:
+      - ./shadowsocks/cloak.json:/etc/shadowsocks-rust/config.json:ro
+    depends_on:
+      - cloak
+  ss-cloak-cdn:
+    image: ghcr.io/shadowsocks/sslocal-rust:latest
+    container_name: ss-cloak-cdn
+    restart: unless-stopped
+    environment:
+      - PASSWORD=${SHADOWSOCKS_PASSWORD}
+    volumes:
+      - ./shadowsocks/cloak-cdn.json:/etc/shadowsocks-rust/config.json:ro
+    depends_on:
+      - cloak-cdn
+  shadowtls:
+    image: ghcr.io/0xf00f00/shadow-tls:latest
+    container_name: shadowtls
+    restart: unless-stopped
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
+    environment:
+      - MODE=client
+      - LISTEN=0.0.0.0:443
+      - SERVER=${SHADOWTLS_SERVER}
+      - TLS=${SHADOWTLS_DOMAIN}
+      - PASSWORD=${SHADOWTLS_PASSWORD}
+  cloak:
+    image: ghcr.io/0xf00f00/cloak:latest
+    container_name: cloak
+    restart: unless-stopped
+    command: ck-client
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
+    environment:
+      - CLOAK_REMOTE_HOST=${CLOAK_REMOTE_HOST}
+      - CLOAK_UUID=${CLOAK_UUID}
+      - CLOAK_PUBLIC_KEY=${CLOAK_PUBLIC_KEY}
+      - CLOAK_PROXY_METHOD=${CLOAK_PROXY_METHOD}
+      - CLOAK_TRANSPORT=direct
+      - CLOAK_ENCRYPTION_METHOD=${CLOAK_ENCRYPTION_METHOD}
+      - CLOAK_BROWSER_SIGNATURE=${CLOAK_BROWSER_SIGNATURE}
+      - CLOAK_SERVER_NAME=${CLOAK_SERVER_NAME}
+  cloak-cdn:
+    image: ghcr.io/0xf00f00/cloak:latest
+    container_name: cloak-cdn
+    restart: unless-stopped
+    command: ck-client
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
+    environment:
+      - CLOAK_REMOTE_HOST=${CLOAK_CDN_REMOTE_HOST}
+      - CLOAK_UUID=${CLOAK_UUID}
+      - CLOAK_PUBLIC_KEY=${CLOAK_PUBLIC_KEY}
+      - CLOAK_PROXY_METHOD=${CLOAK_PROXY_METHOD}
+      - CLOAK_TRANSPORT=CDN
+      - CLOAK_ENCRYPTION_METHOD=${CLOAK_CDN_ENCRYPTION_METHOD}
+      - CLOAK_BROWSER_SIGNATURE=${CLOAK_BROWSER_SIGNATURE}
+      - CLOAK_SERVER_NAME=${CLOAK_CDN_SERVER_NAME}
+
