@@ -55,7 +55,7 @@ services:
       - 1.0.0.1
     environment:
       - MODE=client
-      - LISTEN=0.0.0.0:443
+      - LISTEN=0.0.0.0:4433
       - SERVER=${SHADOWTLS_SERVER}
       - TLS=${SHADOWTLS_DOMAIN}
       - PASSWORD=${SHADOWTLS_PASSWORD}

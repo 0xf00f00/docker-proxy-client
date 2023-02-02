@@ -4,7 +4,7 @@
     "servers": [
         {
             "address":"shadowtls",
-            "port":443,
+            "port":4433,
             "password":"${PASSWORD}",
             "timeout":60,
             "method":"chacha20-ietf-poly1305"
