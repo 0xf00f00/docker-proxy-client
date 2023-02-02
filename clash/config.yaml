@@ -17,19 +17,9 @@ log-level: warning
 ipv6: false
 
 proxies:
-  - name: "ss-shadow-tls"
+  - name: "shadowsocks"
     type: socks5
-    server: ss-shadow-tls
-    port: 1080
-    udp: true
-  - name: "ss-cloak"
-    type: socks5
-    server: ss-cloak
-    port: 1080
-    udp: true
-  - name: "ss-cloak-cdn"
-    type: socks5
-    server: ss-cloak-cdn
+    server: shadowsocks
     port: 1080
     udp: true
   - name: "naive"
@@ -42,9 +32,7 @@ proxy-groups:
   - name: auto
     type: url-test
     proxies:
-      - ss-shadow-tls
-      - ss-cloak
-      - ss-cloak-cdn
+      - shadowsocks
       - naive
     tolerance: 150
     lazy: true

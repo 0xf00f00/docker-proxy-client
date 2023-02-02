@@ -13,9 +13,7 @@ services:
       - 1.0.0.1
     depends_on:
       - naive
-      - ss-shadow-tls
-      - ss-cloak
-      - ss-cloak-cdn
+      - shadowsocks
   dnscrypt-proxy:
     image: gists/dnscrypt-proxy:latest
     container_name: dnscrypt-proxy
@@ -23,8 +21,8 @@ services:
     volumes:
       - ./dnscrypt-proxy/dnscrypt-proxy.toml:/etc/dnscrypt-proxy/dnscrypt-proxy.toml:ro
     ports:
-      - 53:5353/udp
-      - 53:5353/tcp
+      - 5311:5353/udp
+      - 5311:5353/tcp
     depends_on:
       - clash
   naive:
@@ -35,35 +33,18 @@ services:
       - 1.1.1.1
       - 1.0.0.1
     command: naive --proxy=https://${NAIVE_USER}:${NAIVE_PASSWORD}@${NAIVE_SERVER}
-  ss-shadow-tls:
-    image: ghcr.io/shadowsocks/sslocal-rust:latest
+  shadowsocks:
+    image: ghcr.io/0xf00f00/ss-rust:latest
     container_name: ss-shadow-tls
     restart: unless-stopped
     environment:
       - PASSWORD=${SHADOWSOCKS_PASSWORD}
     volumes:
-      - ./shadowsocks/shadow-tls.json:/etc/shadowsocks-rust/config.json:ro
+      - ./shadowsocks/config.json:/etc/ss-rust/config.json:ro
+    command: sslocal --log-without-time -c /etc/ss-rust/config.json
     depends_on:
       - shadowtls
-  ss-cloak:
-    image: ghcr.io/shadowsocks/sslocal-rust:latest
-    container_name: ss-cloak
-    restart: unless-stopped
-    environment:
-      - PASSWORD=${SHADOWSOCKS_PASSWORD}
-    volumes:
-      - ./shadowsocks/cloak.json:/etc/shadowsocks-rust/config.json:ro
-    depends_on:
       - cloak
-  ss-cloak-cdn:
-    image: ghcr.io/shadowsocks/sslocal-rust:latest
-    container_name: ss-cloak-cdn
-    restart: unless-stopped
-    environment:
-      - PASSWORD=${SHADOWSOCKS_PASSWORD}
-    volumes:
-      - ./shadowsocks/cloak-cdn.json:/etc/shadowsocks-rust/config.json:ro
-    depends_on:
       - cloak-cdn
   shadowtls:
     image: ghcr.io/0xf00f00/shadow-tls:latest

@@ -1,0 +1,27 @@
+{
+    "local_port": 1080,
+    "local_address": "0.0.0.0",
+    "servers": [
+        {
+            "address":"shadowtls",
+            "port":443,
+            "password":"${PASSWORD}",
+            "timeout":60,
+            "method":"chacha20-ietf-poly1305"
+        },
+        {
+            "address":"cloak",
+            "port":1984,
+            "password":"${PASSWORD}",
+            "timeout":60,
+            "method":"chacha20-ietf-poly1305"
+        },
+        {
+            "address":"cloak-cdn",
+            "port":1984,
+            "password":"${PASSWORD}",
+            "timeout":60,
+            "method":"chacha20-ietf-poly1305"
+        }
+    ]
+}
