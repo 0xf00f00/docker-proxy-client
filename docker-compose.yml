@@ -35,7 +35,7 @@ services:
     command: naive --proxy=https://${NAIVE_USER}:${NAIVE_PASSWORD}@${NAIVE_SERVER}
   shadowsocks:
     image: ghcr.io/0xf00f00/ss-rust:latest
-    container_name: ss-shadow-tls
+    container_name: shadowsocks
     restart: unless-stopped
     environment:
       - PASSWORD=${SHADOWSOCKS_PASSWORD}
