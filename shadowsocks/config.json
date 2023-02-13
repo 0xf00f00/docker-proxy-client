@@ -1,6 +1,7 @@
 {
     "local_port": 1080,
     "local_address": "0.0.0.0",
+    "keep_alive": 15,
     "servers": [
         {
             "address":"shadowtls",
