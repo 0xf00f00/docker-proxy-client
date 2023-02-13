@@ -55,9 +55,10 @@ services:
       - 1.0.0.1
     environment:
       - MODE=client
+      - V3=1
       - LISTEN=0.0.0.0:4433
       - SERVER=${SHADOWTLS_SERVER}
-      - TLS=${SHADOWTLS_DOMAIN}
+      - TLS=${SHADOWTLS_DOMAINS}
       - PASSWORD=${SHADOWTLS_PASSWORD}
   cloak:
     image: ghcr.io/0xf00f00/cloak:latest
