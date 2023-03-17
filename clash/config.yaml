@@ -43,7 +43,7 @@ rule-providers:
   ir:
     type: http
     behavior: classical
-    url: "https://github.com/chiroots/iran-hosted-domains/releases/latest/download/clash_rules.yaml"
+    url: "https://github.com/bootmortis/iran-hosted-domains/releases/latest/download/clash_rules.yaml"
     path: /root/.config/clash/ir-ruleset.yaml
     interval: 432000
 
