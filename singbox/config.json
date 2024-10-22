@@ -85,7 +85,7 @@
         {
             "tag": "naive-out",
             "type": "socks",
-            "server": "naive",
+            "server": "localhost",
             "server_port": 1080,
             "version": "5"
         },
