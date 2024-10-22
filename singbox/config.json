@@ -1,0 +1,185 @@
+{
+    "log": {
+      "disabled": false,
+      "level": "warn",
+      "timestamp": true
+    },
+    "dns": {
+        "servers": [
+            {
+                "tag": "dns_proxy",
+                "address": "https://1.1.1.1/dns-query",
+                "address_resolver": "dns_direct",
+                "strategy": "ipv4_only",
+                "detour": "proxy"
+            },
+            {
+              "tag": "dns_direct",
+              "address": "1.1.1.1",
+              "strategy": "ipv4_only",
+              "detour": "direct"
+            },
+            {
+              "tag": "dns_block",
+              "address": "rcode://refused"
+            }
+        ],
+        "rules": [
+            {
+                "clash_mode": "direct",
+                "server": "dns_direct"
+            },
+            {
+                "clash_mode": "global",
+                "server": "dns_proxy"
+            },
+            {
+                "domain_suffix": [
+                    ".ir"
+                ],
+                "server": "dns_direct"
+            }
+        ],
+        "final": "dns_proxy"
+    },
+    "inbounds": [
+        {
+            "tag": "mixed-in",
+            "type": "mixed",
+            "listen": "::",
+            "listen_port": 7890
+        },
+        {
+            "tag": "tun-in",
+            "type": "tun",
+            "interface_name": "tun0",
+            "address": [
+                "172.18.0.1/30"
+            ],
+            "auto_route": true,
+            "strict_route": true,
+            "auto_redirect": true
+        }
+    ],
+    "outbounds": [
+        {
+            "tag": "proxy",
+            "type": "selector",
+            "outbounds": [
+                "naive-out",
+                "shadowsocks-out"
+            ],
+            "default": "naive-out"
+        },
+        {
+            "tag": "shadowsocks-out",
+            "type": "shadowsocks",
+            "method": "chacha20-ietf-poly1305",
+            "password": "${SHADOWSOCKS_PASSWORD}",
+            "detour": "shadowtls-out",
+            "udp_over_tcp": {
+                "enabled": true,
+                "version": 2
+            }
+        },
+        {
+            "tag": "naive-out",
+            "type": "socks",
+            "server": "naive",
+            "server_port": 1080,
+            "version": "5"
+        },
+        {
+            "tag": "shadowtls-out",
+            "type": "shadowtls",
+            "server": "${SHADOWTLS_SERVER}",
+            "server_port": 443,
+            "version": 2,
+            "password": "${SHADOWTLS_PASSWORD}",
+            "tls": {
+                "enabled": true,
+                "server_name": "${SHADOWTLS_DOMAINS}",
+                "utls": {
+                    "enabled": true,
+                    "fingerprint": "chrome"
+                }
+            }
+        },
+        {
+          "type": "direct",
+          "tag": "direct"
+        },
+        {
+          "type": "block",
+          "tag": "block"
+        },
+        {
+          "type": "dns",
+          "tag": "dns-out"
+        }
+    ],
+    "route": {
+        "rules": [
+            {
+                "ip_is_private": true,
+                "outbound": "direct"
+            },
+            {
+                "protocol": "dns",
+                "outbound": "dns-out"
+            },
+            {
+              "clash_mode": "direct",
+              "outbound": "direct"
+            },
+            {
+              "clash_mode": "global",
+              "outbound": "proxy"
+            },
+            {
+              "domain_suffix": [
+                ".ir"
+              ],
+              "outbound": "direct"
+            },
+            {
+                "rule_set": [
+                  "geosite-ir",
+                  "geoip-ir"
+                ],
+                "outbound": "direct"
+              }
+        ],
+        "rule_set": [
+            {
+                "tag": "geoip-ir",
+                "type": "remote",
+                "format": "binary",
+                "url": "https://cdn.jsdelivr.net/gh/chocolate4u/Iran-sing-box-rules@rule-set/geoip-ir.srs",
+                "download_detour": "proxy"
+            },
+            {
+                "tag": "geosite-ir",
+                "type": "remote",
+                "format": "binary",
+                "url": "https://cdn.jsdelivr.net/gh/chocolate4u/Iran-sing-box-rules@rule-set/geosite-ir.srs",
+                "download_detour": "proxy"
+            }
+        ],
+        "experimental": {
+          "cache_file": {
+            "enabled": true
+          }
+        },
+        "final": "proxy",
+        "auto_detect_interface": true,
+        "default_interface": "eth0"
+    },
+    "ntp": {
+      "enabled": true,
+      "server": "time.apple.com",
+      "server_port": 123,
+      "interval": "30m",
+      "detour": "direct"
+    }
+  }

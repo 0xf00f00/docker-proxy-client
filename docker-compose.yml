@@ -1,97 +1,108 @@
 version: '3.3'
 services:
-  clash:
-    image: dreamacro/clash-premium:latest
-    container_name: clash
-    restart: unless-stopped
-    volumes:
-      - ./clash/config.yaml:/root/.config/clash/config.yaml:ro
-    ports:
-      - 7890:7890
-    dns:
-      - 1.1.1.1
-      - 1.0.0.1
-    depends_on:
-      - naive
-      - shadowsocks
   dnscrypt-proxy:
     image: gists/dnscrypt-proxy:latest
     container_name: dnscrypt-proxy
     restart: unless-stopped
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
     volumes:
       - ./dnscrypt-proxy/dnscrypt-proxy.toml:/etc/dnscrypt-proxy/dnscrypt-proxy.toml:ro
     ports:
       - 53:5353/udp
       - 53:5353/tcp
-    depends_on:
-      - clash
+  singbox:
+    image: ghcr.io/sagernet/sing-box:latest
+    container_name: singbox
+    restart: unless-stopped
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
+    volumes:
+      - ./sing-box:/etc/sing-box/:ro
+    command: -D /var/lib/sing-box -C /etc/sing-box/ run
   naive:
-    image: ghcr.io/0xf00f00/naiveproxy:latest
+    image: ghcr.io/0xf00f00/naive_proxy:latest
     container_name: naive
     restart: unless-stopped
     dns:
       - 1.1.1.1
       - 1.0.0.1
     command: naive --proxy=https://${NAIVE_USER}:${NAIVE_PASSWORD}@${NAIVE_SERVER}
-  shadowsocks:
-    image: ghcr.io/0xf00f00/ss-rust:latest
-    container_name: shadowsocks
-    restart: unless-stopped
-    environment:
-      - PASSWORD=${SHADOWSOCKS_PASSWORD}
-    volumes:
-      - ./shadowsocks/config.json:/etc/ss-rust/config.json:ro
-    command: sslocal --log-without-time -c /etc/ss-rust/config.json
-    depends_on:
-      - shadowtls
-      - cloak
-      - cloak-cdn
-  shadowtls:
-    image: ghcr.io/0xf00f00/shadow-tls:latest
-    container_name: shadowtls
-    restart: unless-stopped
-    dns:
-      - 1.1.1.1
-      - 1.0.0.1
-    environment:
-      - MODE=client
-      - V3=1
-      - LISTEN=0.0.0.0:4433
-      - SERVER=${SHADOWTLS_SERVER}
-      - TLS=${SHADOWTLS_DOMAINS}
-      - PASSWORD=${SHADOWTLS_PASSWORD}
-  cloak:
-    image: ghcr.io/0xf00f00/cloak:latest
-    container_name: cloak
-    restart: unless-stopped
-    command: ck-client
-    dns:
-      - 1.1.1.1
-      - 1.0.0.1
-    environment:
-      - CLOAK_REMOTE_HOST=${CLOAK_REMOTE_HOST}
-      - CLOAK_UUID=${CLOAK_UUID}
-      - CLOAK_PUBLIC_KEY=${CLOAK_PUBLIC_KEY}
-      - CLOAK_PROXY_METHOD=${CLOAK_PROXY_METHOD}
-      - CLOAK_TRANSPORT=direct
-      - CLOAK_ENCRYPTION_METHOD=${CLOAK_ENCRYPTION_METHOD}
-      - CLOAK_BROWSER_SIGNATURE=${CLOAK_BROWSER_SIGNATURE}
-      - CLOAK_SERVER_NAME=${CLOAK_SERVER_NAME}
-  cloak-cdn:
-    image: ghcr.io/0xf00f00/cloak:latest
-    container_name: cloak-cdn
-    restart: unless-stopped
-    command: ck-client
-    dns:
-      - 1.1.1.1
-      - 1.0.0.1
-    environment:
-      - CLOAK_REMOTE_HOST=${CLOAK_CDN_REMOTE_HOST}
-      - CLOAK_UUID=${CLOAK_UUID}
-      - CLOAK_PUBLIC_KEY=${CLOAK_PUBLIC_KEY}
-      - CLOAK_PROXY_METHOD=${CLOAK_PROXY_METHOD}
-      - CLOAK_TRANSPORT=CDN
-      - CLOAK_ENCRYPTION_METHOD=${CLOAK_CDN_ENCRYPTION_METHOD}
-      - CLOAK_BROWSER_SIGNATURE=${CLOAK_BROWSER_SIGNATURE}
-      - CLOAK_SERVER_NAME=${CLOAK_CDN_SERVER_NAME}
+  # shadowsocks:
+  #   image: ghcr.io/0xf00f00/ss-rust:latest
+  #   container_name: shadowsocks
+  #   restart: unless-stopped
+  #   environment:
+  #     - PASSWORD=${SHADOWSOCKS_PASSWORD}
+  #   volumes:
+  #     - ./shadowsocks/config.json:/etc/ss-rust/config.json:ro
+  #   command: sslocal --log-without-time -c /etc/ss-rust/config.json
+  #   depends_on:
+  #     - shadowtls
+  #     - cloak
+  #     - cloak-cdn
+  # shadowtls:
+  #   image: ghcr.io/0xf00f00/shadow-tls:latest
+  #   container_name: shadowtls
+  #   restart: unless-stopped
+  #   dns:
+  #     - 1.1.1.1
+  #     - 1.0.0.1
+  #   environment:
+  #     - MODE=client
+  #     - V3=1
+  #     - LISTEN=0.0.0.0:4433
+  #     - SERVER=${SHADOWTLS_SERVER}
+  #     - TLS=${SHADOWTLS_DOMAINS}
+  #     - PASSWORD=${SHADOWTLS_PASSWORD}
+  # clash:
+  #   image: dreamacro/clash-premium:latest
+  #   container_name: clash
+  #   restart: unless-stopped
+  #   volumes:
+  #     - ./clash/config.yaml:/root/.config/clash/config.yaml:ro
+  #   ports:
+  #     - 7890:7890
+  #   dns:
+  #     - 1.1.1.1
+  #     - 1.0.0.1
+  #   depends_on:
+  #     - naive
+  #     - shadowsocks
+  # cloak:
+  #   image: ghcr.io/0xf00f00/cloak:latest
+  #   container_name: cloak
+  #   restart: unless-stopped
+  #   command: ck-client
+  #   dns:
+  #     - 1.1.1.1
+  #     - 1.0.0.1
+  #   environment:
+  #     - CLOAK_REMOTE_HOST=${CLOAK_REMOTE_HOST}
+  #     - CLOAK_UUID=${CLOAK_UUID}
+  #     - CLOAK_PUBLIC_KEY=${CLOAK_PUBLIC_KEY}
+  #     - CLOAK_PROXY_METHOD=${CLOAK_PROXY_METHOD}
+  #     - CLOAK_TRANSPORT=direct
+  #     - CLOAK_ENCRYPTION_METHOD=${CLOAK_ENCRYPTION_METHOD}
+  #     - CLOAK_BROWSER_SIGNATURE=${CLOAK_BROWSER_SIGNATURE}
+  #     - CLOAK_SERVER_NAME=${CLOAK_SERVER_NAME}
+  # cloak-cdn:
+  #   image: ghcr.io/0xf00f00/cloak:latest
+  #   container_name: cloak-cdn
+  #   restart: unless-stopped
+  #   command: ck-client
+  #   dns:
+  #     - 1.1.1.1
+  #     - 1.0.0.1
+  #   environment:
+  #     - CLOAK_REMOTE_HOST=${CLOAK_CDN_REMOTE_HOST}
+  #     - CLOAK_UUID=${CLOAK_UUID}
+  #     - CLOAK_PUBLIC_KEY=${CLOAK_PUBLIC_KEY}
+  #     - CLOAK_PROXY_METHOD=${CLOAK_PROXY_METHOD}
+  #     - CLOAK_TRANSPORT=CDN
+  #     - CLOAK_ENCRYPTION_METHOD=${CLOAK_CDN_ENCRYPTION_METHOD}
+  #     - CLOAK_BROWSER_SIGNATURE=${CLOAK_BROWSER_SIGNATURE}
+  #     - CLOAK_SERVER_NAME=${CLOAK_CDN_SERVER_NAME}
 
