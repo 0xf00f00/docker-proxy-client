@@ -8,21 +8,7 @@
             "port":4433,
             "password":"${PASSWORD}",
             "timeout":60,
-            "method":"chacha20-ietf-poly1305"
-        },
-        {
-            "address":"cloak",
-            "port":1984,
-            "password":"${PASSWORD}",
-            "timeout":60,
-            "method":"chacha20-ietf-poly1305"
-        },
-        {
-            "address":"cloak-cdn",
-            "port":1984,
-            "password":"${PASSWORD}",
-            "timeout":60,
-            "method":"chacha20-ietf-poly1305"
+            "method":"2022-blake3-chacha20-poly1305"
         }
     ]
 }
