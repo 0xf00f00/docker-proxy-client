@@ -11,17 +11,8 @@ services:
     ports:
       - 53:5353/udp
       - 53:5353/tcp
-  singbox:
-    image: ghcr.io/sagernet/sing-box:latest
-    container_name: singbox
-    restart: unless-stopped
-    dns:
-      - 1.1.1.1
-      - 1.0.0.1
-    volumes:
-      - ./singbox:/etc/sing-box/:ro
-    command: -D /var/lib/sing-box -C /etc/sing-box/ run
-    network_mode: host
+    depends_on:
+      - clash
   naive:
     image: ghcr.io/0xf00f00/naive_proxy:latest
     container_name: naive
@@ -31,47 +22,58 @@ services:
       - 1.0.0.1
     command: naive --proxy=https://${NAIVE_USER}:${NAIVE_PASSWORD}@${NAIVE_SERVER}
     network_mode: host
-  # shadowsocks:
-  #   image: ghcr.io/0xf00f00/ss-rust:latest
-  #   container_name: shadowsocks
-  #   restart: unless-stopped
-  #   environment:
-  #     - PASSWORD=${SHADOWSOCKS_PASSWORD}
-  #   volumes:
-  #     - ./shadowsocks/config.json:/etc/ss-rust/config.json:ro
-  #   command: sslocal --log-without-time -c /etc/ss-rust/config.json
-  #   depends_on:
-  #     - shadowtls
-  #     - cloak
-  #     - cloak-cdn
-  # shadowtls:
-  #   image: ghcr.io/0xf00f00/shadow-tls:latest
-  #   container_name: shadowtls
+  shadowsocks:
+    image: ghcr.io/shadowsocks/sslocal-rust:latest
+    container_name: shadowsocks
+    restart: unless-stopped
+    environment:
+      - PASSWORD=${SHADOWSOCKS_PASSWORD}
+    volumes:
+      - ./shadowsocks/config.json:/etc/ss-rust/config.json:ro
+    command: sslocal --log-without-time -c /etc/ss-rust/config.json
+    depends_on:
+      - shadowtls
+      # - cloak
+      # - cloak-cdn
+  shadowtls:
+    image: ghcr.io/ihciah/shadow-tls:latest
+    container_name: shadowtls
+    restart: unless-stopped
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
+    environment:
+      - MODE=client
+      - V3=1
+      - LISTEN=0.0.0.0:4433
+      - SERVER=${SHADOWTLS_SERVER}
+      - TLS=${SHADOWTLS_DOMAINS}
+      - PASSWORD=${SHADOWTLS_PASSWORD}
+  clash:
+    image: dreamacro/clash-premium:latest
+    container_name: clash
+    restart: unless-stopped
+    volumes:
+      - ./clash/config.yaml:/root/.config/clash/config.yaml:ro
+    ports:
+      - 7890:7890
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
+    depends_on:
+      - naive
+      - shadowsocks
+  # singbox:
+  #   image: ghcr.io/sagernet/sing-box:latest
+  #   container_name: singbox
   #   restart: unless-stopped
   #   dns:
   #     - 1.1.1.1
   #     - 1.0.0.1
-  #   environment:
-  #     - MODE=client
-  #     - V3=1
-  #     - LISTEN=0.0.0.0:4433
-  #     - SERVER=${SHADOWTLS_SERVER}
-  #     - TLS=${SHADOWTLS_DOMAINS}
-  #     - PASSWORD=${SHADOWTLS_PASSWORD}
-  # clash:
-  #   image: dreamacro/clash-premium:latest
-  #   container_name: clash
-  #   restart: unless-stopped
   #   volumes:
-  #     - ./clash/config.yaml:/root/.config/clash/config.yaml:ro
-  #   ports:
-  #     - 7890:7890
-  #   dns:
-  #     - 1.1.1.1
-  #     - 1.0.0.1
-  #   depends_on:
-  #     - naive
-  #     - shadowsocks
+  #     - ./singbox:/etc/sing-box/:ro
+  #   command: -D /var/lib/sing-box -C /etc/sing-box/ run
+  #   network_mode: host
   # cloak:
   #   image: ghcr.io/0xf00f00/cloak:latest
   #   container_name: cloak

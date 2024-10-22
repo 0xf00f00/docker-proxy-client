@@ -39,13 +39,13 @@ proxy-groups:
     url: 'http://www.gstatic.com/generate_204'
     interval: 300
 
-rule-providers:
-  ir:
-    type: http
-    behavior: classical
-    url: "https://github.com/bootmortis/iran-hosted-domains/releases/latest/download/clash_rules.yaml"
-    path: /root/.config/clash/ir-ruleset.yaml
-    interval: 432000
+# rule-providers:
+#   ir:
+#     type: http
+#     behavior: classical
+#     url: "https://github.com/bootmortis/iran-hosted-domains/releases/latest/download/clash_rules.yaml"
+#     path: /root/.config/clash/ir-ruleset.yaml
+#     interval: 432000
 
 rules:
   # Local address
@@ -60,6 +60,6 @@ rules:
 
   - DOMAIN-SUFFIX,.ir,DIRECT
   - GEOIP,IR,DIRECT
-  - RULE-SET,ir,DIRECT
+  # - RULE-SET,ir,DIRECT
 
   - MATCH,auto
