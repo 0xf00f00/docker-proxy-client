@@ -1,4 +1,3 @@
-version: '3.3'
 services:
   dnscrypt-proxy:
     image: gists/dnscrypt-proxy:latest
