@@ -9,8 +9,8 @@ services:
     volumes:
       - ./dnscrypt-proxy/dnscrypt-proxy.toml:/etc/dnscrypt-proxy/dnscrypt-proxy.toml:ro
     ports:
-      - 53:5353/udp
-      - 53:5353/tcp
+      - 531:5353/udp
+      - 531:5353/tcp
     depends_on:
       - clash
   naive:
@@ -21,7 +21,6 @@ services:
       - 1.1.1.1
       - 1.0.0.1
     command: naive --proxy=https://${NAIVE_USER}:${NAIVE_PASSWORD}@${NAIVE_SERVER}
-    network_mode: host
   shadowsocks:
     image: ghcr.io/shadowsocks/sslocal-rust:latest
     container_name: shadowsocks
@@ -36,7 +35,7 @@ services:
       # - cloak
       # - cloak-cdn
   shadowtls:
-    image: ghcr.io/ihciah/shadow-tls:latest
+    image: ghcr.io/0xf00f00/shadow-tls:latest
     container_name: shadowtls
     restart: unless-stopped
     dns:
