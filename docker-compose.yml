@@ -22,6 +22,7 @@ services:
     volumes:
       - ./sing-box:/etc/sing-box/:ro
     command: -D /var/lib/sing-box -C /etc/sing-box/ run
+    network_mode: host
   naive:
     image: ghcr.io/0xf00f00/naive_proxy:latest
     container_name: naive

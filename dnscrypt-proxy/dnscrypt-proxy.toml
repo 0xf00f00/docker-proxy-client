@@ -12,7 +12,7 @@ require_dnssec = true
 require_nolog = true
 require_nofilter = false
 
-proxy = 'socks5://singbox:7890'
+proxy = 'socks5://localhost:7890'
 
 keepalive = 30
 
