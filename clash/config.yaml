@@ -39,7 +39,15 @@ proxy-groups:
     url: 'http://www.gstatic.com/generate_204'
     interval: 300
 
-# rule-providers:
+rule-providers:
+  ads:
+    behavior: "domain"
+    type: file
+    path: "/root/.config/clash/rules/clash_rules_ads.yaml"
+  ir:
+    behavior: "domain"
+    type: file
+    path: "/root/.config/clash/rules/clash_rules_ir.yaml"
 #   ir:
 #     type: http
 #     behavior: classical
@@ -58,8 +66,10 @@ rules:
 
   - DOMAIN-SUFFIX,.ntp.org,DIRECT
 
+  - RULE-SET,ads,REJECT
+
   - DOMAIN-SUFFIX,.ir,DIRECT
   - GEOIP,IR,DIRECT
-  # - RULE-SET,ir,DIRECT
+  - RULE-SET,ir,DIRECT
 
   - MATCH,auto

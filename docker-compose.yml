@@ -54,6 +54,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./clash/config.yaml:/root/.config/clash/config.yaml:ro
+      - ./clash/rules:/root/.config/clash/rules:ro
     ports:
       - 7890:7890
     dns:
