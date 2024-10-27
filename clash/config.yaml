@@ -39,8 +39,8 @@ proxy-groups:
   - name: auto
     type: url-test
     proxies:
-      - shadowsocks
       - naive
+      - shadowsocks
     tolerance: 150
     lazy: true
     url: 'http://www.gstatic.com/generate_204'
