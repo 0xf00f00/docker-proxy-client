@@ -1,9 +1,0 @@
-[Unit]
-Description=Run utun-route-check.service every minute to ensure route persistence
-
-[Timer]
-OnBootSec=1min          # Start 1 minute after boot
-OnUnitActiveSec=5min    # Run every 1 minute
-
-[Install]
-WantedBy=timers.target
