@@ -52,6 +52,7 @@ services:
     container_name: clash
     restart: unless-stopped
     network_mode: host
+    privileged: true
     volumes:
       - ./clash/config.yaml:/root/.config/clash/config.yaml:ro
       - ./clash/rules:/root/.config/clash/rules:ro
