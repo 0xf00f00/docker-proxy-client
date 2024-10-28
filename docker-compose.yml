@@ -11,6 +11,8 @@ services:
     ports:
       - 53:5353/udp
       - 53:5353/tcp
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - clash
   naive:
