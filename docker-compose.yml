@@ -8,7 +8,9 @@ services:
       - 1.0.0.1
     volumes:
       - ./dnscrypt-proxy/dnscrypt-proxy.toml:/etc/dnscrypt-proxy/dnscrypt-proxy.toml:ro
-    network_mode: host
+    ports:
+      - 53:5353/udp
+      - 53:5353/tcp
     depends_on:
       - clash
   naive:
