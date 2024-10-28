@@ -8,15 +8,14 @@ services:
       - 1.0.0.1
     volumes:
       - ./dnscrypt-proxy/dnscrypt-proxy.toml:/etc/dnscrypt-proxy/dnscrypt-proxy.toml:ro
-    ports:
-      - 53:5353/udp
-      - 53:5353/tcp
+    network_mode: host
     depends_on:
       - clash
   naive:
     image: ghcr.io/0xf00f00/naive_proxy:latest
     container_name: naive
     restart: unless-stopped
+    network_mode: host
     dns:
       - 1.1.1.1
       - 1.0.0.1
@@ -25,6 +24,7 @@ services:
     image: ghcr.io/shadowsocks/sslocal-rust:latest
     container_name: shadowsocks
     restart: unless-stopped
+    network_mode: host
     environment:
       - PASSWORD=${SHADOWSOCKS_PASSWORD}
     volumes:
@@ -32,12 +32,11 @@ services:
     command: sslocal --log-without-time -c /etc/ss-rust/config.json
     depends_on:
       - shadowtls
-      # - cloak
-      # - cloak-cdn
   shadowtls:
     image: ghcr.io/0xf00f00/shadow-tls:latest
     container_name: shadowtls
     restart: unless-stopped
+    network_mode: host
     dns:
       - 1.1.1.1
       - 1.0.0.1
@@ -52,8 +51,7 @@ services:
     image: dreamacro/clash-premium:latest
     container_name: clash
     restart: unless-stopped
-    ports:
-      - 7890:7890
+    network_mode: host
     volumes:
       - ./clash/config.yaml:/root/.config/clash/config.yaml:ro
       - ./clash/rules:/root/.config/clash/rules:ro

@@ -16,22 +16,22 @@ mode: rule
 log-level: warning
 ipv6: false
 
-# tun:
-#   enable: true
-#   stack: system
-#   auto-route: true
-#   auto-redir: true
-#   auto-detect-interface: true
+tun:
+  enable: true
+  stack: system
+  auto-route: false
+  auto-redir: false
+  auto-detect-interface: true
 
 proxies:
   - name: "shadowsocks"
     type: socks5
-    server: shadowsocks
-    port: 1080
+    server: 127.0.0.1
+    port: 1081
     udp: true
   - name: "naive"
     type: socks5
-    server: naive
+    server: 127.0.0.1
     port: 1080
     udp: true
 

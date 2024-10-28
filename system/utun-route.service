@@ -1,0 +1,15 @@
+[Unit]
+Description=Ensure default route via utun interface
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/check_and_set_utun_route.sh
+Restart=on-failure
+RestartSec=10s 
+StartLimitInterval=1min
+StartLimitBurst=10  
+
+[Install]
+WantedBy=multi-user.target

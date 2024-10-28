@@ -1,11 +1,11 @@
 {
-    "local_port": 1080,
+    "local_port": 1081,
     "local_address": "0.0.0.0",
     "mode": "tcp_and_udp",
     "keep_alive": 15,
     "servers": [
         {
-            "address":"shadowtls",
+            "address":"127.0.0.1",
             "port":4433,
             "password":"${PASSWORD}",
             "timeout":60,
