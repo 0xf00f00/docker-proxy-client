@@ -8,8 +8,10 @@ Works best with [docker-proxy-server](https://github.com/0xf00f00/docker-proxy-s
 2. Run the containers using `docker-compose`
 3. Copy `./system/check_and_set_utun_route.sh` to `/usr/local/bin/check_and_set_utun_route.sh`
 4. Copy `./system/utun-route.service` to `/etc/systemd/system/utun-route.service`
-5. `sudo systemctl enable utun-route.service && sudo systemctl start utun-route.service`
-6. Create `/etc/network/interfaces.d/utun` and add:
+5. Copy `./system/utun-route-check.timer` to `/etc/systemd/system/utun-route-check.timer`
+6. `sudo systemctl enable utun-route.service && sudo systemctl start utun-route.service`
+7. `sudo systemctl enable utun-route-check.timer && sudo systemctl start utun-route-check.timer`
+8. Create `/etc/network/interfaces.d/utun` and add:
 ```
 auto utun
 iface utun inet manual
