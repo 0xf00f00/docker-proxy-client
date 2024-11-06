@@ -39,7 +39,7 @@ proxy-groups:
   - name: auto
     type: url-test
     proxies:
-      - shadowsocks
+#      - shadowsocks
       - naive
     tolerance: 150
     lazy: true
