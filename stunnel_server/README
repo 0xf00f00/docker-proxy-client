@@ -1,0 +1,3 @@
+# Stunnel Server Configuration
+
+This directory contains the configuration files for the stunnel server. More information on the [stunnel website](https://www.stunnel.org/config_unix.html).

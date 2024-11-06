@@ -1,3 +1,4 @@
 .env
 .DS_Store
-stunnel_server
+stunnel_server/*
+!stunnel_server/README
