@@ -12,7 +12,7 @@ require_dnssec = true
 require_nolog = true
 require_nofilter = false
 
-proxy = 'socks5://192.168.88.2:7890'
+proxy = 'socks5://192.168.88.2:1080'
 
 keepalive = 30
 
