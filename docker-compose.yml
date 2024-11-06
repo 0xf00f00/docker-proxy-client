@@ -15,6 +15,16 @@ services:
       - "host.docker.internal:host-gateway"
     depends_on:
       - clash
+  stunnel_server:
+    image: ghcr.io/0xf00f00/stunnel:latest
+    container_name: stunnel_server
+    restart: unless-stopped
+    volumes:
+      - ./stunnel_server:/etc/stunnel:ro
+    network_mode: host
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
   naive:
     image: ghcr.io/0xf00f00/naive_proxy:latest
     container_name: naive
