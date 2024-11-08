@@ -1,0 +1,10 @@
+[Unit]
+Description=Runs VPN Route Management Service every 5 minutes to ensure VPN routes are up to date
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+Unit=vpn-route.service
+
+[Install]
+WantedBy=timers.target

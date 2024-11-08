@@ -6,12 +6,13 @@ Works best with [docker-proxy-server](https://github.com/0xf00f00/docker-proxy-s
 
 1. Rename the `.env.example` file to `.env` (or copy: `cp .env.example .env`), and fill the values in the `.env` file.
 2. Run the containers using `docker-compose`
-3. Copy `./system/check_and_set_utun_route.sh` to `/usr/local/bin/check_and_set_utun_route.sh`
-4. Copy `./system/utun-route.service` to `/etc/systemd/system/utun-route.service`
-5. Copy `./system/utun-route.timer` to `/etc/systemd/system/utun-route.timer`
-6. `sudo systemctl enable utun-route.service && sudo systemctl start utun-route.service`
-7. `sudo systemctl enable utun-route.timer && sudo systemctl start utun-route.timer`
-8. Create `/etc/network/interfaces.d/utun` and add:
+3. Copy `./system/vpn-route.sh` to `/usr/local/bin/vpn-route.sh`
+4. Copy `./system/vpn-route.service` to `/etc/systemd/system/vpn-route.service`
+5. Fill the variables in `/etc/systemd/system/vpn-route.service` as needed
+6. Copy `./system/vpn-route.timer` to `/etc/systemd/system/vpn-route.timer`
+7. `sudo systemctl enable vpn-route.service && sudo systemctl start vpn-route.service`
+8. `sudo systemctl enable vpn-route.timer && sudo systemctl start vpn-route.timer`
+9. Create `/etc/network/interfaces.d/utun` and add:
 ```
 auto utun
 iface utun inet manual
