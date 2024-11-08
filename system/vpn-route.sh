@@ -59,6 +59,14 @@ parse_arguments() {
     fi
 }
 
+# Function to check if script is run as root
+check_root() {
+    if [ "$EUID" -ne 0 ]; then
+        echo "This script must be run as root. Please run it using 'sudo' or as the root user."
+        exit 1
+    fi
+}
+
 # Function to check if an interface is up
 is_interface_up() {
     local interface=$1
@@ -139,6 +147,9 @@ add_direct_routes() {
 
 # Main function
 main() {
+    # Check if script is run as root
+    check_root
+
     # Parse command-line arguments
     parse_arguments "$@"
 
