@@ -92,8 +92,8 @@ add_direct_route() {
     if ! ip route | grep -qE "^$ip_address"; then
         ip route add "$ip_address" via "$gateway"
         echo "Route added for $ip_address via gateway $gateway."
-    else
-        echo "Route for $ip_address already exists."
+    # else
+    #     echo "Route for $ip_address already exists."
     fi
 }
 
@@ -114,7 +114,7 @@ add_vpn_route() {
 
     # Determine if we can add the default route via gateway or interface
     if [ -n "$gateway" ]; then
-        route_spec="via $gateway dev $VPN_INTERFACE"
+        route_spec="via $gateway"
     else
         route_spec="dev $VPN_INTERFACE"
     fi
@@ -123,8 +123,8 @@ add_vpn_route() {
     if ! ip route | grep -q "default.*$route_spec"; then
         ip route add default $route_spec
         echo "Default route added: default $route_spec"
-    else
-        echo "Default route already exists: default $route_spec"
+    # else
+    #     echo "Default route already exists: default $route_spec"
     fi
 }
 
