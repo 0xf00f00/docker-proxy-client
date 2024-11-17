@@ -46,6 +46,12 @@ proxy-groups:
     url: 'http://www.gstatic.com/generate_204'
     interval: 300
 
+# tunnels:
+#   - network: [tcp, udp]
+#     address: 0.0.0.0:9000
+#     target: ovpn-server:9000
+#     proxy: auto
+
 rule-providers:
   ads:
     behavior: "domain"
