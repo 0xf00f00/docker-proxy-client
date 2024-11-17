@@ -79,10 +79,10 @@ get_gateway() {
     ip route show dev "$interface" | awk '/default/ {print $3}'
 }
 
-# Function to resolve the IP address of a domain
-resolve_domain_ip() {
+# Function to resolve the IP addresses of a domain
+resolve_domain_ips() {
     local domain=$1
-    host "$domain" | awk '/has address/ { print $4 }' | head -n 1
+    host "$domain" | awk '/has address/ { print $4 }'
 }
 
 # Function to add a direct route for a given IP via a gateway
@@ -133,15 +133,17 @@ add_direct_routes() {
     local gateway=$1
 
     for DOMAIN_NAME in "${DIRECT_DOMAINS[@]}"; do
-        # Resolve the IP address of DOMAIN_NAME
-        IP_ADDRESS=$(resolve_domain_ip "$DOMAIN_NAME")
-        if [ -z "$IP_ADDRESS" ]; then
-            echo "Could not resolve IP address for domain $DOMAIN_NAME. Skipping."
+        # Resolve the IP addresses of DOMAIN_NAME
+        IP_ADDRESSES=$(resolve_domain_ips "$DOMAIN_NAME")
+        if [ -z "$IP_ADDRESSES" ]; then
+            echo "Could not resolve IP addresses for domain $DOMAIN_NAME. Skipping."
             continue
         fi
 
-        # Add direct route for the IP_ADDRESS via GATEWAY
-        add_direct_route "$IP_ADDRESS" "$gateway"
+        # Add direct route for each IP_ADDRESS via GATEWAY
+        for IP_ADDRESS in $IP_ADDRESSES; do
+            add_direct_route "$IP_ADDRESS" "$gateway"
+        done
     done
 }
 
