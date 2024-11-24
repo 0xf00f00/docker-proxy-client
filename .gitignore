@@ -2,3 +2,4 @@
 .DS_Store
 stunnel_server/*
 !stunnel_server/README
+!stunnel_server/docker-compose.yml

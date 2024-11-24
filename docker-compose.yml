@@ -11,25 +11,25 @@ services:
     ports:
       - 53:5353/udp
       - 53:5353/tcp
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "3"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
       - clash
-  stunnel_server:
-    image: ghcr.io/0xf00f00/stunnel:latest
-    container_name: stunnel_server
-    restart: unless-stopped
-    volumes:
-      - ./stunnel_server:/etc/stunnel:ro
-    network_mode: host
-    dns:
-      - 1.1.1.1
-      - 1.0.0.1
   naive:
     image: ghcr.io/0xf00f00/naive_proxy:latest
     container_name: naive
     restart: unless-stopped
     network_mode: host
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "3"
     dns:
       - 1.1.1.1
       - 1.0.0.1
@@ -44,6 +44,11 @@ services:
     volumes:
       - ./shadowsocks/config.json:/etc/ss-rust/config.json:ro
     command: sslocal --log-without-time -c /etc/ss-rust/config.json
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "3"
     depends_on:
       - shadowtls
   shadowtls:
@@ -51,6 +56,11 @@ services:
     container_name: shadowtls
     restart: unless-stopped
     network_mode: host
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "3"
     dns:
       - 1.1.1.1
       - 1.0.0.1
@@ -70,6 +80,11 @@ services:
     volumes:
       - ./clash/config.yaml:/root/.config/clash/config.yaml:ro
       - ./clash/rules:/root/.config/clash/rules:ro
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "3"
     dns:
       - 1.1.1.1
       - 1.0.0.1
