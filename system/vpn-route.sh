@@ -101,6 +101,8 @@ add_direct_route() {
 add_vpn_route() {
     local gateway
 
+    route_spec="dev $VPN_INTERFACE"
+
     # Try to get the gateway for the VPN interface
     gateway=$(get_gateway "$VPN_INTERFACE")
 
@@ -110,13 +112,10 @@ add_vpn_route() {
 
         # After DHCP, try to get the gateway again
         gateway=$(get_gateway "$VPN_INTERFACE")
-    fi
 
-    # Determine if we can add the default route via gateway or interface
-    if [ -n "$gateway" ]; then
+        if [ -n "$gateway" ]; then
         route_spec="via $gateway"
-    else
-        route_spec="dev $VPN_INTERFACE"
+        fi
     fi
 
     # Add the default route if it doesn't already exist
