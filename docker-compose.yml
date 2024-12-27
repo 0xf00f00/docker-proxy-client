@@ -12,10 +12,14 @@ services:
       - 53:5353/udp
       - 53:5353/tcp
     logging:
-      driver: "json-file"
+      driver: loki
       options:
+        loki-url: ${LOKI_URL}
+        loki-batch-size: 400
+        loki-retries: 5
+        loki-external-labels: "job=docker,container_name={{.Name}}"
         max-size: "1m"
-        max-file: "3"
+        max-file: 1
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -26,10 +30,14 @@ services:
     restart: unless-stopped
     network_mode: host
     logging:
-      driver: "json-file"
+      driver: loki
       options:
+        loki-url: ${LOKI_URL}
+        loki-batch-size: 400
+        loki-retries: 5
+        loki-external-labels: "job=docker,container_name={{.Name}}"
         max-size: "1m"
-        max-file: "3"
+        max-file: 1
     dns:
       - 1.1.1.1
       - 1.0.0.1
@@ -45,10 +53,14 @@ services:
       - ./shadowsocks/config.json:/etc/ss-rust/config.json:ro
     command: sslocal --log-without-time -c /etc/ss-rust/config.json
     logging:
-      driver: "json-file"
+      driver: loki
       options:
+        loki-url: ${LOKI_URL}
+        loki-batch-size: 400
+        loki-retries: 5
+        loki-external-labels: "job=docker,container_name={{.Name}}"
         max-size: "1m"
-        max-file: "3"
+        max-file: 1
     depends_on:
       - shadowtls
   shadowtls:
@@ -57,10 +69,14 @@ services:
     restart: unless-stopped
     network_mode: host
     logging:
-      driver: "json-file"
+      driver: loki
       options:
+        loki-url: ${LOKI_URL}
+        loki-batch-size: 400
+        loki-retries: 5
+        loki-external-labels: "job=docker,container_name={{.Name}}"
         max-size: "1m"
-        max-file: "3"
+        max-file: 1
     dns:
       - 1.1.1.1
       - 1.0.0.1
@@ -81,10 +97,14 @@ services:
       - ./clash/config.yaml:/root/.config/clash/config.yaml:ro
       - ./clash/rules:/root/.config/clash/rules:ro
     logging:
-      driver: "json-file"
+      driver: loki
       options:
+        loki-url: ${LOKI_URL}
+        loki-batch-size: 400
+        loki-retries: 5
+        loki-external-labels: "job=docker,container_name={{.Name}}"
         max-size: "1m"
-        max-file: "3"
+        max-file: 1
     dns:
       - 1.1.1.1
       - 1.0.0.1
