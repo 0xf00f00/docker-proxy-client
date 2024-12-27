@@ -87,5 +87,7 @@ rules:
   - DOMAIN-SUFFIX,.ir,direct_interface
   - GEOIP,IR,direct_interface
   - RULE-SET,ir,direct_interface
+  - DOMAIN,gateway.icloud.com,direct_interface
+  - DOMAIN-SUFFIX,.sn.mynetname.net,direct_interface
 
   - MATCH,auto
