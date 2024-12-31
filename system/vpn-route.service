@@ -9,7 +9,9 @@ ExecStart=/usr/local/bin/vpn-route.sh --vpn-interface utun --default-interface e
 Restart=on-failure
 RestartSec=10s 
 StartLimitInterval=1min
-StartLimitBurst=10  
+StartLimitBurst=10
+LogLevelMax=1
+SyslogLevel=2  
 
 [Install]
 WantedBy=multi-user.target
