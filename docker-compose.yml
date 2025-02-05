@@ -60,33 +60,23 @@ services:
     volumes:
       - ./clash/config.yaml:/root/.config/clash/config.yaml:ro
       - ./clash/rules:/root/.config/clash/rules:ro
-    logging:
-      driver: loki
-      options:
-        loki-url: ${LOKI_URL}
-        loki-batch-size: 400
-        loki-retries: 5
-        loki-external-labels: "job=docker,container_name={{.Name}}"
-        max-size: "1m"
-        max-file: 1
     dns:
       - 1.1.1.1
       - 1.0.0.1
     depends_on:
       - naive
       - shadowsocks
-  # singbox-sub:
-  #   image: ghcr.io/sagernet/sing-box:latest
-  #   container_name: singbox-sub
-  #   restart: unless-stopped
-  #   network_mode: host
-  #   privileged: true
-  #   dns:
-  #     - 1.1.1.1
-  #     - 1.0.0.1
-  #   volumes:
-  #     - ./singbox-sub/config.json:/etc/sing-box/config.json:ro
-  #   command: -D /var/lib/sing-box -C /etc/sing-box/ run
+  singbox-sub:
+    image: ghcr.io/sagernet/sing-box:latest
+    container_name: singbox-sub
+    restart: unless-stopped
+    network_mode: host
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
+    volumes:
+      - ./singbox-sub/config.json:/etc/sing-box/config.json:ro
+    command: -D /var/lib/sing-box -C /etc/sing-box/ run
   # singbox:
   #   image: ghcr.io/sagernet/sing-box:latest
   #   container_name: singbox
