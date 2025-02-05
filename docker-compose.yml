@@ -11,15 +11,6 @@ services:
     ports:
       - 53:5353/udp
       - 53:5353/tcp
-    logging:
-      driver: loki
-      options:
-        loki-url: ${LOKI_URL}
-        loki-batch-size: 400
-        loki-retries: 5
-        loki-external-labels: "job=docker,container_name={{.Name}}"
-        max-size: "1m"
-        max-file: 1
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -29,15 +20,6 @@ services:
     container_name: naive
     restart: unless-stopped
     network_mode: host
-    logging:
-      driver: loki
-      options:
-        loki-url: ${LOKI_URL}
-        loki-batch-size: 400
-        loki-retries: 5
-        loki-external-labels: "job=docker,container_name={{.Name}}"
-        max-size: "1m"
-        max-file: 1
     dns:
       - 1.1.1.1
       - 1.0.0.1
@@ -52,15 +34,6 @@ services:
     volumes:
       - ./shadowsocks/config.json:/etc/ss-rust/config.json:ro
     command: sslocal --log-without-time -c /etc/ss-rust/config.json
-    logging:
-      driver: loki
-      options:
-        loki-url: ${LOKI_URL}
-        loki-batch-size: 400
-        loki-retries: 5
-        loki-external-labels: "job=docker,container_name={{.Name}}"
-        max-size: "1m"
-        max-file: 1
     depends_on:
       - shadowtls
   shadowtls:
@@ -68,15 +41,6 @@ services:
     container_name: shadowtls
     restart: unless-stopped
     network_mode: host
-    logging:
-      driver: loki
-      options:
-        loki-url: ${LOKI_URL}
-        loki-batch-size: 400
-        loki-retries: 5
-        loki-external-labels: "job=docker,container_name={{.Name}}"
-        max-size: "1m"
-        max-file: 1
     dns:
       - 1.1.1.1
       - 1.0.0.1
@@ -122,15 +86,6 @@ services:
       - 1.0.0.1
     volumes:
       - ./singbox-sub/config.json:/etc/sing-box/config.json:ro
-    logging:
-      driver: loki
-      options:
-        loki-url: ${LOKI_URL}
-        loki-batch-size: 400
-        loki-retries: 5
-        loki-external-labels: "job=docker,container_name={{.Name}}"
-        max-size: "1m"
-        max-file: 1
     command: -D /var/lib/sing-box -C /etc/sing-box/ run
   # singbox:
   #   image: ghcr.io/sagernet/sing-box:latest
