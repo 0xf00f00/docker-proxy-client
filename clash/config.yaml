@@ -24,11 +24,11 @@ tun:
   auto-detect-interface: true
 
 proxies:
-  # - name: "shadowsocks"
-  #   type: socks5
-  #   server: 127.0.0.1
-  #   port: 1081
-  #   udp: true
+  - name: "shadowsocks"
+    type: socks5
+    server: 127.0.0.1
+    port: 1081
+    udp: true
   - name: "naive"
     type: socks5
     server: 127.0.0.1
