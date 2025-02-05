@@ -91,4 +91,3 @@ rules:
   - DOMAIN-SUFFIX,.sn.mynetname.net,direct_interface
 
   - MATCH,auto
-  
