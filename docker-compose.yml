@@ -111,6 +111,17 @@ services:
     depends_on:
       - naive
       - shadowsocks
+  singbox-sub:
+    image: ghcr.io/sagernet/sing-box:latest
+    container_name: singbox-sub
+    restart: unless-stopped
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
+    volumes:
+      - ./singbox-sub/config.json:/etc/sing-box/config.json:ro
+    command: -D /var/lib/sing-box -C /etc/sing-box/ run
+    network_mode: host
   # singbox:
   #   image: ghcr.io/sagernet/sing-box:latest
   #   container_name: singbox
