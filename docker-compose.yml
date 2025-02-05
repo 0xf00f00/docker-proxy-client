@@ -23,7 +23,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
-      - clash
+      - singbox-sub
   naive:
     image: ghcr.io/0xf00f00/naive_proxy:latest
     container_name: naive
@@ -87,15 +87,41 @@ services:
       - SERVER=${SHADOWTLS_SERVER}
       - TLS=${SHADOWTLS_DOMAINS}
       - PASSWORD=${SHADOWTLS_PASSWORD}
-  clash:
-    image: dreamacro/clash-premium:latest
-    container_name: clash
+  # clash:
+  #   image: dreamacro/clash-premium:latest
+  #   container_name: clash
+  #   restart: unless-stopped
+  #   network_mode: host
+  #   privileged: true
+  #   volumes:
+  #     - ./clash/config.yaml:/root/.config/clash/config.yaml:ro
+  #     - ./clash/rules:/root/.config/clash/rules:ro
+  #   logging:
+  #     driver: loki
+  #     options:
+  #       loki-url: ${LOKI_URL}
+  #       loki-batch-size: 400
+  #       loki-retries: 5
+  #       loki-external-labels: "job=docker,container_name={{.Name}}"
+  #       max-size: "1m"
+  #       max-file: 1
+  #   dns:
+  #     - 1.1.1.1
+  #     - 1.0.0.1
+  #   depends_on:
+  #     - naive
+  #     - shadowsocks
+  singbox-sub:
+    image: ghcr.io/sagernet/sing-box:latest
+    container_name: singbox-sub
     restart: unless-stopped
     network_mode: host
     privileged: true
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
     volumes:
-      - ./clash/config.yaml:/root/.config/clash/config.yaml:ro
-      - ./clash/rules:/root/.config/clash/rules:ro
+      - ./singbox-sub/config.json:/etc/sing-box/config.json:ro
     logging:
       driver: loki
       options:
@@ -105,23 +131,7 @@ services:
         loki-external-labels: "job=docker,container_name={{.Name}}"
         max-size: "1m"
         max-file: 1
-    dns:
-      - 1.1.1.1
-      - 1.0.0.1
-    depends_on:
-      - naive
-      - shadowsocks
-  singbox-sub:
-    image: ghcr.io/sagernet/sing-box:latest
-    container_name: singbox-sub
-    restart: unless-stopped
-    dns:
-      - 1.1.1.1
-      - 1.0.0.1
-    volumes:
-      - ./singbox-sub/config.json:/etc/sing-box/config.json:ro
     command: -D /var/lib/sing-box -C /etc/sing-box/ run
-    network_mode: host
   # singbox:
   #   image: ghcr.io/sagernet/sing-box:latest
   #   container_name: singbox
