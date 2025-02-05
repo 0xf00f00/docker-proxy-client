@@ -38,7 +38,7 @@ services:
       - 1.0.0.1
     depends_on:
       - naive
-      - shadowsocks
+      # - shadowsocks
   singbox-sub:
     image: ghcr.io/sagernet/sing-box:latest
     container_name: singbox-sub
