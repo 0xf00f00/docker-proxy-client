@@ -14,7 +14,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
-      - singbox-sub
+      - naive
   naive:
     image: ghcr.io/0xf00f00/naive_proxy:latest
     container_name: naive
