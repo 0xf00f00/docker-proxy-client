@@ -24,33 +24,6 @@ services:
       - 1.1.1.1
       - 1.0.0.1
     command: naive --proxy=https://${NAIVE_USER}:${NAIVE_PASSWORD}@${NAIVE_SERVER}
-  shadowsocks:
-    image: ghcr.io/shadowsocks/sslocal-rust:latest
-    container_name: shadowsocks
-    restart: unless-stopped
-    network_mode: host
-    environment:
-      - PASSWORD=${SHADOWSOCKS_PASSWORD}
-    volumes:
-      - ./shadowsocks/config.json:/etc/ss-rust/config.json:ro
-    command: sslocal --log-without-time -c /etc/ss-rust/config.json
-    depends_on:
-      - shadowtls
-  shadowtls:
-    image: ghcr.io/0xf00f00/shadow-tls:latest
-    container_name: shadowtls
-    restart: unless-stopped
-    network_mode: host
-    dns:
-      - 1.1.1.1
-      - 1.0.0.1
-    environment:
-      - MODE=client
-      - V3=1
-      - LISTEN=0.0.0.0:4433
-      - SERVER=${SHADOWTLS_SERVER}
-      - TLS=${SHADOWTLS_DOMAINS}
-      - PASSWORD=${SHADOWTLS_PASSWORD}
   clash:
     image: dreamacro/clash-premium:latest
     container_name: clash
@@ -77,6 +50,33 @@ services:
     volumes:
       - ./singbox-sub/config.json:/etc/sing-box/config.json:ro
     command: -D /var/lib/sing-box -C /etc/sing-box/ run
+  # shadowsocks:
+  #   image: ghcr.io/shadowsocks/sslocal-rust:latest
+  #   container_name: shadowsocks
+  #   restart: unless-stopped
+  #   network_mode: host
+  #   environment:
+  #     - PASSWORD=${SHADOWSOCKS_PASSWORD}
+  #   volumes:
+  #     - ./shadowsocks/config.json:/etc/ss-rust/config.json:ro
+  #   command: sslocal --log-without-time -c /etc/ss-rust/config.json
+  #   depends_on:
+  #     - shadowtls
+  # shadowtls:
+  #   image: ghcr.io/0xf00f00/shadow-tls:latest
+  #   container_name: shadowtls
+  #   restart: unless-stopped
+  #   network_mode: host
+  #   dns:
+  #     - 1.1.1.1
+  #     - 1.0.0.1
+  #   environment:
+  #     - MODE=client
+  #     - V3=1
+  #     - LISTEN=0.0.0.0:4433
+  #     - SERVER=${SHADOWTLS_SERVER}
+  #     - TLS=${SHADOWTLS_DOMAINS}
+  #     - PASSWORD=${SHADOWTLS_PASSWORD}
   # singbox:
   #   image: ghcr.io/sagernet/sing-box:latest
   #   container_name: singbox
