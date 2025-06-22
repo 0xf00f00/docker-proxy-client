@@ -4,6 +4,8 @@ serverPort = 443
 auth.method = "token"
 auth.token = "{{ .Envs.FRP_AUTH_TOKEN }}"
 
+loginFailExit = false
+
 # supports tcp, kcp, quic, websocket and wss now, default is tcp
 transport.protocol = "tcp"
 
