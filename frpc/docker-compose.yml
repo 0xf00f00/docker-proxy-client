@@ -14,7 +14,7 @@ services:
     network_mode: host
 
   openssl:
-    image: alpine:openssl
+    image: alpine/openssl:latest
     container_name: openssl
     restart: none
     volumes:
