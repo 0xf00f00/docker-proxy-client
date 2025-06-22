@@ -35,7 +35,7 @@ openssl genrsa -out ca.key 2048
 openssl req -x509 -new -nodes -key ca.key -subj "/CN=example.ca.com" -days 5000 -out ca.crt
 ```
 
-Copy the ca.key and ca.crt files to the frps server and frpc client machines under the ./certs directory.
+Copy the ca.crt file to the frps server and frpc client machines under the ./certs directory.
 
 ### build frps certificates:
 
