@@ -1,0 +1,17 @@
+serverAddr = "{{ .Envs.FRP_SERVER_ADDR }}"
+serverPort = 443
+
+auth.method = "token"
+auth.token = "{{ .Envs.FRP_AUTH_TOKEN }}"
+
+# supports tcp, kcp, quic, websocket and wss now, default is tcp
+transport.protocol = "tcp"
+
+dnsServer = "1.1.1.1"
+
+[[proxies]]
+name = "ssh"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 22
+remotePort = "{{ .Envs.FRP_SSH_REMOTE_PORT }}"

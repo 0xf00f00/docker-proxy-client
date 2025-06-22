@@ -1,0 +1,12 @@
+services:
+  frpc:
+    image: ghcr.io/fatedier/frpc:v0.62.1
+    container_name: frpc
+    restart: unless-stopped
+    volumes:
+      - ./frpc.toml:/frpc.toml:ro
+    environment:
+      - FRP_SERVER_ADDR=${FRP_SERVER_ADDR}
+      - FRP_SSH_REMOTE_PORT=${FRP_SSH_REMOTE_PORT}
+      - FRP_AUTH_TOKEN=${FRP_AUTH_TOKEN}
+    command: -c /frpc.toml
