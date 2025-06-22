@@ -5,8 +5,38 @@ services:
     restart: unless-stopped
     volumes:
       - ./frpc.toml:/frpc.toml:ro
+      - ./certs:/data/certs:ro
     environment:
       - FRP_SERVER_ADDR=${FRP_SERVER_ADDR}
       - FRP_SSH_REMOTE_PORT=${FRP_SSH_REMOTE_PORT}
       - FRP_AUTH_TOKEN=${FRP_AUTH_TOKEN}
     command: -c /frpc.toml
+    network_mode: host
+
+  openssl:
+    image: alpine:openssl
+    container_name: openssl
+    restart: none
+    volumes:
+      - ./certs:/data/certs
+      - ./openssl.cnf:/data/openssl.cnf:ro
+    command: >
+      sh -c "
+      if [ -f /data/certs/client.crt ]; then
+        echo 'Certificates already exist, skipping generation.';
+        exit 0;
+      fi
+
+      openssl genrsa -out /data/certs/client.key 2048 &&
+
+      openssl req -new -sha256 -key /data/certs/client.key
+          -subj "/C=XX/ST=DEFAULT/L=DEFAULT/O=DEFAULT/CN=client.com"
+          -reqexts SAN
+          -config <(cat /data/openssl.cnf <(printf "\n[SAN]\nsubjectAltName=DNS:client.com,DNS:example.client.com"))
+          -out /data/certs/client.csr &&
+
+      openssl x509 -req -days 5000 -sha256
+          -in /data/certs/client.csr -CA /data/certs/ca.crt -CAkey /data/certs/ca.key -CAcreateserial
+        -extfile <(printf "subjectAltName=DNS:client.com,DNS:example.client.com")
+        -out /data/certs/client.crt
+      "

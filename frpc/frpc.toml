@@ -9,6 +9,11 @@ loginFailExit = false
 # supports tcp, kcp, quic, websocket and wss now, default is tcp
 transport.protocol = "tcp"
 
+transport.tls.enable = true
+transport.tls.certFile = "/data/certs/client.crt"
+transport.tls.keyFile = "/data/certs/client.key"
+transport.tls.trustedCaFile = "/data/certs/ca.crt"
+
 dnsServer = "1.1.1.1"
 
 [[proxies]]
