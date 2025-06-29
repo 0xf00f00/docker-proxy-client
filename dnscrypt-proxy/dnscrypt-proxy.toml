@@ -1,4 +1,4 @@
-server_names = ['adguard-dns', 'cloudflare', 'google']
+server_names = ['mullvad-adblock-doh', 'mullvad-doh', 'nextdns', 'cloudflare', 'google']
 
 listen_addresses = ['0.0.0.0:5353']
 
