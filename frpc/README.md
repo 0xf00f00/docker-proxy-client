@@ -45,7 +45,7 @@ openssl req -new -sha256 -key ./certs/server.key \
     -subj "/C=XX/ST=DEFAULT/L=DEFAULT/O=DEFAULT/CN=server.com" \
     -reqexts SAN \
     -config <(cat openssl.cnf <(printf "\n[SAN]\nsubjectAltName=DNS:localhost,IP:127.0.0.1,DNS:example.server.com")) \
-    -out server.csr
+    -out ./certs/server.csr
 
 openssl x509 -req -days 5000 -sha256 \
 	-in ./certs/server.csr -CA ./certs/ca.crt -CAkey ./certs/ca.key -CAcreateserial \

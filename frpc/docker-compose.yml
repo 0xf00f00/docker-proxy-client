@@ -1,6 +1,6 @@
 services:
   frpc:
-    image: ghcr.io/fatedier/frpc:v0.62.1
+    image: ghcr.io/fatedier/frpc:v0.66.0
     container_name: frpc
     restart: unless-stopped
     volumes:
@@ -8,7 +8,12 @@ services:
       - ./certs:/data/certs:ro
     environment:
       - FRP_SERVER_ADDR=${FRP_SERVER_ADDR}
+      # ports
       - FRP_SSH_REMOTE_PORT=${FRP_SSH_REMOTE_PORT}
+      - FRP_DNS_LOCAL_PORT=${FRP_DNS_LOCAL_PORT}
+      - FRP_SOCKS_LOCAL_PORT=${FRP_SOCKS_LOCAL_PORT}
+      # tokens
       - FRP_AUTH_TOKEN=${FRP_AUTH_TOKEN}
+      - FRP_VISITOR_SK=${FRP_VISITOR_SK}
     command: -c /frpc.toml
     network_mode: host
