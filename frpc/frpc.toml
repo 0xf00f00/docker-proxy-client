@@ -28,7 +28,7 @@ name = "dns_forwarder"
 type = "sudp"
 serverName = "server_dns"
 secretKey = "{{ .Envs.FRP_VISITOR_SK }}"
-bindAddr = "127.0.0.1"
+bindAddr = "{{ .Envs.FRP_DNS_BIND_ADDR }}
 bindPort = {{ .Envs.FRP_DNS_LOCAL_PORT }}
 
 [[visitors]]
@@ -36,5 +36,5 @@ name = "socks_proxy"
 type = "stcp"
 serverName = "server_socks"
 secretKey = "{{ .Envs.FRP_VISITOR_SK }}"
-bindAddr = "127.0.0.1"
+bindAddr = "{{ .Envs.FRP_SOCKS_BIND_ADDR }}"
 bindPort = {{ .Envs.FRP_SOCKS_LOCAL_PORT }}
