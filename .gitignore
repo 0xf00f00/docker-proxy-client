@@ -6,3 +6,5 @@ stunnel_server/*
 singbox-sub/config.json
 frpc/certs/*
 !frpc/certs/.gitkeep
+psiphon/*
+!psiphon/.gitkeep

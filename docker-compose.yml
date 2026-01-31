@@ -122,4 +122,17 @@ services:
   #     - CLOAK_ENCRYPTION_METHOD=${CLOAK_CDN_ENCRYPTION_METHOD}
   #     - CLOAK_BROWSER_SIGNATURE=${CLOAK_BROWSER_SIGNATURE}
   #     - CLOAK_SERVER_NAME=${CLOAK_CDN_SERVER_NAME}
-
+  psiphon:
+    image: ghcr.io/0xf00f00/psiphon-tunnel-core-docker:latest
+    container_name: psiphon
+    restart: unless-stopped
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
+    ports:
+      - "${PSIPHON_SOCKS_PORT:-1082}:1080"
+      - "${PSIPHON_HTTP_PORT:-8444}:8443"
+    environment:
+      - EGRESS_REGION=${PSIPHON_EGRESS_REGION}
+    volumes:
+      - ./psiphon:/data

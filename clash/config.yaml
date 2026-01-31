@@ -34,6 +34,16 @@ proxies:
     server: 127.0.0.1
     port: 1080
     udp: true
+  - name: "frpc"
+    type: socks5
+    server: 127.0.0.1
+    port: 1081  # FRP_SOCKS_LOCAL_PORT
+    udp: true
+  - name: "psiphon"
+    type: socks5
+    server: 127.0.0.1
+    port: 1082  # PSIPHON_SOCKS_PORT
+    udp: true
   # - name: "singbox"
   #   type: socks5
   #   server: 127.0.0.1
@@ -42,13 +52,13 @@ proxies:
 
 proxy-groups:
   - name: auto
-    type: url-test
+    type: fallback
     proxies:
 #      - shadowsocks
       - naive
+      - frpc
+      - psiphon
       # - singbox
-    tolerance: 150
-    lazy: true
     url: 'http://www.gstatic.com/generate_204'
     interval: 300
   - name: direct_interface
