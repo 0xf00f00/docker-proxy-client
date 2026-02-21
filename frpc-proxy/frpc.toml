@@ -1,0 +1,33 @@
+serverAddr = "{{ .Envs.FRP_PROXY_SERVER_ADDR }}"
+serverPort = 443
+
+auth.method = "token"
+auth.token = "{{ .Envs.FRP_PROXY_AUTH_TOKEN }}"
+
+loginFailExit = false
+
+# supports tcp, kcp, quic, websocket and wss now, default is tcp
+transport.protocol = "tcp"
+
+transport.tls.enable = true
+transport.tls.certFile = "/data/certs/client.crt"
+transport.tls.keyFile = "/data/certs/client.key"
+transport.tls.trustedCaFile = "/data/certs/ca.crt"
+
+dnsServer = "1.1.1.1"
+
+[[visitors]]
+name = "dns_forwarder"
+type = "sudp"
+serverName = "server_dns"
+secretKey = "{{ .Envs.FRP_PROXY_VISITOR_SK }}"
+bindAddr = "0.0.0.0"
+bindPort = 53
+
+[[visitors]]
+name = "socks_proxy"
+type = "stcp"
+serverName = "server_socks"
+secretKey = "{{ .Envs.FRP_PROXY_VISITOR_SK }}"
+bindAddr = "0.0.0.0"
+bindPort = 1080

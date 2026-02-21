@@ -6,15 +6,3 @@ services:
     volumes:
       - .:/etc/stunnel:ro
     network_mode: host
-    dns:
-      - 1.1.1.1
-      - 1.0.0.1
-    logging:
-      driver: loki
-      options:
-        loki-url: ${LOKI_URL}
-        loki-batch-size: 400
-        loki-retries: 5
-        loki-external-labels: "job=docker,container_name={{.Name}}"
-        max-size: "1m"
-        max-file: 1

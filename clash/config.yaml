@@ -1,10 +1,12 @@
-# HTTP(S) and SOCKS4(A)/SOCKS5 server on the same port
 mixed-port: 7890
 
-# Set to true to allow connections to the local-end server from
-# other LAN IP addresses
 allow-lan: true
 bind-address: '*'
+
+hosts:
+  naive: 10.20.0.16
+  frpc-proxy: 10.20.0.15
+  psiphon: 10.20.0.14
 
 # Clash router working mode
 # rule: rule-based packet routing
@@ -16,6 +18,18 @@ mode: rule
 log-level: warning
 ipv6: false
 
+dns:
+  enable: true
+  listen: 0.0.0.0:15335
+  default-nameserver:
+    - 1.1.1.1
+    - 1.0.0.1
+  # enhanced-mode: fake-ip
+  # fake-ip-range: 198.18.0.1/16 # Fake IP addresses pool CIDR
+  nameserver:
+    - https://1.1.1.1/dns-query
+    - https://8.8.8.8/dns-query
+
 tun:
   enable: true
   stack: system
@@ -24,54 +38,38 @@ tun:
   auto-detect-interface: true
 
 proxies:
-  # - name: "shadowsocks"
-  #   type: socks5
-  #   server: 127.0.0.1
-  #   port: 1081
-  #   udp: true
   - name: "naive"
     type: socks5
-    server: 127.0.0.1
+    server: naive
     port: 1080
     udp: true
   - name: "frpc"
     type: socks5
-    server: 127.0.0.1
-    port: 1081  # FRP_SOCKS_LOCAL_PORT
+    server: frpc-proxy
+    port: 1080
     udp: true
   - name: "psiphon"
     type: socks5
-    server: 127.0.0.1
-    port: 1082  # PSIPHON_SOCKS_PORT
+    server: psiphon
+    port: 1080
     udp: true
-  # - name: "singbox"
-  #   type: socks5
-  #   server: 127.0.0.1
-  #   port: 2080
-  #   udp: true
 
 proxy-groups:
   - name: auto
     type: fallback
     proxies:
-#      - shadowsocks
       - naive
       - frpc
       - psiphon
-      # - singbox
     url: 'http://www.gstatic.com/generate_204'
-    interval: 300
+    interval: 60
+    lazy: false
   - name: direct_interface
     type: select
     interface-name: eth0
     proxies: [ 'DIRECT' ]
 
-# tunnels:
-#   - network: [tcp, udp]
-#     address: 0.0.0.0:9000
-#     target: ovpn-server:9000
-#     proxy: auto
-
+# update from https://github.com/bootmortis/iran-hosted-domains/releases/
 rule-providers:
   ads:
     behavior: "domain"
@@ -81,12 +79,6 @@ rule-providers:
     behavior: "domain"
     type: file
     path: "/root/.config/clash/rules/clash_rules_ir.yaml"
-#   ir:
-#     type: http
-#     behavior: classical
-#     url: "https://github.com/bootmortis/iran-hosted-domains/releases/latest/download/clash_rules.yaml"
-#     path: /root/.config/clash/ir-ruleset.yaml
-#     interval: 432000
 
 rules:
   # Local address
@@ -94,6 +86,7 @@ rules:
   - IP-CIDR,172.16.0.0/12,REJECT
   - IP-CIDR,192.168.0.0/16,REJECT
 
+  - IP-CIDR,10.20.0.0/24,DIRECT
   - IP-CIDR,10.0.0.0/8,REJECT
 
   - DOMAIN-SUFFIX,.ntp.org,direct_interface

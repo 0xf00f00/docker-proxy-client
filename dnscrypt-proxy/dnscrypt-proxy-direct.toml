@@ -1,4 +1,5 @@
-server_names = ['mullvad-adblock-doh', 'mullvad-doh', 'nextdns', 'cloudflare', 'google']
+# Commented out to try every server
+# server_names = ['cloudflare', 'google', 'mullvad-adblock-doh', 'mullvad-doh']
 
 listen_addresses = ['0.0.0.0:53']
 
@@ -11,8 +12,6 @@ doh_servers = true
 require_dnssec = true
 require_nolog = false
 require_nofilter = false
-
-proxy = 'socks5://host.docker.internal:7890'
 
 keepalive = 30
 lb_strategy = 'p2'
@@ -51,7 +50,7 @@ cache_neg_max_ttl = 600
     urls = ['https://raw.githubusercontent.com/DNSCrypt/dnscrypt-resolvers/master/v3/public-resolvers.md', 'https://download.dnscrypt.info/resolvers-list/v3/public-resolvers.md']
     cache_file = '/etc/dnscrypt-proxy/resolvers-cache/public-resolvers.md'
     minisign_key = 'RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3'
-    refresh_delay = 72
+    refresh_delay = 7200 # long refresh to keep using cached list
     prefix = ''
 
   ### Anonymized DNS relays
@@ -60,5 +59,15 @@ cache_neg_max_ttl = 600
     urls = ['https://raw.githubusercontent.com/DNSCrypt/dnscrypt-resolvers/master/v3/relays.md', 'https://download.dnscrypt.info/resolvers-list/v3/relays.md']
     cache_file = '/etc/dnscrypt-proxy/resolvers-cache/relays.md'
     minisign_key = 'RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3'
-    refresh_delay = 72
+    refresh_delay = 7200 # long refresh to keep using cached list
     prefix = ''
+
+## This section is used to inject a private DNS server via docker-compose.
+## The 'REQUIRE_ENV_PRIVATE_DNS_STAMP' placeholder is automatically replaced
+## with the value of the PRIVATE_DNS_STAMP environment variable when the container starts.
+## If the environment variable is not set, this entire section is removed during startup.
+# --- DYNAMIC PRIVATE SERVER BLOCK START ---
+[static]
+  [static.private-server]
+  stamp = 'REQUIRE_ENV_PRIVATE_DNS_STAMP'
+# --- DYNAMIC PRIVATE SERVER BLOCK END ---

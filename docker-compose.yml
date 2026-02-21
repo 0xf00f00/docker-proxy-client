@@ -1,138 +1,218 @@
+x-restart-policy: &default-restart unless-stopped
+
+x-default-dns: &default-dns
+  - ${FALLBACK_DNS:-192.168.1.1}
+  - 1.1.1.1
+  - 1.0.0.1
+
+x-proxy-healthcheck: &proxy-healthcheck
+  interval: 30s
+  timeout: 15s
+  retries: 3
+  start_period: 60s
+
+x-dns-healthcheck: &dns-healthcheck
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 120s
+
 services:
+  coredns:
+    image: coredns/coredns:latest
+    container_name: coredns
+    restart: *default-restart
+    ports:
+      - "53:53/udp"
+      - "53:53/tcp"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "nslookup google.com 127.0.0.1 2>/dev/null || exit 1"]
+      <<: *proxy-healthcheck
+      start_period: 30s
+    volumes:
+      - ./coredns/Corefile:/Corefile:ro
+    command: -conf /Corefile
+    depends_on:
+      - dnscrypt-proxy
+      - dnscrypt-proxy-direct
+
+  dnscrypt-proxy-direct:
+    image: gists/dnscrypt-proxy:latest
+    container_name: dnscrypt-proxy-direct
+    restart: *default-restart
+    user: "${UID:-1000}:${GID:-1000}"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "nslookup google.com 127.0.0.1 2>/dev/null || exit 1"]
+      <<: *dns-healthcheck
+    dns: *default-dns
+    environment:
+      - PRIVATE_DNS_STAMP=${PRIVATE_DNS_STAMP}
+    command: >
+      sh -c "cp /etc/dnscrypt-proxy/dnscrypt-proxy-template.toml /tmp/dnscrypt-proxy.toml &&
+      if [ -z \"$$PRIVATE_DNS_STAMP\" ]; then
+        sed -i '/# --- DYNAMIC PRIVATE SERVER BLOCK START ---/,/# --- DYNAMIC PRIVATE SERVER BLOCK END ---/d' /tmp/dnscrypt-proxy.toml;
+      else
+        sed -i 's|REQUIRE_ENV_PRIVATE_DNS_STAMP|'\"$$PRIVATE_DNS_STAMP\"'|g' /tmp/dnscrypt-proxy.toml;
+      fi &&
+      dnscrypt-proxy -config /tmp/dnscrypt-proxy.toml"
+    volumes:
+      - ./dnscrypt-proxy/dnscrypt-proxy-direct.toml:/etc/dnscrypt-proxy/dnscrypt-proxy-template.toml:ro
+      - ./dnscrypt-proxy/resolvers-cache:/etc/dnscrypt-proxy/resolvers-cache
+    networks:
+      direct_internet:
+        ipv4_address: 192.168.88.243
+        gw_priority: 100
+      default:
+        ipv4_address: 10.20.0.10
+
   dnscrypt-proxy:
     image: gists/dnscrypt-proxy:latest
     container_name: dnscrypt-proxy
-    restart: unless-stopped
-    dns:
-      - 1.1.1.1
-      - 1.0.0.1
+    restart: *default-restart
+    user: "${UID:-1000}:${GID:-1000}"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "nslookup google.com 127.0.0.1 2>/dev/null || exit 1"]
+      <<: *dns-healthcheck
+    dns: *default-dns
     volumes:
       - ./dnscrypt-proxy/dnscrypt-proxy.toml:/etc/dnscrypt-proxy/dnscrypt-proxy.toml:ro
-    ports:
-      - 53:5353/udp
-      - 53:5353/tcp
+      - ./dnscrypt-proxy/resolvers-cache:/etc/dnscrypt-proxy/resolvers-cache
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    networks:
+      default:
+        ipv4_address: 10.20.0.11
     depends_on:
-      - naive
+      - clash
+
   naive:
     image: ghcr.io/0xf00f00/naive_proxy:latest
     container_name: naive
-    restart: unless-stopped
-    network_mode: host
-    dns:
-      - 1.1.1.1
-      - 1.0.0.1
-    command: naive --proxy=https://${NAIVE_USER}:${NAIVE_PASSWORD}@${NAIVE_SERVER}
+    restart: *default-restart
+    networks:
+      default:
+        ipv4_address: 10.20.0.16
+    ports:
+      - "1080:1080"
+    dns: *default-dns
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -x socks5://127.0.0.1:1080 -s -o /dev/null http://www.gstatic.com/generate_204 || exit 1"]
+      <<: *proxy-healthcheck
+    command: naive --listen=socks://0.0.0.0:1080 --proxy=https://${NAIVE_USER}:${NAIVE_PASSWORD}@${NAIVE_SERVER}
+
   clash:
     image: dreamacro/clash-premium:latest
     container_name: clash
-    restart: unless-stopped
+    restart: *default-restart
     network_mode: host
     privileged: true
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -x http://127.0.0.1:7890 -s -o /dev/null http://www.gstatic.com/generate_204 || exit 1"]
+      <<: *proxy-healthcheck
     volumes:
       - ./clash/config.yaml:/root/.config/clash/config.yaml:ro
       - ./clash/rules:/root/.config/clash/rules:ro
-    dns:
-      - 1.1.1.1
-      - 1.0.0.1
+    dns: *default-dns
+    extra_hosts:
+      - "naive:10.20.0.16"
+      - "psiphon:10.20.0.14"
+      - "frpc-proxy:10.20.0.15"
     depends_on:
       - naive
-      # - shadowsocks
+      - frpc-proxy
+
   singbox-sub:
     image: ghcr.io/sagernet/sing-box:latest
     container_name: singbox-sub
-    restart: unless-stopped
-    network_mode: host
-    dns:
-      - 1.1.1.1
-      - 1.0.0.1
+    profiles:
+      - singbox
+    restart: *default-restart
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -x socks5://127.0.0.1:2080 -s -o /dev/null http://www.gstatic.com/generate_204 || exit 1"]
+      <<: *proxy-healthcheck
+    dns: *default-dns
+    networks:
+      direct_internet:
+        ipv4_address: 192.168.88.241
+        gw_priority: 100
+      default:
+        ipv4_address: 10.20.0.13
+    ports:
+      - "2080:2080"
     volumes:
       - ./singbox-sub/config.json:/etc/sing-box/config.json:ro
     command: -D /var/lib/sing-box -C /etc/sing-box/ run
-  # shadowsocks:
-  #   image: ghcr.io/shadowsocks/sslocal-rust:latest
-  #   container_name: shadowsocks
-  #   restart: unless-stopped
-  #   network_mode: host
-  #   environment:
-  #     - PASSWORD=${SHADOWSOCKS_PASSWORD}
-  #   volumes:
-  #     - ./shadowsocks/config.json:/etc/ss-rust/config.json:ro
-  #   command: sslocal --log-without-time -c /etc/ss-rust/config.json
-  #   depends_on:
-  #     - shadowtls
-  # shadowtls:
-  #   image: ghcr.io/0xf00f00/shadow-tls:latest
-  #   container_name: shadowtls
-  #   restart: unless-stopped
-  #   network_mode: host
-  #   dns:
-  #     - 1.1.1.1
-  #     - 1.0.0.1
-  #   environment:
-  #     - MODE=client
-  #     - V3=1
-  #     - LISTEN=0.0.0.0:4433
-  #     - SERVER=${SHADOWTLS_SERVER}
-  #     - TLS=${SHADOWTLS_DOMAINS}
-  #     - PASSWORD=${SHADOWTLS_PASSWORD}
-  # singbox:
-  #   image: ghcr.io/sagernet/sing-box:latest
-  #   container_name: singbox
-  #   restart: unless-stopped
-  #   dns:
-  #     - 1.1.1.1
-  #     - 1.0.0.1
-  #   volumes:
-  #     - ./singbox:/etc/sing-box/:ro
-  #   command: -D /var/lib/sing-box -C /etc/sing-box/ run
-  #   network_mode: host
-  # cloak:
-  #   image: ghcr.io/0xf00f00/cloak:latest
-  #   container_name: cloak
-  #   restart: unless-stopped
-  #   command: ck-client
-  #   dns:
-  #     - 1.1.1.1
-  #     - 1.0.0.1
-  #   environment:
-  #     - CLOAK_REMOTE_HOST=${CLOAK_REMOTE_HOST}
-  #     - CLOAK_UUID=${CLOAK_UUID}
-  #     - CLOAK_PUBLIC_KEY=${CLOAK_PUBLIC_KEY}
-  #     - CLOAK_PROXY_METHOD=${CLOAK_PROXY_METHOD}
-  #     - CLOAK_TRANSPORT=direct
-  #     - CLOAK_ENCRYPTION_METHOD=${CLOAK_ENCRYPTION_METHOD}
-  #     - CLOAK_BROWSER_SIGNATURE=${CLOAK_BROWSER_SIGNATURE}
-  #     - CLOAK_SERVER_NAME=${CLOAK_SERVER_NAME}
-  # cloak-cdn:
-  #   image: ghcr.io/0xf00f00/cloak:latest
-  #   container_name: cloak-cdn
-  #   restart: unless-stopped
-  #   command: ck-client
-  #   dns:
-  #     - 1.1.1.1
-  #     - 1.0.0.1
-  #   environment:
-  #     - CLOAK_REMOTE_HOST=${CLOAK_CDN_REMOTE_HOST}
-  #     - CLOAK_UUID=${CLOAK_UUID}
-  #     - CLOAK_PUBLIC_KEY=${CLOAK_PUBLIC_KEY}
-  #     - CLOAK_PROXY_METHOD=${CLOAK_PROXY_METHOD}
-  #     - CLOAK_TRANSPORT=CDN
-  #     - CLOAK_ENCRYPTION_METHOD=${CLOAK_CDN_ENCRYPTION_METHOD}
-  #     - CLOAK_BROWSER_SIGNATURE=${CLOAK_BROWSER_SIGNATURE}
-  #     - CLOAK_SERVER_NAME=${CLOAK_CDN_SERVER_NAME}
+
   psiphon:
     image: ghcr.io/0xf00f00/psiphon-tunnel-core-docker:latest
     container_name: psiphon
-    restart: unless-stopped
-    dns:
-      - 1.1.1.1
-      - 1.0.0.1
-    ports:
-      - "${PSIPHON_SOCKS_PORT:-1082}:1080"
-      - "${PSIPHON_HTTP_PORT:-8444}:8443"
+    restart: *default-restart
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -x socks5://127.0.0.1:1080 -s -o /dev/null http://www.gstatic.com/generate_204 || exit 1"]
+      <<: *proxy-healthcheck
+    networks:
+      direct_internet:
+        ipv4_address: 192.168.88.240
+        gw_priority: 100
+      default:
+        ipv4_address: 10.20.0.14
     environment:
-      - EGRESS_REGION=${PSIPHON_EGRESS_REGION}
+      - EGRESS_REGION=${PSIPHON_EGRESS_REGION:-}
     volumes:
       - ./psiphon:/data
+
+  frpc-proxy:
+    image: ghcr.io/fatedier/frpc:v0.66.0
+    container_name: frpc-proxy
+    restart: *default-restart
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -x socks5://127.0.0.1:1080 -s -o /dev/null http://www.gstatic.com/generate_204 || exit 1"]
+      <<: *proxy-healthcheck
+    networks:
+      direct_internet:
+        ipv4_address: 192.168.88.242
+        gw_priority: 100
+      default:
+        ipv4_address: 10.20.0.15
+    volumes:
+      - ./frpc-proxy/frpc.toml:/frpc.toml:ro
+      - ./frpc-proxy/certs:/data/certs:ro
+    environment:
+      - FRP_PROXY_SERVER_ADDR=${FRP_PROXY_SERVER_ADDR}
+      - FRP_PROXY_AUTH_TOKEN=${FRP_PROXY_AUTH_TOKEN}
+      - FRP_PROXY_VISITOR_SK=${FRP_PROXY_VISITOR_SK}
+    command: -c /frpc.toml
+
+  # autoheal:
+  #   image: willfarrell/autoheal:latest
+  #   container_name: autoheal
+  #   restart: unless-stopped
+  #   environment:
+  #     - AUTOHEAL_CONTAINER_LABEL=true
+  #     - AUTOHEAL_INTERVAL=10
+  #     - AUTOHEAL_START_PERIOD=20
+  #     - AUTOHEAL_DEFAULT_STOP_TIMEOUT=10
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock
+
+# Network definitions
+networks:
+  # Macvlan for direct internet access (bypasses host TUN routing)
+  # Uses static IPs from your LAN subnet - containers appear as devices on the network
+  direct_internet:
+    driver: macvlan
+    driver_opts:
+      parent: ${MACVLAN_PARENT:-eth0}
+    ipam:
+      config:
+        - subnet: 192.168.88.0/24
+          gateway: 192.168.88.1
+          # Reserve .240-.247 for containers (avoid conflicts with router DHCP)
+          ip_range: 192.168.88.240/29
+  # Default bridge network with static IP assignments for reliable Clash access
+  default:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.20.0.0/24
+          gateway: 10.20.0.1

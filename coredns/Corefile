@@ -1,0 +1,23 @@
+.:53 {
+    loop
+    reload
+    # 10.20.0.1:15335 -> clash (running on host network)
+    # 10.20.0.11:53 -> dnscrypt-proxy
+    # 10.20.0.10:53 -> dnscrypt-proxy-direct
+    # 10.20.0.15:53 -> frpc-proxy
+    forward . 10.20.0.1:15335 10.20.0.11:53 10.20.0.10:53 10.20.0.15:53 {
+        policy sequential
+        health_check 2s
+        max_fails 2
+        expire 10s
+        failover SERVFAIL REFUSED
+    }
+    cache 3600 {
+        success 8192
+        denial 4096
+        prefetch 10
+        serve_stale 6h
+    }
+    errors
+    # log
+}
