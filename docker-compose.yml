@@ -25,10 +25,6 @@ services:
     ports:
       - "53:53/udp"
       - "53:53/tcp"
-    healthcheck:
-      test: ["CMD", "sh", "-c", "nslookup google.com 127.0.0.1 2>/dev/null || exit 1"]
-      <<: *proxy-healthcheck
-      start_period: 30s
     volumes:
       - ./coredns/Corefile:/Corefile:ro
     command: -conf /Corefile
@@ -96,7 +92,7 @@ services:
       - "1080:1080"
     dns: *default-dns
     healthcheck:
-      test: ["CMD", "sh", "-c", "curl -x socks5://127.0.0.1:1080 -s -o /dev/null http://www.gstatic.com/generate_204 || exit 1"]
+      test: ["CMD", "bash", "-c", "< /dev/tcp/127.0.0.1/1080 || exit 1"]
       <<: *proxy-healthcheck
     command: naive --listen=socks://0.0.0.0:1080 --proxy=https://${NAIVE_USER}:${NAIVE_PASSWORD}@${NAIVE_SERVER}
 
@@ -107,7 +103,7 @@ services:
     network_mode: host
     privileged: true
     healthcheck:
-      test: ["CMD", "sh", "-c", "curl -x http://127.0.0.1:7890 -s -o /dev/null http://www.gstatic.com/generate_204 || exit 1"]
+      test: ["CMD", "sh", "-c", "http_proxy=http://127.0.0.1:7890 wget -q -O /dev/null http://www.gstatic.com/generate_204 || exit 1"]
       <<: *proxy-healthcheck
     volumes:
       - ./clash/config.yaml:/root/.config/clash/config.yaml:ro
@@ -127,9 +123,6 @@ services:
     profiles:
       - singbox
     restart: *default-restart
-    healthcheck:
-      test: ["CMD", "sh", "-c", "curl -x socks5://127.0.0.1:2080 -s -o /dev/null http://www.gstatic.com/generate_204 || exit 1"]
-      <<: *proxy-healthcheck
     dns: *default-dns
     networks:
       direct_internet:
@@ -148,7 +141,7 @@ services:
     container_name: psiphon
     restart: *default-restart
     healthcheck:
-      test: ["CMD", "sh", "-c", "curl -x socks5://127.0.0.1:1080 -s -o /dev/null http://www.gstatic.com/generate_204 || exit 1"]
+      test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 1080 || exit 1"]
       <<: *proxy-healthcheck
     networks:
       direct_internet:
@@ -166,7 +159,7 @@ services:
     container_name: frpc-proxy
     restart: *default-restart
     healthcheck:
-      test: ["CMD", "sh", "-c", "curl -x socks5://127.0.0.1:1080 -s -o /dev/null http://www.gstatic.com/generate_204 || exit 1"]
+      test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 1080 || exit 1"]
       <<: *proxy-healthcheck
     networks:
       direct_internet:
