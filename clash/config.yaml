@@ -62,8 +62,8 @@ proxy-groups:
       - frpc
       - psiphon
     url: 'http://www.gstatic.com/generate_204'
-    interval: 60
-    lazy: false
+    interval: 300
+    lazy: true
   - name: direct_interface
     type: select
     interface-name: eth0

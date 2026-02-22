@@ -38,7 +38,7 @@ services:
     restart: *default-restart
     user: "${UID:-1000}:${GID:-1000}"
     healthcheck:
-      test: ["CMD", "sh", "-c", "nslookup google.com 127.0.0.1 2>/dev/null || exit 1"]
+      test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 53 || exit 1"]
       <<: *dns-healthcheck
     dns: *default-dns
     environment:
@@ -67,7 +67,7 @@ services:
     restart: *default-restart
     user: "${UID:-1000}:${GID:-1000}"
     healthcheck:
-      test: ["CMD", "sh", "-c", "nslookup google.com 127.0.0.1 2>/dev/null || exit 1"]
+      test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 53 || exit 1"]
       <<: *dns-healthcheck
     dns: *default-dns
     volumes:
@@ -85,8 +85,14 @@ services:
     image: ghcr.io/0xf00f00/naive_proxy:latest
     container_name: naive
     restart: *default-restart
+    labels:
+      - autoheal=true
     network_mode: host
     dns: *default-dns
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 1048576
     healthcheck:
       test: ["CMD", "bash", "-c", "< /dev/tcp/127.0.0.1/1080 || exit 1"]
       <<: *proxy-healthcheck
@@ -99,7 +105,7 @@ services:
     network_mode: host
     privileged: true
     healthcheck:
-      test: ["CMD", "sh", "-c", "http_proxy=http://127.0.0.1:7890 wget -q -O /dev/null http://www.gstatic.com/generate_204 || exit 1"]
+      test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 7890 || exit 1"]
       <<: *proxy-healthcheck
     volumes:
       - ./clash/config.yaml:/root/.config/clash/config.yaml:ro
@@ -172,17 +178,17 @@ services:
       - FRP_PROXY_VISITOR_SK=${FRP_PROXY_VISITOR_SK}
     command: -c /frpc.toml
 
-  # autoheal:
-  #   image: willfarrell/autoheal:latest
-  #   container_name: autoheal
-  #   restart: unless-stopped
-  #   environment:
-  #     - AUTOHEAL_CONTAINER_LABEL=true
-  #     - AUTOHEAL_INTERVAL=10
-  #     - AUTOHEAL_START_PERIOD=20
-  #     - AUTOHEAL_DEFAULT_STOP_TIMEOUT=10
-  #   volumes:
-  #     - /var/run/docker.sock:/var/run/docker.sock
+  autoheal:
+    image: willfarrell/autoheal:latest
+    container_name: autoheal
+    restart: *default-restart
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=autoheal
+      - AUTOHEAL_INTERVAL=10
+      - AUTOHEAL_START_PERIOD=60
+      - AUTOHEAL_DEFAULT_STOP_TIMEOUT=10
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
 # Network definitions
 networks:
