@@ -7,7 +7,7 @@
             {
                 "tag": "local_coredns",
                 "type": "udp",
-                "server": "10.20.0.10",
+                "server": "127.0.0.1",
                 "detour": "direct"
             }
         ]
