@@ -85,11 +85,7 @@ services:
     image: ghcr.io/0xf00f00/naive_proxy:latest
     container_name: naive
     restart: *default-restart
-    networks:
-      default:
-        ipv4_address: 10.20.0.16
-    ports:
-      - "1080:1080"
+    network_mode: host
     dns: *default-dns
     healthcheck:
       test: ["CMD", "bash", "-c", "< /dev/tcp/127.0.0.1/1080 || exit 1"]
@@ -110,7 +106,7 @@ services:
       - ./clash/rules:/root/.config/clash/rules:ro
     dns: *default-dns
     extra_hosts:
-      - "naive:10.20.0.16"
+      - "naive:127.0.0.1"
       - "psiphon:10.20.0.14"
       - "frpc-proxy:10.20.0.15"
     depends_on:
