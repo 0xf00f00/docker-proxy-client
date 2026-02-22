@@ -8,10 +8,12 @@ services:
       - NET_RAW
     env_file:
       - .env
+    environment:
+      - OUTPUT_FILE=/app/output/active_dns.txt
     volumes:
       - ./scan.sh:/scan.sh:ro
       - ${CIDR_FILE_HOST_PATH:-./cidrs.txt}:/cidrs.txt:ro
-      - ${OUTPUT_FILE_HOST_PATH:-./active_dns.txt}:/active_dns.txt
+      - ${OUTPUT_DIR_HOST_PATH:-./out}:/app/output
     entrypoint: ""
     command: /bin/sh /scan.sh
     deploy:

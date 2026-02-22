@@ -20,4 +20,5 @@ frpc-proxy/certs/*
 psiphon/*
 !psiphon/.gitkeep
 
-dns-scanner/active_dns.txt
+dns-scanner/out/*
+!dns-scanner/out/.gitkeep
