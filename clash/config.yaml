@@ -4,6 +4,7 @@ allow-lan: true
 bind-address: '*'
 
 hosts:
+  naive: 127.0.0.1
   frpc-proxy: 10.20.0.15
   psiphon: 10.20.0.14
 
