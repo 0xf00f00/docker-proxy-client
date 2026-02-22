@@ -33,7 +33,7 @@ run_scan() {
     # -M dns: sets the probe module to DNS
     zmap -p 53 -i "$NETWORK_INTERFACE" -M dns --probe-args="$TARGET_DOMAIN" --output-module=json \
          --output-fields=saddr,dns_answers --output-filter="app_success=1 && dns_ancount>0" \
-         -w "$CIDR_FILE" -r "$RATE_LIMIT" $ZMAP_EXTRA_ARGS -q \
+         -w "$CIDR_FILE" -r "$RATE_LIMIT" $ZMAP_EXTRA_ARGS \
     | grep --line-buffered '"type_str":"A"' \
     | sed -n 's/.*"saddr":"\([^"]*\)".*/\1/p' \
     | head -n "$NUM_RESULTS" > "$OUTPUT_FILE"
