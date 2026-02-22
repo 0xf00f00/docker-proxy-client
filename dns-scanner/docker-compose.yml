@@ -1,0 +1,21 @@
+services:
+  dns-scanner:
+    image: ghcr.io/zmap/zmap:latest
+    container_name: dns-scanner
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_RAW
+    env_file:
+      - .env
+    volumes:
+      - ./scan.sh:/scan.sh:ro
+      - ${CIDR_FILE_HOST_PATH:-./cidrs.txt}:/cidrs.txt:ro
+      - ${OUTPUT_FILE_HOST_PATH:-./active_dns.txt}:/active_dns.txt
+    entrypoint: ""
+    command: /bin/sh /scan.sh
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
