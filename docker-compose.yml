@@ -138,6 +138,22 @@ services:
       - ./singbox-sub/config.json:/etc/sing-box/config.json:ro
     command: -D /var/lib/sing-box -C /etc/sing-box/ run
 
+  singbox-direct:
+    image: ghcr.io/sagernet/sing-box:latest
+    container_name: singbox-direct
+    restart: *default-restart
+    labels:
+      - autoheal=true
+    network_mode: host
+    healthcheck:
+      test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 7891 || exit 1"]
+      <<: *proxy-healthcheck
+    volumes:
+      - ./singbox-direct/config.json:/etc/sing-box/config.json:ro
+    command: -C /etc/sing-box/ run
+    depends_on:
+      - coredns
+
   psiphon:
     image: ghcr.io/0xf00f00/psiphon-tunnel-core-docker:latest
     container_name: psiphon

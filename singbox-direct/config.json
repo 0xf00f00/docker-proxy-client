@@ -1,0 +1,35 @@
+{
+    "log": {
+        "level": "warn"
+    },
+    "dns": {
+        "servers": [
+            {
+                "tag": "local_coredns",
+                "address": "10.20.0.10",
+                "detour": "direct"
+            }
+        ],
+        "rules": [
+            {
+                "outbound": "any",
+                "server": "local_coredns"
+            }
+        ]
+    },
+    "inbounds": [
+        {
+            "type": "socks",
+            "tag": "socks-in",
+            "listen": "::",
+            "listen_port": 7891
+        }
+    ],
+    "outbounds": [
+        {
+            "type": "direct",
+            "tag": "direct",
+            "bind_interface": "eth0"
+        }
+    ]
+}
