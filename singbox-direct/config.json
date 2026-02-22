@@ -6,16 +6,14 @@
         "servers": [
             {
                 "tag": "local_coredns",
-                "address": "10.20.0.10",
+                "type": "udp",
+                "server": "10.20.0.10",
                 "detour": "direct"
             }
-        ],
-        "rules": [
-            {
-                "outbound": "any",
-                "server": "local_coredns"
-            }
         ]
+    },
+    "route": {
+        "default_domain_resolver": "local_coredns"
     },
     "inbounds": [
         {
