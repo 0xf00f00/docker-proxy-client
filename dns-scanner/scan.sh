@@ -7,6 +7,8 @@ TARGET_DOMAIN=${TARGET_DOMAIN:-"A,example.com"}
 RATE_LIMIT=${RATE_LIMIT:-"5000"}
 NUM_RESULTS=${NUM_RESULTS:-"1"}
 NETWORK_INTERFACE=${NETWORK_INTERFACE:-"eth0"}
+EXPECTED_IP=${EXPECTED_IP:-""}
+BANNED_IP=${BANNED_IP:-""}
 
 ZMAP_EXTRA_ARGS=${ZMAP_EXTRA_ARGS:-""}
 SCAN_INTERVAL=${SCAN_INTERVAL:-"86400"} # Default to 24 hours
@@ -21,6 +23,8 @@ run_scan() {
     echo "OUTPUT_FILE: $OUTPUT_FILE"
     echo "TARGET_DOMAIN: $TARGET_DOMAIN"
     echo "RATE_LIMIT: $RATE_LIMIT (packets/sec)"
+    echo "EXPECTED_IP: ${EXPECTED_IP:-None}"
+    echo "BANNED_IP: ${BANNED_IP:-None}"
 
     if [ ! -f "$CIDR_FILE" ]; then
         echo "Error: CIDR file not found at $CIDR_FILE"
@@ -31,10 +35,29 @@ run_scan() {
     # -r <rate>: sets the network rate limit in packets/sec to prevent overloading the network interface
     # -i <interface>: explicitly bind to a physical adapter to bypass host TUN/TAP routes
     # -M dns: sets the probe module to DNS
+    
+    filter_expected() {
+        if [ -n "$EXPECTED_IP" ]; then
+            grep --line-buffered "\"data\":\"$EXPECTED_IP\""
+        else
+            cat
+        fi
+    }
+
+    filter_banned() {
+        if [ -n "$BANNED_IP" ]; then
+            grep -v --line-buffered "\"data\":\"$BANNED_IP\""
+        else
+            cat
+        fi
+    }
+
     zmap -p 53 -i "$NETWORK_INTERFACE" -M dns --probe-args="$TARGET_DOMAIN" --output-module=json \
          --output-fields=saddr,dns_answers --output-filter="app_success=1 && dns_ancount>0" \
          -w "$CIDR_FILE" -r "$RATE_LIMIT" $ZMAP_EXTRA_ARGS \
     | grep --line-buffered '"type_str":"A"' \
+    | filter_expected \
+    | filter_banned \
     | sed -n 's/.*"saddr":"\([^"]*\)".*/\1/p' \
     | head -n "$NUM_RESULTS" > "$OUTPUT_FILE"
 
