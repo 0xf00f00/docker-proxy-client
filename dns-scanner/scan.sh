@@ -36,7 +36,9 @@ run_scan() {
     
     filter_expected() {
         if [ -n "$EXPECTED_IP" ]; then
-            grep --line-buffered "\"data\":\"$EXPECTED_IP\""
+            # Support comma or space separated lists, and wildcards (e.g., 10.10.*.*)
+            PATTERN=$(printf '%s\n' "$EXPECTED_IP" | tr -s ' ,' '|' | sed -e 's/^|//' -e 's/|$//' -e 's/\./\\./g' -e 's/\*/.*/g')
+            grep -E --line-buffered "\"data\":\"($PATTERN)\""
         else
             cat
         fi
@@ -44,7 +46,9 @@ run_scan() {
 
     filter_banned() {
         if [ -n "$BANNED_IP" ]; then
-            grep -v --line-buffered "\"data\":\"$BANNED_IP\""
+            # Support comma or space separated lists, and wildcards (e.g., 10.10.*.*)
+            PATTERN=$(printf '%s\n' "$BANNED_IP" | tr -s ' ,' '|' | sed -e 's/^|//' -e 's/|$//' -e 's/\./\\./g' -e 's/\*/.*/g')
+            grep -vE --line-buffered "\"data\":\"($PATTERN)\""
         else
             cat
         fi
