@@ -25,6 +25,14 @@ run_scan() {
         exit 1
     fi
 
+    # Automate gateway discovery and ARP priming
+    # ZMap needs the gateway MAC address. Ping ensures it's in the ARP cache.
+    GATEWAY_IP=$(ip route show dev "$NETWORK_INTERFACE" | grep default | awk '{print $3}')
+    if [ -n "$GATEWAY_IP" ]; then
+        echo "[$(date)] Priming ARP cache for gateway $GATEWAY_IP on $NETWORK_INTERFACE..."
+        ping -c 1 -W 1 "$GATEWAY_IP" > /dev/null 2>&1
+    fi
+
     # Run zmap with the specified configurations
     # -r <rate>: sets the network rate limit in packets/sec to prevent overloading the network interface
     # -i <interface>: explicitly bind to a physical adapter to bypass host TUN/TAP routes
