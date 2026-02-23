@@ -206,6 +206,58 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
 
+  # Only starts when --profile dnstt is passed. Extremely slow, use as last resort only.
+  dnstt-client:
+    image: ghcr.io/0xf00f00/dnstt-client:latest
+    container_name: dnstt-client
+    profiles:
+      - dnstt
+    restart: *default-restart
+    # Entrypoint watches active_dns.txt for periodic DNS refresh (default 6h)
+    entrypoint: ["/bin/bash", "/dnstt/entrypoint.sh"]
+    environment:
+      - DNSTT_DOMAIN=${DNSTT_DOMAIN}
+      - DNSTT_PUBKEY=${DNSTT_PUBKEY}
+      - DNSTT_RESOLVER=${DNSTT_RESOLVER:-1.1.1.1:53}
+      - DNSTT_REFRESH_INTERVAL=${DNSTT_REFRESH_INTERVAL:-21600}
+      - DNSTT_DOH_URL=${DNSTT_DOH_URL}
+    volumes:
+      - ./dnstt/entrypoint.sh:/dnstt/entrypoint.sh:ro
+      - ./dns-scanner/out/active_dns.txt:/dns-scanner/active_dns.txt:ro
+    networks:
+      direct_internet:
+        ipv4_address: 192.168.88.244
+        gw_priority: 100
+      default:
+        ipv4_address: 10.20.0.16
+
+  dnstt-autossh:
+    image: jnovack/autossh:latest
+    container_name: dnstt-autossh
+    profiles:
+      - dnstt
+    restart: *default-restart
+    ports:
+      - "${DNSTT_SOCKS_PORT:-5080}:1080"
+    depends_on:
+      - dnstt-client
+    environment:
+      - SSH_REMOTE_USER=${DNSTT_SSH_USER:-tunnel}
+      # Connect to dnstt-client via its service name (bridge network)
+      - SSH_REMOTE_HOST=dnstt-client
+      - SSH_REMOTE_PORT=7000
+      - SSH_KEY_FILE=/dnstt/id_rsa
+      - SSH_MODE=-L
+      - SSH_BIND_IP=127.0.0.1
+      - SSH_LOCAL_PORT=5081
+      - SSH_TARGET_HOST=localhost
+      - SSH_TARGET_PORT=22
+      - AUTOSSH_GATETIME=0
+      # Final SOCKS proxy inside container on port 1080 (mapped to host via ports)
+      - SSH_OPTIONS=-D 0.0.0.0:1080 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+    volumes:
+      - ./dnstt/id_rsa:/dnstt/id_rsa:ro
+
 # Network definitions
 networks:
   # Macvlan for direct internet access (bypasses host TUN routing)
