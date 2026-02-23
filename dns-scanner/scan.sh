@@ -26,17 +26,21 @@ run_scan() {
     fi
 
     # Automate gateway discovery and ARP priming
-    GATEWAY_IP=$(ip route show dev "$NETWORK_INTERFACE" 2>/dev/null | awk '/via/ {print $3; exit}')
-    [ -z "$GATEWAY_IP" ] && GATEWAY_IP=$(route -n 2>/dev/null | awk '$1=="0.0.0.0" || $1=="default" {print $2; exit}')
+    # Dependency-free gateway and MAC discovery to force Ethernet layer
+    GW_IP=$(ip route show dev "$NETWORK_INTERFACE" 2>/dev/null | awk '/via/ {print $3; exit}')
+    [ -z "$GW_IP" ] && GW_IP=$(route -n 2>/dev/null | awk '$8=="'$NETWORK_INTERFACE'" && ($1=="0.0.0.0"||$1=="default") {print $2; exit}')
+    if [ -z "$GW_IP" ] && [ -f /proc/net/route ]; then
+        H=$(awk '$1=="'$NETWORK_INTERFACE'" && $2=="00000000" {print $3; exit}' /proc/net/route)
+        [ -n "$H" ] && GW_IP=$(printf "%d.%d.%d.%d" 0x$(echo $H|cut -c7-8) 0x$(echo $H|cut -c5-6) 0x$(echo $H|cut -c3-4) 0x$(echo $H|cut -c1-2) 2>/dev/null)
+    fi
 
-    if [ -n "$GATEWAY_IP" ]; then
-        ping -c 1 -W 1 "$GATEWAY_IP" >/dev/null 2>&1
-        GATEWAY_MAC=$(ip neighbor show "$GATEWAY_IP" 2>/dev/null | awk '{print $5}')
-        [ -z "$GATEWAY_MAC" ] && GATEWAY_MAC=$(awk '$1=="'$GATEWAY_IP'" {print $4; exit}' /proc/net/arp 2>/dev/null)
-
-        if [ -n "$GATEWAY_MAC" ] && [ "$GATEWAY_MAC" != "00:00:00:00:00:00" ]; then
-            echo "[$(date)] Forcing Ethernet layer via gateway: $GATEWAY_IP ($GATEWAY_MAC)"
-            ZMAP_EXTRA_ARGS="$ZMAP_EXTRA_ARGS -G $GATEWAY_MAC"
+    if [ -n "$GW_IP" ]; then
+        ping -c 1 -W 1 "$GW_IP" >/dev/null 2>&1
+        GW_MAC=$(ip neighbor show "$GW_IP" 2>/dev/null | awk '{print $5}')
+        [ -z "$GW_MAC" ] && GW_MAC=$(awk '$1=="'$GW_IP'" {print $4; exit}' /proc/net/arp 2>/dev/null)
+        if [ -n "$GW_MAC" ] && [ "$GW_MAC" != "00:00:00:00:00:00" ]; then
+            echo "[$(date)] Forcing Ethernet layer: Gateway $GW_IP is at $GW_MAC"
+            ZMAP_EXTRA_ARGS="$ZMAP_EXTRA_ARGS -G $GW_MAC"
         fi
     fi
 
