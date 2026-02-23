@@ -26,16 +26,23 @@ run_scan() {
     fi
 
     # Automate gateway discovery and ARP priming
-    # ZMap needs the gateway MAC address. Ping ensures it's in the ARP cache.
-    GATEWAY_IP=$(ip route show dev "$NETWORK_INTERFACE" | grep default | awk '{print $3}')
+    GATEWAY_IP=$(ip route show dev "$NETWORK_INTERFACE" 2>/dev/null | awk '/via/ {print $3; exit}')
+    [ -z "$GATEWAY_IP" ] && GATEWAY_IP=$(route -n 2>/dev/null | awk '$1=="0.0.0.0" || $1=="default" {print $2; exit}')
+
     if [ -n "$GATEWAY_IP" ]; then
-        echo "[$(date)] Priming ARP cache for gateway $GATEWAY_IP on $NETWORK_INTERFACE..."
-        ping -c 1 -W 1 "$GATEWAY_IP" > /dev/null 2>&1
+        ping -c 1 -W 1 "$GATEWAY_IP" >/dev/null 2>&1
+        GATEWAY_MAC=$(ip neighbor show "$GATEWAY_IP" 2>/dev/null | awk '{print $5}')
+        [ -z "$GATEWAY_MAC" ] && GATEWAY_MAC=$(awk '$1=="'$GATEWAY_IP'" {print $4; exit}' /proc/net/arp 2>/dev/null)
+
+        if [ -n "$GATEWAY_MAC" ] && [ "$GATEWAY_MAC" != "00:00:00:00:00:00" ]; then
+            echo "[$(date)] Forcing Ethernet layer via gateway: $GATEWAY_IP ($GATEWAY_MAC)"
+            ZMAP_EXTRA_ARGS="$ZMAP_EXTRA_ARGS -G $GATEWAY_MAC"
+        fi
     fi
 
     # Run zmap with the specified configurations
     # -r <rate>: sets the network rate limit in packets/sec to prevent overloading the network interface
-    # -i <interface>: explicitly bind to a physical adapter to bypass host TUN/TAP routes
+    # -i <interface>: explicitly bind to a physical adapter
     # -M dns: sets the probe module to DNS
     zmap -p 53 -i "$NETWORK_INTERFACE" -M dns --probe-args="$TARGET_DOMAIN" --output-module=json \
          --output-fields=saddr,dns_answers --output-filter="app_success=1 && dns_ancount>0" \
