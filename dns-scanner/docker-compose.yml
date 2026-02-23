@@ -1,4 +1,14 @@
 services:
+  ofelia:
+    image: mcuadros/ofelia:latest
+    container_name: ofelia
+    depends_on:
+      - dns-scanner
+    command: daemon --docker
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+
   dns-scanner:
     image: ghcr.io/zmap/zmap:latest
     container_name: dns-scanner
@@ -14,8 +24,14 @@ services:
       - ./scan.sh:/scan.sh:ro
       - ${CIDR_FILE_HOST_PATH:-./cidrs.txt}:/cidrs.txt:ro
       - ${OUTPUT_DIR_HOST_PATH:-./out}:/app/output
-    entrypoint: ""
-    command: /bin/sh /scan.sh
+    labels:
+      ofelia.enabled: "true"
+      # run every Saturday at 3 AM
+      ofelia.job-exec.dns-scanner.schedule: "${DNS_SCANNER_SCHEDULE:-0 0 3 * * 6}"
+      ofelia.job-exec.dns-scanner.command: "/bin/sh /scan.sh"
+    # Keep container alive but idle so Ofelia can execute jobs inside it
+    entrypoint: ["tail", "-f", "/dev/null"]
+    command: []
     deploy:
       resources:
         limits:

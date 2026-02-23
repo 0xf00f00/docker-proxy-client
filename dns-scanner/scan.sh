@@ -11,8 +11,6 @@ EXPECTED_IP=${EXPECTED_IP:-""}
 BANNED_IP=${BANNED_IP:-""}
 
 ZMAP_EXTRA_ARGS=${ZMAP_EXTRA_ARGS:-""}
-SCAN_INTERVAL=${SCAN_INTERVAL:-"86400"} # Default to 24 hours
-RUN_ON_STARTUP=${RUN_ON_STARTUP:-"true"}
 
 # Trap SIGTERM and SIGINT to exit immediately when docker stops the container
 trap "echo '[$(date)] Received termination signal. Exiting...'; exit 0" TERM INT
@@ -69,22 +67,4 @@ run_scan() {
     fi
 }
 
-if [ "$RUN_ON_STARTUP" = "true" ]; then
-    run_scan
-fi
-
-if [ "$SCAN_INTERVAL" -gt 0 ]; then
-    while true; do
-        if [ "$RUN_ON_STARTUP" = "false" ]; then
-            echo "[$(date)] Sleeping for $SCAN_INTERVAL seconds before next scan..."
-            sleep "$SCAN_INTERVAL"
-            run_scan
-        else
-            # If we already ran on startup, sleep before the *next* run
-            echo "[$(date)] Sleeping for $SCAN_INTERVAL seconds before next scan..."
-            sleep "$SCAN_INTERVAL"
-            run_scan
-        fi
-        RUN_ON_STARTUP="false" # Ensure we sleep first on subsequent loop iterations
-    done
-fi
+run_scan
