@@ -51,15 +51,15 @@ check_dns_doh() {
 # Priority: CoreDNS → DoH env var → UDP env var → active_dns file → fallback
 
 resolve_dns() {
-    # 1. CoreDNS service
-    if check_dns_udp "coredns"; then
-        echo "UDP coredns:53"
+    # 1. DoH environment variable
+    if [[ -n "${DNSTT_DOH_URL:-}" ]] && check_dns_doh "$DNSTT_DOH_URL"; then
+        echo "DOH $DNSTT_DOH_URL"
         return
     fi
 
-    # 2. DoH environment variable
-    if [[ -n "${DNSTT_DOH_URL:-}" ]] && check_dns_doh "$DNSTT_DOH_URL"; then
-        echo "DOH $DNSTT_DOH_URL"
+    # 2. CoreDNS service
+    if check_dns_udp "coredns"; then
+        echo "UDP coredns:53"
         return
     fi
 
