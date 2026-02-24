@@ -227,7 +227,6 @@ services:
     networks:
       direct_internet:
         ipv4_address: 192.168.88.244
-        gw_priority: 100
       default:
         ipv4_address: 10.20.0.16
 
