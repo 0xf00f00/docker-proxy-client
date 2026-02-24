@@ -57,6 +57,7 @@ services:
     networks:
       direct_internet:
         ipv4_address: 192.168.88.243
+        gw_priority: 1000
       default:
         ipv4_address: 10.20.0.10
 
@@ -128,6 +129,7 @@ services:
     networks:
       direct_internet:
         ipv4_address: 192.168.88.241
+        gw_priority: 1000
       default:
         ipv4_address: 10.20.0.13
     ports:
@@ -162,6 +164,7 @@ services:
     networks:
       direct_internet:
         ipv4_address: 192.168.88.240
+        gw_priority: 1000
       default:
         ipv4_address: 10.20.0.14
     environment:
@@ -179,6 +182,7 @@ services:
     networks:
       direct_internet:
         ipv4_address: 192.168.88.242
+        gw_priority: 1000
       default:
         ipv4_address: 10.20.0.15
     volumes:
@@ -223,6 +227,7 @@ services:
     networks:
       direct_internet:
         ipv4_address: 192.168.88.244
+        gw_priority: 1000
       default:
         ipv4_address: 10.20.0.16
 
