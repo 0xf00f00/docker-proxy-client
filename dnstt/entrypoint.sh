@@ -11,6 +11,11 @@ DEFAULT_FALLBACK_DNS="1.1.1.1:53"
 DNSTT_PID=""
 CURRENT_PROTO=""
 CURRENT_ADDR=""
+LOG_FILE="/var/log/dnstt.log"
+
+# Ensure log directory exists (if not /var/log which usually does)
+mkdir -p "$(dirname "$LOG_FILE")"
+touch "$LOG_FILE"
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -90,12 +95,15 @@ resolve_dns() {
 start_dnstt() {
     local proto="$1" addr="$2"
 
+    log "Truncating log file: $LOG_FILE"
+    : > "$LOG_FILE"
+
     if [[ "$proto" == "DOH" ]]; then
         log "Starting with DoH: $addr"
-        dnstt-client -doh "$addr" -pubkey "$DNSTT_PUBKEY" "$DNSTT_DOMAIN" "$LISTEN_ADDR" &
+        dnstt-client -doh "$addr" -pubkey "$DNSTT_PUBKEY" "$DNSTT_DOMAIN" "$LISTEN_ADDR" 2> >(tee -a "$LOG_FILE" >&2) &
     else
         log "Starting with UDP: $addr"
-        dnstt-client -udp "$addr" -pubkey "$DNSTT_PUBKEY" "$DNSTT_DOMAIN" "$LISTEN_ADDR" &
+        dnstt-client -udp "$addr" -pubkey "$DNSTT_PUBKEY" "$DNSTT_DOMAIN" "$LISTEN_ADDR" 2> >(tee -a "$LOG_FILE" >&2) &
     fi
 
     DNSTT_PID=$!

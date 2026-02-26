@@ -213,6 +213,11 @@ services:
     profiles:
       - dnstt
     restart: *default-restart
+    labels:
+      - autoheal=true
+    healthcheck:
+      test: ["CMD", "/dnstt/healthcheck.sh"]
+      <<: *dns-healthcheck
     # Entrypoint watches active_dns.txt for periodic DNS refresh (default 6h)
     entrypoint: ["/bin/bash", "/dnstt/entrypoint.sh"]
     environment:
@@ -223,6 +228,7 @@ services:
       - DNSTT_DOH_URL=${DNSTT_DOH_URL}
     volumes:
       - ./dnstt/entrypoint.sh:/dnstt/entrypoint.sh:ro
+      - ./dnstt/healthcheck.sh:/dnstt/healthcheck.sh:ro
       - ./dns-scanner/out/active_dns.txt:/dns-scanner/active_dns.txt:ro
     networks:
       direct_internet:
