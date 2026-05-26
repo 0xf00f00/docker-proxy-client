@@ -194,6 +194,29 @@ services:
       - FRP_PROXY_VISITOR_SK=${FRP_PROXY_VISITOR_SK}
     command: -c /frpc.toml
 
+  sni-spoofing:
+    image: ghcr.io/aleskxyz/sni-spoofing-go:latest
+    container_name: sni-spoofing
+    profiles:
+      - sni-spoofing
+    restart: *default-restart
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/40443'"]
+      <<: *proxy-healthcheck
+    networks:
+      direct_internet:
+        ipv4_address: 192.168.88.245
+        gw_priority: 1000
+      default:
+        ipv4_address: 10.20.0.17
+    command: >
+      -listen 0.0.0.0:40443
+      -connect ${SNI_SPOOF_CONNECT}
+      -fake-sni ${SNI_SPOOF_FAKE_SNI}
+
   autoheal:
     image: willfarrell/autoheal:latest
     container_name: autoheal
