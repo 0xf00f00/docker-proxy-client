@@ -197,8 +197,6 @@ services:
   sni-spoofing:
     image: ghcr.io/aleskxyz/sni-spoofing-go:latest
     container_name: sni-spoofing
-    profiles:
-      - sni-spoofing
     restart: *default-restart
     cap_add:
       - NET_ADMIN
