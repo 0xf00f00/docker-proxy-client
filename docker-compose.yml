@@ -82,7 +82,7 @@ services:
       - clash
 
   naive:
-    image: ghcr.io/0xf00f00/naive_proxy:latest
+    image: ghcr.io/sagernet/sing-box:latest
     container_name: naive
     restart: *default-restart
     labels:
@@ -94,9 +94,15 @@ services:
         soft: 65536
         hard: 1048576
     healthcheck:
-      test: ["CMD", "bash", "-c", "< /dev/tcp/127.0.0.1/1080 || exit 1"]
+      test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 1080 || exit 1"]
       <<: *proxy-healthcheck
-    command: naive --listen=socks://0.0.0.0:1080 --proxy=https://${NAIVE_USER}:${NAIVE_PASSWORD}@${NAIVE_SERVER}
+    environment:
+      - NAIVE_SERVER=${NAIVE_SERVER}
+      - NAIVE_USER=${NAIVE_USER}
+      - NAIVE_PASSWORD=${NAIVE_PASSWORD}
+    volumes:
+      - ./naive/entrypoint.sh:/entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
 
   clash:
     image: dreamacro/clash-premium:latest
