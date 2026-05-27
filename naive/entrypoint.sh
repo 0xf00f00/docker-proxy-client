@@ -17,6 +17,10 @@ mkdir -p /tmp/sing-box
 cat > /tmp/sing-box/config.json <<EOF
 {
   "log": { "level": "warn" },
+  "dns": {
+    "servers": [{ "tag": "local", "type": "local" }],
+    "strategy": "ipv4_only"
+  },
   "inbounds": [
     {
       "type": "socks",
