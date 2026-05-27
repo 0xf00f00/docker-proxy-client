@@ -81,8 +81,9 @@ services:
     depends_on:
       - clash
 
+  # Legacy klzgrad naive client. TCP only.
   naive:
-    image: ghcr.io/sagernet/sing-box:latest
+    image: ghcr.io/0xf00f00/naive_proxy:latest
     container_name: naive
     restart: *default-restart
     labels:
@@ -94,14 +95,32 @@ services:
         soft: 65536
         hard: 1048576
     healthcheck:
-      test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 1080 || exit 1"]
+      test: ["CMD", "bash", "-c", "< /dev/tcp/127.0.0.1/1080 || exit 1"]
+      <<: *proxy-healthcheck
+    command: naive --listen=socks://0.0.0.0:1080 --proxy=https://${NAIVE_USER}:${NAIVE_PASSWORD}@${NAIVE_SERVER}
+
+  # sing-box naive client with UDP-over-TCP (UoT v2).
+  naive-uot:
+    image: ghcr.io/sagernet/sing-box:latest
+    container_name: naive-uot
+    restart: *default-restart
+    labels:
+      - autoheal=true
+    network_mode: host
+    dns: *default-dns
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 1048576
+    healthcheck:
+      test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 1081 || exit 1"]
       <<: *proxy-healthcheck
     environment:
       - NAIVE_SERVER=${NAIVE_SERVER}
       - NAIVE_USER=${NAIVE_USER}
       - NAIVE_PASSWORD=${NAIVE_PASSWORD}
     volumes:
-      - ./naive/entrypoint.sh:/entrypoint.sh:ro
+      - ./naive-uot/entrypoint.sh:/entrypoint.sh:ro
     entrypoint: ["/bin/sh", "/entrypoint.sh"]
 
   clash:
@@ -119,10 +138,12 @@ services:
     dns: *default-dns
     extra_hosts:
       - "naive:127.0.0.1"
+      - "naive-uot:127.0.0.1"
       - "psiphon:10.20.0.14"
       - "frpc-proxy:10.20.0.15"
     depends_on:
       - naive
+      - naive-uot
       - frpc-proxy
 
   singbox-sub:

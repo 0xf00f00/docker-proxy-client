@@ -5,6 +5,7 @@ bind-address: '*'
 
 hosts:
   naive: 127.0.0.1
+  naive-uot: 127.0.0.1
   frpc-proxy: 10.20.0.15
   psiphon: 10.20.0.14
 
@@ -42,12 +43,17 @@ proxies:
     type: socks5
     server: naive
     port: 1080
+    udp: false
+  - name: "naive-uot"
+    type: socks5
+    server: naive-uot
+    port: 1081
     udp: true
   - name: "frpc"
     type: socks5
     server: frpc-proxy
     port: 1080
-    udp: true
+    udp: false
   - name: "psiphon"
     type: socks5
     server: psiphon
@@ -58,6 +64,7 @@ proxy-groups:
   - name: auto
     type: fallback
     proxies:
+      - naive-uot
       - naive
       - frpc
       # - psiphon
