@@ -60,7 +60,7 @@ proxy-groups:
     proxies:
       - naive
       - frpc
-      - psiphon
+      # - psiphon
     url: 'http://www.gstatic.com/generate_204'
     interval: 300
     lazy: true
