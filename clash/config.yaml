@@ -8,6 +8,7 @@ hosts:
   naive-uot: 127.0.0.1
   frpc-proxy: 10.20.0.15
   psiphon: 10.20.0.14
+  xray: 10.20.0.18
 
 # Clash router working mode
 # rule: rule-based packet routing
@@ -59,11 +60,17 @@ proxies:
     server: psiphon
     port: 1080
     udp: true
+  - name: "xray"
+    type: socks5
+    server: xray
+    port: 10808
+    udp: true
 
 proxy-groups:
   - name: auto
     type: fallback
     proxies:
+      - xray
       - naive-uot
       - naive
       - frpc

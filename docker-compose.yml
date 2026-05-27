@@ -141,6 +141,7 @@ services:
       - "naive-uot:127.0.0.1"
       - "psiphon:10.20.0.14"
       - "frpc-proxy:10.20.0.15"
+      - "xray:10.20.0.18"
     depends_on:
       - naive
       - naive-uot
