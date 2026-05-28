@@ -8,19 +8,22 @@ interface CheckResult {
   latency_ms: number;
 }
 
-const POLL_MS = 30_000;
+// Tighter cadence than proxy probes because these are cheap (one DNS lookup,
+// one HEAD to gstatic). Polling pauses while a speed test or "Test All" is in
+// flight so we don't contend with the user's active measurement.
+const POLL_MS = 10_000;
 
-export default function Header() {
+export default function Header({ pauseAutoRefresh = false }: { pauseAutoRefresh?: boolean }) {
   const dns = useQuery({
     queryKey: ["system-dns"],
     queryFn: testSystemDns,
-    refetchInterval: POLL_MS,
+    refetchInterval: pauseAutoRefresh ? false : POLL_MS,
     retry: 0,
   });
   const conn = useQuery({
     queryKey: ["system-connectivity"],
     queryFn: testSystemConnectivity,
-    refetchInterval: POLL_MS,
+    refetchInterval: pauseAutoRefresh ? false : POLL_MS,
     retry: 0,
   });
 

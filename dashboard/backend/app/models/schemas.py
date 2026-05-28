@@ -42,6 +42,16 @@ class ContainerListResponse(BaseModel):
     host_lan_ip: str
 
 
+class IpInfo(BaseModel):
+    ip: str
+    country_code: str | None = None
+    country_name: str | None = None
+    flag_emoji: str | None = None
+    city: str | None = None
+    asn: str | None = None
+    isp: str | None = None
+
+
 class ConnectivityResult(BaseModel):
     service: str
     success: bool
@@ -49,6 +59,7 @@ class ConnectivityResult(BaseModel):
     status_code: int | None = None
     error: str | None = None
     tested_via: str
+    ip_info: IpInfo | None = None
 
 
 class ConfigFile(BaseModel):
@@ -99,6 +110,6 @@ class SystemProxyReorderResult(BaseModel):
     active: str | None = None
 
 
-class RestartResponse(BaseModel):
+class ContainerActionResponse(BaseModel):
     success: bool
     message: str

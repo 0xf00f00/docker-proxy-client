@@ -1,5 +1,5 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { X } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "@/utils/cn";
 
@@ -71,5 +71,21 @@ export default function Modal({
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
+  );
+}
+
+/**
+ * Rendered as the Suspense fallback for lazy-loaded modals so the click feels
+ * instant — the modal frame appears with the right title, then the real body
+ * swaps in once the chunk arrives.
+ */
+export function ModalLoadingShell({ title, onClose }: { title: string; onClose: () => void }) {
+  return (
+    <Modal open onOpenChange={(o) => !o && onClose()} title={title} size="auto">
+      <div className="flex items-center justify-center gap-2 py-12">
+        <Loader2 className="text-muted h-5 w-5 animate-spin" />
+        <span className="text-muted text-sm">Loading…</span>
+      </div>
+    </Modal>
   );
 }

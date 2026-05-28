@@ -7,7 +7,7 @@ import docker.errors
 from fastapi import APIRouter, HTTPException
 
 from app.config import settings
-from app.models.schemas import ContainerListResponse, RestartResponse
+from app.models.schemas import ContainerActionResponse, ContainerListResponse
 from app.services import docker_service
 from app.sse import event, sse_response
 
@@ -30,11 +30,29 @@ async def list_containers():
     return ContainerListResponse(containers=containers, host_lan_ip=settings.host_lan_ip)
 
 
-@router.post("/{container_name}/restart", response_model=RestartResponse)
+@router.post("/{container_name}/restart", response_model=ContainerActionResponse)
 async def restart_container(container_name: str):
     try:
         await asyncio.to_thread(docker_service.restart_container, container_name)
-        return RestartResponse(success=True, message=f"Container {container_name} restarted")
+        return ContainerActionResponse(success=True, message=f"Container {container_name} restarted")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from None
+
+
+@router.post("/{container_name}/start", response_model=ContainerActionResponse)
+async def start_container(container_name: str):
+    try:
+        await asyncio.to_thread(docker_service.start_container, container_name)
+        return ContainerActionResponse(success=True, message=f"Container {container_name} started")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from None
+
+
+@router.post("/{container_name}/stop", response_model=ContainerActionResponse)
+async def stop_container(container_name: str):
+    try:
+        await asyncio.to_thread(docker_service.stop_container, container_name)
+        return ContainerActionResponse(success=True, message=f"Container {container_name} stopped")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from None
 

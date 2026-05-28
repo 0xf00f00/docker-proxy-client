@@ -3,16 +3,19 @@ registered + active (see services/system_proxy). The router never imports
 a concrete controller — adding a new backend (xray, sing-box, …) only
 requires implementing the SystemProxyController interface."""
 
+import asyncio
+
 from fastapi import APIRouter, HTTPException
 
 from app.models.schemas import (
+    IpInfo,
     SystemProxyModeRequest,
     SystemProxyReorderRequest,
     SystemProxyReorderResult,
     SystemProxyState,
     SystemProxySwitchRequest,
 )
-from app.services import system_proxy
+from app.services import docker_service, ip_lookup, system_proxy
 from app.services.system_proxy.base import SystemProxyController
 
 router = APIRouter(prefix="/system-proxy", tags=["system-proxy"])
@@ -76,3 +79,25 @@ async def test_latencies():
         return await controller.test_latencies()
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Controller error: {e}") from None
+
+
+def _proxy_url_for(protocol: str, address: str) -> str | None:
+    proto = (protocol or "").split("+")[0]
+    if proto in ("socks5", "socks"):
+        return f"socks5://{address}"
+    if proto in ("http", "mixed"):
+        return f"http://{address}"
+    return None
+
+
+@router.get("/egress-ip", response_model=IpInfo | None)
+async def egress_ip():
+    """Resolve the public IP+country reachable *through* the active system
+    proxy. Cached briefly so the dashboard can call this freely on mount."""
+    container = await asyncio.to_thread(system_proxy.get_active_container)
+    if container is None or not container.probe_address:
+        return None
+    proxy_url = _proxy_url_for(container.dashboard.protocol, container.probe_address)
+    if not proxy_url:
+        return None
+    return await ip_lookup.lookup(proxy_url)

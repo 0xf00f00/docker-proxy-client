@@ -20,12 +20,14 @@ does not know about any specific controller.
 from app.services.system_proxy import clash  # noqa: F401
 from app.services.system_proxy.base import SystemProxyController
 from app.services.system_proxy.registry import (
+    get_active_container,
     get_active_controller,
     register,
 )
 
 __all__ = [
     "SystemProxyController",
+    "get_active_container",
     "get_active_controller",
     "register",
 ]

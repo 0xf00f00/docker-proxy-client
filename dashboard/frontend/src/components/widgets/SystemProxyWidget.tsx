@@ -14,6 +14,7 @@ import {
 } from "@dnd-kit/core";
 import { arrayMove, SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import {
+  fetchSystemProxyEgressIp,
   fetchSystemProxyState,
   setSystemProxyMode,
   switchSystemProxy,
@@ -22,6 +23,7 @@ import {
 } from "@/api/client";
 import { cn } from "@/utils/cn";
 import { getErrorMessage } from "@/utils/errors";
+import IpFlag from "@/components/common/IpFlag";
 import SortableProxy from "./SortableProxy";
 import ModeToggle from "./ModeToggle";
 
@@ -44,6 +46,17 @@ export default function SystemProxyWidget() {
     queryKey: ["system-proxy-state"],
     queryFn: fetchSystemProxyState,
     refetchInterval: 15_000,
+    retry: 1,
+  });
+
+  // Egress IP. Re-keyed on the active route so switching/reordering naturally
+  // triggers a refetch; backend caches for 60s so refetch on focus is cheap.
+  const { data: egressIp } = useQuery({
+    queryKey: ["system-proxy-egress-ip", state?.active ?? null],
+    queryFn: fetchSystemProxyEgressIp,
+    enabled: !!state?.active,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
     retry: 1,
   });
 
@@ -128,7 +141,10 @@ export default function SystemProxyWidget() {
 
       <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
         <div className="min-w-0 flex-1">
-          <h2 className="font-semibold">System Proxy</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="font-semibold">System Proxy</h2>
+            {egressIp && <IpFlag info={egressIp} />}
+          </div>
           <p className="text-muted text-xs">
             {isAuto ? `Auto-selecting the best proxy. Currently: ${current}.` : `Manually using ${current}.`}
           </p>

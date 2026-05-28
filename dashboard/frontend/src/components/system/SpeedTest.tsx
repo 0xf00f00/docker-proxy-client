@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { ArrowDown, ArrowUp, X, Play, Gauge, Loader2 } from "lucide-react";
 import { cancelSpeedTest, openSpeedTestStream } from "@/api/client";
 import type { SpeedTestProgress } from "@/types";
@@ -14,10 +14,14 @@ const PHASE_LABELS: Record<string, string> = {
   error: "Failed",
 };
 
-export default function SpeedTest() {
+export default function SpeedTest({ onRunningChange }: { onRunningChange?: (running: boolean) => void } = {}) {
   const [state, setState] = useState<SpeedTestProgress | null>(null);
   const [running, setRunning] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
+
+  useEffect(() => {
+    onRunningChange?.(running);
+  }, [running, onRunningChange]);
 
   const start = useCallback(() => {
     if (running) return;

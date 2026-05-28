@@ -1,6 +1,5 @@
 import { Suspense, useEffect, useRef, useState } from "react";
 import { AlertCircle, Loader2 } from "lucide-react";
-import type { ContainerInfo } from "@/types";
 import Header from "@/components/layout/Header";
 import SpeedTest from "@/components/system/SpeedTest";
 import ProxyGrid from "@/components/containers/ProxyGrid";
@@ -16,8 +15,10 @@ const SYSTEM_PROXY_GRACE_MS = 15_000;
 export default function App() {
   const state = useContainerStream();
   const containers = state.kind === "ready" ? state.data.containers : [];
-  const proxyKey = proxyTestKey(containers);
-  const connectivity = useConnectivityTests(proxyKey);
+  // Delay the first auto-probe a few seconds after mount so DNS/Net pills can
+  // settle and the user has time to start a speed test before we add load.
+  const connectivity = useConnectivityTests({ initialDelayMs: 4_000 });
+  const [speedRunning, setSpeedRunning] = useState(false);
 
   const proxies = containers.filter((c) => c.dashboard.category === "proxy");
   const dnsServices = containers.filter((c) => c.dashboard.category === "dns");
@@ -34,9 +35,9 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-zinc-950 pb-[calc(env(safe-area-inset-bottom)+3rem)]">
-      <Header />
+      <Header pauseAutoRefresh={connectivity.running || speedRunning} />
       <main className="mx-auto max-w-3xl px-3 py-4 sm:px-4 sm:py-6">
-        <SpeedTest />
+        <SpeedTest onRunningChange={setSpeedRunning} />
 
         {state.kind === "initial" && widgetEntry?.Skeleton && (
           <section className="mt-6 sm:mt-8">
@@ -118,15 +119,6 @@ function useStickyTrue(value: boolean, gracePeriodMs: number): boolean {
   }, [value, gracePeriodMs]);
 
   return sticky;
-}
-
-/** Stable join-key of testable proxy names so the connectivity hook only re-runs when the set changes. */
-function proxyTestKey(containers: ContainerInfo[]): string {
-  return containers
-    .filter((c) => c.dashboard.category === "proxy" && c.dashboard.testable && c.status === "running")
-    .map((c) => c.name)
-    .sort()
-    .join(",");
 }
 
 function SkeletonList({ count }: { count: number }) {

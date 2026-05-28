@@ -3,6 +3,7 @@ import type {
   ContainerListResponse,
   ConnectivityResult,
   ConfigFile,
+  IpInfo,
   SpeedTestProgress,
   SystemDnsResult,
   SystemConnectivityResult,
@@ -19,6 +20,14 @@ const api = axios.create({ baseURL: "/api/v1" });
 
 export async function restartContainer(name: string): Promise<void> {
   await api.post(`/containers/${name}/restart`);
+}
+
+export async function startContainer(name: string): Promise<void> {
+  await api.post(`/containers/${name}/start`);
+}
+
+export async function stopContainer(name: string): Promise<void> {
+  await api.post(`/containers/${name}/stop`);
 }
 
 // ---------- Connectivity ----------
@@ -72,6 +81,11 @@ export async function reorderSystemProxy(routes: string[]): Promise<SystemProxyR
 
 export async function testSystemProxyLatencies(): Promise<Record<string, number>> {
   const { data } = await api.get<Record<string, number>>("/system-proxy/latencies");
+  return data;
+}
+
+export async function fetchSystemProxyEgressIp(): Promise<IpInfo | null> {
+  const { data } = await api.get<IpInfo | null>("/system-proxy/egress-ip");
   return data;
 }
 

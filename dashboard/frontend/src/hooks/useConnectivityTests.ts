@@ -2,8 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { openConnectivityStream } from "@/api/client";
 import type { ConnectivityResult } from "@/types";
 
-const REFRESH_INTERVAL_MS = 60_000;
-
 export interface ConnectivityState {
   results: Record<string, ConnectivityResult>;
   testing: Set<string>;
@@ -12,11 +10,14 @@ export interface ConnectivityState {
 }
 
 /**
- * Runs connectivity tests automatically whenever the set of tracked proxy
- * names (passed as a stable string key) changes, plus on a periodic refresh.
- * Exposes a `start` callback so callers can also trigger tests manually.
+ * Runs connectivity tests when the consumer calls `start()`.
+ *
+ * If `initialDelayMs > 0`, fires once on mount after that delay so the user
+ * gets a baseline result without clicking — but never on a recurring schedule,
+ * since periodic probes add network load that can interfere with active speed
+ * tests and produce false negatives on limited uplinks.
  */
-export function useConnectivityTests(proxyKey: string): ConnectivityState {
+export function useConnectivityTests({ initialDelayMs = 0 }: { initialDelayMs?: number } = {}): ConnectivityState {
   const [results, setResults] = useState<Record<string, ConnectivityResult>>({});
   const [testing, setTesting] = useState<Set<string>>(new Set());
   const [running, setRunning] = useState(false);
@@ -41,24 +42,22 @@ export function useConnectivityTests(proxyKey: string): ConnectivityState {
         setRunning(false);
       },
       onError: () => {
+        sourceRef.current?.close();
+        sourceRef.current = null;
         setTesting(new Set());
         setRunning(false);
       },
     });
   }, []);
 
-  // Single subscription effect: kick off immediately, refresh periodically, and
-  // close any in-flight stream when the proxy set changes or the consumer unmounts.
   useEffect(() => {
-    if (!proxyKey) return;
-    start();
-    const interval = setInterval(start, REFRESH_INTERVAL_MS);
+    const timer = initialDelayMs > 0 ? setTimeout(start, initialDelayMs) : null;
     return () => {
-      clearInterval(interval);
+      if (timer) clearTimeout(timer);
       sourceRef.current?.close();
       sourceRef.current = null;
     };
-  }, [proxyKey, start]);
+  }, [initialDelayMs, start]);
 
   return { results, testing, running, start };
 }

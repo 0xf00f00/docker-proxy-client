@@ -3,6 +3,7 @@ import time
 import httpx
 
 from app.models.schemas import ConnectivityResult, ContainerInfo
+from app.services import ip_lookup
 from app.services.connectivity_tests.registry import register
 
 TEST_URL = "http://www.gstatic.com/generate_204"
@@ -34,12 +35,18 @@ async def test(container: ContainerInfo) -> ConnectivityResult:
         async with httpx.AsyncClient(proxy=proxy_url, timeout=TIMEOUT) as client:
             resp = await client.get(TEST_URL)
             elapsed = (time.monotonic() - start) * 1000
+            success = resp.status_code == 204
+            # Only fetch IP info on a successful probe — and serially after,
+            # not concurrently, so we don't double the load on a thin uplink
+            # while the latency measurement is in flight.
+            info = await ip_lookup.lookup(proxy_url) if success else None
             return ConnectivityResult(
                 service=container.name,
-                success=resp.status_code == 204,
+                success=success,
                 latency_ms=round(elapsed, 1),
                 status_code=resp.status_code,
                 tested_via=proxy_url,
+                ip_info=info,
             )
     except Exception as e:
         elapsed = (time.monotonic() - start) * 1000

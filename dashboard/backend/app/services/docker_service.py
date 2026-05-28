@@ -229,13 +229,35 @@ def find_dashboard_container(name: str) -> ContainerInfo | None:
 
 
 def filter_testable(containers: list[ContainerInfo]) -> list[ContainerInfo]:
-    """Containers that should be probed for connectivity."""
-    return [c for c in containers if c.dashboard.testable and c.probe_address and c.status == "running"]
+    """Containers that should be probed for connectivity.
+
+    Skips containers that have a healthcheck declared but aren't `healthy` —
+    probing a `starting` or `unhealthy` proxy wastes a request slot on a
+    near-guaranteed failure that would also pollute the result UI.
+    """
+    return [
+        c
+        for c in containers
+        if c.dashboard.testable
+        and c.probe_address
+        and c.status == "running"
+        and (c.health is None or c.health == "healthy")
+    ]
 
 
 def restart_container(container_name: str) -> None:
     container = get_client().containers.get(container_name)
     container.restart(timeout=10)
+
+
+def start_container(container_name: str) -> None:
+    container = get_client().containers.get(container_name)
+    container.start()
+
+
+def stop_container(container_name: str) -> None:
+    container = get_client().containers.get(container_name)
+    container.stop(timeout=10)
 
 
 def get_container_logs(container_name: str, tail: int = 100) -> str:

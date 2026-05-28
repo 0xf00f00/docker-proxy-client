@@ -40,6 +40,16 @@ export interface ContainerListResponse {
   host_lan_ip: string;
 }
 
+export interface IpInfo {
+  ip: string;
+  country_code: string | null;
+  country_name: string | null;
+  flag_emoji: string | null;
+  city: string | null;
+  asn: string | null;
+  isp: string | null;
+}
+
 export interface ConnectivityResult {
   service: string;
   success: boolean;
@@ -47,6 +57,7 @@ export interface ConnectivityResult {
   status_code: number | null;
   error: string | null;
   tested_via: string;
+  ip_info: IpInfo | null;
 }
 
 export interface ConfigFile {
