@@ -28,7 +28,13 @@ class ContainerInfo(BaseModel):
     health: str | None = None
     started_at: str | None = None
     dashboard: DashboardLabels
+    # Address users dial from other LAN devices. May be a macvlan IP that the
+    # dashboard backend itself cannot reach (host ↔ macvlan is blocked).
     lan_address: str | None = None
+    # Address the dashboard backend uses for connectivity probes. Same as
+    # lan_address except macvlan IPs are swapped for the bridge IP, which is
+    # reachable from the host network. See docker_service.resolve_probe_address.
+    probe_address: str | None = None
 
 
 class ContainerListResponse(BaseModel):

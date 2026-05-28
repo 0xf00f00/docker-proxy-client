@@ -20,7 +20,7 @@ def _build_proxy_url(protocol: str, address: str) -> str | None:
 
 @register("socks5", "socks", "http", "mixed")
 async def test(container: ContainerInfo) -> ConnectivityResult:
-    proxy_url = _build_proxy_url(container.dashboard.protocol, container.lan_address or "")
+    proxy_url = _build_proxy_url(container.dashboard.protocol, container.probe_address or "")
     if not proxy_url:
         return ConnectivityResult(
             service=container.name,

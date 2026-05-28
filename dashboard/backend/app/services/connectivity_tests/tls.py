@@ -30,15 +30,15 @@ def _tls_handshake(host: str, port: int, sni: str, timeout: float) -> tuple[bool
 
 @register("tls", "https")
 async def test(container: ContainerInfo) -> ConnectivityResult:
-    host, _, port_str = (container.lan_address or "").rpartition(":")
+    host, _, port_str = (container.probe_address or "").rpartition(":")
     try:
         port = int(port_str)
     except ValueError:
         return ConnectivityResult(
             service=container.name,
             success=False,
-            error="Invalid LAN address",
-            tested_via=container.lan_address or "n/a",
+            error="Invalid probe address",
+            tested_via=container.probe_address or "n/a",
         )
 
     start = time.monotonic()
@@ -49,5 +49,5 @@ async def test(container: ContainerInfo) -> ConnectivityResult:
         success=ok,
         latency_ms=round(elapsed, 1),
         error=err,
-        tested_via=f"tls://{container.lan_address}",
+        tested_via=f"tls://{container.probe_address}",
     )

@@ -3,11 +3,11 @@ from app.services import connectivity_tests
 
 
 async def test_proxy_connectivity(container: ContainerInfo) -> ConnectivityResult:
-    if not container.dashboard.testable or not container.lan_address:
+    if not container.dashboard.testable or not container.probe_address:
         return ConnectivityResult(
             service=container.name,
             success=False,
-            error="Not testable or no LAN address",
+            error="Not testable or no probe address",
             tested_via="n/a",
         )
 

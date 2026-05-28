@@ -32,6 +32,7 @@ export interface ContainerInfo {
   started_at: string | null;
   dashboard: DashboardLabels;
   lan_address: string | null;
+  probe_address: string | null;
 }
 
 export interface ContainerListResponse {

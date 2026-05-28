@@ -100,6 +100,18 @@ def _get_macvlan_ip(container: Container) -> str | None:
     return None
 
 
+def _get_bridge_ip(container: Container) -> str | None:
+    """Get IP from a non-macvlan (bridge) network. Reachable from the host."""
+    networks = container.attrs.get("NetworkSettings", {}).get("Networks") or {}
+    for net_name, net_config in networks.items():
+        if "direct_internet" in net_name:
+            continue
+        ip = net_config.get("IPAddress")
+        if ip:
+            return ip
+    return None
+
+
 def resolve_lan_address(container: Container, labels: DashboardLabels) -> str | None:
     """
     Resolve the address users type into their proxy app on the LAN: `<host>:<port>`.
@@ -134,6 +146,39 @@ def resolve_lan_address(container: Container, labels: DashboardLabels) -> str | 
     return None
 
 
+def resolve_probe_address(container: Container, labels: DashboardLabels) -> str | None:
+    """
+    Resolve the address the dashboard backend uses to *test* the container.
+
+    Diverges from `resolve_lan_address` only for macvlan-attached containers:
+    the dashboard runs with `network_mode: host`, and Linux blocks traffic
+    between the host and macvlan interfaces sharing the same parent. So a
+    192.168.88.x macvlan IP that a phone on the LAN can reach is unreachable
+    from this process. When the container is also on a bridge network we
+    probe via that bridge IP instead (the same trick Clash uses for its
+    upstream proxies).
+    """
+    if labels.port is None:
+        return None
+
+    if _is_host_network(container):
+        return f"{settings.host_lan_ip}:{labels.port}"
+
+    published = _find_published_lan_address(container, labels.port)
+    if published:
+        return published
+
+    bridge_ip = _get_bridge_ip(container)
+    if bridge_ip:
+        return f"{bridge_ip}:{labels.port}"
+
+    macvlan_ip = _get_macvlan_ip(container)
+    if macvlan_ip:
+        return f"{macvlan_ip}:{labels.port}"
+
+    return None
+
+
 def get_container_health(container: Container) -> str | None:
     health = container.attrs.get("State", {}).get("Health")
     return health.get("Status") if health else None
@@ -151,6 +196,7 @@ def _build_container_info(container: Container, labels: DashboardLabels) -> Cont
         started_at=container.attrs.get("State", {}).get("StartedAt"),
         dashboard=labels,
         lan_address=resolve_lan_address(container, labels),
+        probe_address=resolve_probe_address(container, labels),
     )
 
 
@@ -184,7 +230,7 @@ def find_dashboard_container(name: str) -> ContainerInfo | None:
 
 def filter_testable(containers: list[ContainerInfo]) -> list[ContainerInfo]:
     """Containers that should be probed for connectivity."""
-    return [c for c in containers if c.dashboard.testable and c.lan_address and c.status == "running"]
+    return [c for c in containers if c.dashboard.testable and c.probe_address and c.status == "running"]
 
 
 def restart_container(container_name: str) -> None:
