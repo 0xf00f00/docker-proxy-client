@@ -26,8 +26,7 @@ psiphon/*
 dns-scanner/out/*
 !dns-scanner/out/.gitkeep
 
-dnstt/id_rsa
-dnstt/id_rsa.pub
+mdns/client_resolvers.txt
 
 node_modules
 dashboard/frontend/dist/

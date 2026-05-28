@@ -50,6 +50,7 @@ services:
       - dashboard.protocol=dns
       - dashboard.port=53
       - dashboard.testable=false
+      - dashboard.env=PRIVATE_DNS_STAMP
     user: "${UID:-1000}:${GID:-1000}"
     healthcheck:
       test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 53 || exit 1"]
@@ -114,6 +115,7 @@ services:
       - dashboard.name=NaiveProxy (TCP)
       - dashboard.protocol=socks5
       - dashboard.port=1080
+      - dashboard.env=NAIVE_SERVER,NAIVE_USER,NAIVE_PASSWORD
     network_mode: host
     dns: *default-dns
     ulimits:
@@ -137,6 +139,7 @@ services:
       - dashboard.name=NaiveProxy (UoT)
       - dashboard.protocol=socks5
       - dashboard.port=1081
+      - dashboard.env=NAIVE_SERVER,NAIVE_USER,NAIVE_PASSWORD
     network_mode: host
     dns: *default-dns
     ulimits:
@@ -297,6 +300,7 @@ services:
       - dashboard.name=Psiphon
       - dashboard.protocol=socks5
       - dashboard.port=1080
+      - dashboard.env=PSIPHON_EGRESS_REGION
     healthcheck:
       test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 1080 || exit 1"]
       <<: *proxy-healthcheck
@@ -321,6 +325,7 @@ services:
       - dashboard.name=FRP Proxy
       - dashboard.protocol=socks5
       - dashboard.port=1080
+      - dashboard.env=FRP_PROXY_SERVER_ADDR,FRP_PROXY_AUTH_TOKEN,FRP_PROXY_VISITOR_SK
     healthcheck:
       test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 1080 || exit 1"]
       <<: *proxy-healthcheck
@@ -380,77 +385,42 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
 
-  # Only starts when --profile dnstt is passed. Extremely slow, use as last resort only.
-  dnstt-client:
-    image: ghcr.io/0xf00f00/dnstt-client:latest
-    container_name: dnstt-client
-    profiles:
-      - dnstt
+  mdns:
+    build:
+      context: ./mdns
+      args:
+        MDNS_VERSION: ${MDNS_VERSION:-latest}
+    container_name: mdns
     restart: *default-restart
     labels:
       - autoheal=true
       - dashboard.enable=true
-      - dashboard.category=dns
-      - dashboard.name=DNSTT Client
-      - dashboard.protocol=tunnel
-      - dashboard.port=7000
-      - dashboard.testable=false
-      - dashboard.widget=dnstt-dns
-      - dashboard.config=/dnstt/active_dns.txt
+      - dashboard.category=proxy
+      - dashboard.name=MasterDnsVPN
+      - dashboard.protocol=socks5
+      - dashboard.port=18000
+      - dashboard.config=/mdns/client_resolvers.txt
+      - dashboard.env=MDNS_DOMAIN,MDNS_ENCRYPTION_KEY,MDNS_DATA_ENCRYPTION_METHOD,MDNS_MIN_UPLOAD_MTU,MDNS_MAX_UPLOAD_MTU,MDNS_MIN_DOWNLOAD_MTU,MDNS_MAX_DOWNLOAD_MTU
+    dns: *default-dns
     healthcheck:
-      test: ["CMD", "/dnstt/healthcheck.sh"]
-      <<: *dns-healthcheck
-    # Entrypoint watches active_dns.txt for periodic DNS refresh (default 6h)
-    entrypoint: ["/bin/bash", "/dnstt/entrypoint.sh"]
+      test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 18000 || exit 1"]
+      <<: *proxy-healthcheck
     environment:
-      - DNSTT_DOMAIN=${DNSTT_DOMAIN}
-      - DNSTT_PUBKEY=${DNSTT_PUBKEY}
-      - DNSTT_RESOLVER=${DNSTT_RESOLVER:-1.1.1.1:53}
-      - DNSTT_REFRESH_INTERVAL=${DNSTT_REFRESH_INTERVAL:-21600}
-      - DNSTT_DOH_URL=${DNSTT_DOH_URL}
+      - MDNS_DOMAIN=${MDNS_DOMAIN}
+      - MDNS_ENCRYPTION_KEY=${MDNS_ENCRYPTION_KEY}
+      - MDNS_DATA_ENCRYPTION_METHOD=${MDNS_DATA_ENCRYPTION_METHOD:-1}
+      - MDNS_MIN_UPLOAD_MTU=${MDNS_MIN_UPLOAD_MTU:-38}
+      - MDNS_MAX_UPLOAD_MTU=${MDNS_MAX_UPLOAD_MTU:-150}
+      - MDNS_MIN_DOWNLOAD_MTU=${MDNS_MIN_DOWNLOAD_MTU:-200}
+      - MDNS_MAX_DOWNLOAD_MTU=${MDNS_MAX_DOWNLOAD_MTU:-4000}
     volumes:
-      - ./dnstt/entrypoint.sh:/dnstt/entrypoint.sh:ro
-      - ./dnstt/healthcheck.sh:/dnstt/healthcheck.sh:ro
-      - ./dns-scanner/out/active_dns.txt:/dns-scanner/active_dns.txt:ro
+      - ./mdns/client_resolvers.txt:/etc/mdns/client_resolvers.txt:rw
     networks:
       direct_internet:
         ipv4_address: 192.168.88.244
         gw_priority: 1000
       default:
         ipv4_address: 10.20.0.16
-
-  dnstt-autossh:
-    image: jnovack/autossh:latest
-    container_name: dnstt-autossh
-    profiles:
-      - dnstt
-    restart: *default-restart
-    labels:
-      - dashboard.enable=true
-      - dashboard.category=proxy
-      - dashboard.name=DNSTT SOCKS
-      - dashboard.protocol=socks5
-      - dashboard.port=${DNSTT_SOCKS_PORT:-5080}
-    ports:
-      - "${DNSTT_SOCKS_PORT:-5080}:1080"
-    depends_on:
-      - dnstt-client
-    environment:
-      - SSH_REMOTE_USER=${DNSTT_SSH_USER:-tunnel}
-      # Connect to dnstt-client via its service name (bridge network)
-      - SSH_REMOTE_HOST=dnstt-client
-      - SSH_REMOTE_PORT=7000
-      - SSH_KEY_FILE=/dnstt/id_rsa
-      - SSH_MODE=-L
-      - SSH_BIND_IP=127.0.0.1
-      - SSH_LOCAL_PORT=5081
-      - SSH_TARGET_HOST=localhost
-      - SSH_TARGET_PORT=22
-      - AUTOSSH_GATETIME=0
-      # Final SOCKS proxy inside container on port 1080 (mapped to host via ports)
-      - SSH_OPTIONS=-D 0.0.0.0:1080 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
-    volumes:
-      - ./dnstt/id_rsa:/dnstt/id_rsa:ro
 
   dashboard:
     image: ghcr.io/0xf00f00/docker-proxy-client-dashboard:latest
@@ -468,12 +438,12 @@ services:
       - DASHBOARD_COMPOSE_PROJECT_PATH=/compose
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./dns-scanner/out/active_dns.txt:/configs/dnstt/active_dns.txt
       - ./xray/config.json:/configs/xray/config.json
       - ./singbox-sub/config.json:/configs/singbox-sub/config.json
       - ./clash/config.yaml:/configs/clash/config.yaml
       - ./sni-spoofing/config.ini:/configs/sni-spoofing/config.ini
       - ./goose-relay/client_config.json:/configs/goose-relay/client_config.json
+      - ./mdns/client_resolvers.txt:/configs/mdns/client_resolvers.txt
       # Mount the repo root so we can update .env and run `docker compose up -d <svc>`
       - .:/compose:rw
 
