@@ -8,8 +8,8 @@ x-default-dns: &default-dns
 x-proxy-healthcheck: &proxy-healthcheck
   interval: 30s
   timeout: 15s
-  retries: 3
-  start_period: 60s
+  retries: 5
+  start_period: 90s
 
 x-dns-healthcheck: &dns-healthcheck
   interval: 30s
@@ -373,8 +373,8 @@ services:
     restart: *default-restart
     environment:
       - AUTOHEAL_CONTAINER_LABEL=autoheal
-      - AUTOHEAL_INTERVAL=10
-      - AUTOHEAL_START_PERIOD=60
+      - AUTOHEAL_INTERVAL=30
+      - AUTOHEAL_START_PERIOD=120
       - AUTOHEAL_DEFAULT_STOP_TIMEOUT=10
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
