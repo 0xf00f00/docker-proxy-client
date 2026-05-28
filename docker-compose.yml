@@ -212,6 +212,34 @@ services:
       - ./singbox-sub/config.json:/etc/sing-box/config.json:ro
     command: -D /var/lib/sing-box -C /etc/sing-box/ run
 
+  goose-relay:
+    build:
+      context: ./goose-relay
+      args:
+        GOOSE_VERSION: ${GOOSE_VERSION:-v1.7.1}
+    container_name: goose-relay
+    restart: *default-restart
+    labels:
+      - autoheal=true
+      - dashboard.enable=true
+      - dashboard.category=proxy
+      - dashboard.name=GooseRelay
+      - dashboard.protocol=socks5
+      - dashboard.port=1080
+      - dashboard.config=/goose-relay/client_config.json
+    dns: *default-dns
+    healthcheck:
+      test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 1080 || exit 1"]
+      <<: *proxy-healthcheck
+    networks:
+      direct_internet:
+        ipv4_address: 192.168.88.247
+        gw_priority: 1000
+      default:
+        ipv4_address: 10.20.0.19
+    volumes:
+      - ./goose-relay/client_config.json:/etc/goose-relay/client_config.json:ro
+
   xray:
     image: ghcr.io/xtls/xray-core:latest
     container_name: xray
@@ -435,7 +463,7 @@ services:
       - DASHBOARD_HOST_LAN_INTERFACE=${MACVLAN_PARENT:-eth0}
       - DASHBOARD_PORT=${DASHBOARD_PORT:-8080}
       - DASHBOARD_BIND=${DASHBOARD_BIND:-0.0.0.0}
-      - DASHBOARD_CLASH_API_URL=http://127.0.0.1:9090
+      - DASHBOARD_CLASH_API_URL=http://127.0.0.1:9697
       - DASHBOARD_CLASH_API_SECRET=${CLASH_API_SECRET:-}
       - DASHBOARD_COMPOSE_PROJECT_PATH=/compose
     volumes:
@@ -445,6 +473,7 @@ services:
       - ./singbox-sub/config.json:/configs/singbox-sub/config.json
       - ./clash/config.yaml:/configs/clash/config.yaml
       - ./sni-spoofing/config.ini:/configs/sni-spoofing/config.ini
+      - ./goose-relay/client_config.json:/configs/goose-relay/client_config.json
       # Mount the repo root so we can update .env and run `docker compose up -d <svc>`
       - .:/compose:rw
 

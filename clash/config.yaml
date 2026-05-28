@@ -3,7 +3,7 @@ mixed-port: 7890
 allow-lan: true
 bind-address: '*'
 
-external-controller: 0.0.0.0:9090
+external-controller: 0.0.0.0:9697
 
 hosts:
   naive: 127.0.0.1

@@ -13,6 +13,7 @@ stunnel_server/*
 singbox-sub/config.json
 xray/config.json
 sni-spoofing/config.ini
+goose-relay/client_config.json
 
 frpc/certs/*
 !frpc/certs/.gitkeep

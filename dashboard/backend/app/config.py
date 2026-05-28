@@ -33,7 +33,7 @@ def _detect_host_lan_ip(interface: str) -> str:
 class Settings(BaseSettings):
     host_lan_interface: str = "eth0"
     host_lan_ip: str = ""
-    clash_api_url: str = "http://127.0.0.1:9090"
+    clash_api_url: str = "http://127.0.0.1:9697"
     clash_api_secret: str = ""
     docker_host: str = "unix:///var/run/docker.sock"
     configs_base_path: str = "/configs"

@@ -1,0 +1,11 @@
+{
+  "socks_host": "0.0.0.0",
+  "socks_port": 1080,
+  "google_host": "216.239.38.120",
+  "sni": "www.google.com",
+  "script_keys": [
+    { "id": "PASTE_DEPLOYMENT_ID_1", "account": "acct-a" },
+    { "id": "PASTE_DEPLOYMENT_ID_2", "account": "acct-a" }
+  ],
+  "tunnel_key": "PASTE_64_HEX_CHAR_TUNNEL_KEY"
+}
