@@ -460,11 +460,12 @@ services:
     labels:
       - dashboard.enable=false
     network_mode: host
-    user: "${UID:-1000}:${GID:-1000}"
+    # Run as root inside the container so NET_BIND_SERVICE is effective
+    user: "0:0"
     cap_drop:
       - ALL
     cap_add:
-      # Needed to bind privileged ports (e.g. DASHBOARD_PORT=80) as non-root.
+      # Needed to bind privileged ports (e.g. DASHBOARD_PORT=80).
       - NET_BIND_SERVICE
     security_opt:
       - no-new-privileges:true
