@@ -22,6 +22,13 @@ services:
     image: coredns/coredns:latest
     container_name: coredns
     restart: *default-restart
+    labels:
+      - dashboard.enable=true
+      - dashboard.category=dns
+      - dashboard.name=CoreDNS
+      - dashboard.protocol=dns
+      - dashboard.port=53
+      - dashboard.testable=false
     ports:
       - "53:53/udp"
       - "53:53/tcp"
@@ -36,6 +43,13 @@ services:
     image: gists/dnscrypt-proxy:latest
     container_name: dnscrypt-proxy-direct
     restart: *default-restart
+    labels:
+      - dashboard.enable=true
+      - dashboard.category=dns
+      - dashboard.name=DNSCrypt Direct
+      - dashboard.protocol=dns
+      - dashboard.port=53
+      - dashboard.testable=false
     user: "${UID:-1000}:${GID:-1000}"
     healthcheck:
       test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 53 || exit 1"]
@@ -65,6 +79,13 @@ services:
     image: gists/dnscrypt-proxy:latest
     container_name: dnscrypt-proxy
     restart: *default-restart
+    labels:
+      - dashboard.enable=true
+      - dashboard.category=dns
+      - dashboard.name=DNSCrypt Proxy
+      - dashboard.protocol=dns
+      - dashboard.port=53
+      - dashboard.testable=false
     user: "${UID:-1000}:${GID:-1000}"
     healthcheck:
       test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 53 || exit 1"]
@@ -88,6 +109,11 @@ services:
     restart: *default-restart
     labels:
       - autoheal=true
+      - dashboard.enable=true
+      - dashboard.category=proxy
+      - dashboard.name=NaiveProxy (TCP)
+      - dashboard.protocol=socks5
+      - dashboard.port=1080
     network_mode: host
     dns: *default-dns
     ulimits:
@@ -106,6 +132,11 @@ services:
     restart: *default-restart
     labels:
       - autoheal=true
+      - dashboard.enable=true
+      - dashboard.category=proxy
+      - dashboard.name=NaiveProxy (UoT)
+      - dashboard.protocol=socks5
+      - dashboard.port=1081
     network_mode: host
     dns: *default-dns
     ulimits:
@@ -127,6 +158,14 @@ services:
     image: dreamacro/clash-premium:latest
     container_name: clash
     restart: *default-restart
+    labels:
+      - dashboard.enable=true
+      - dashboard.category=proxy
+      - dashboard.name=Clash Premium
+      - dashboard.protocol=http
+      - dashboard.port=7890
+      - dashboard.widget=system-proxy
+      - dashboard.controller=clash
     network_mode: host
     privileged: true
     healthcheck:
@@ -153,6 +192,13 @@ services:
     profiles:
       - singbox
     restart: *default-restart
+    labels:
+      - dashboard.enable=true
+      - dashboard.category=proxy
+      - dashboard.name=SingBox Sub
+      - dashboard.protocol=mixed
+      - dashboard.port=2080
+      - dashboard.config=/singbox-sub/config.json
     dns: *default-dns
     networks:
       direct_internet:
@@ -172,6 +218,13 @@ services:
     profiles:
       - xray
     restart: *default-restart
+    labels:
+      - dashboard.enable=true
+      - dashboard.category=proxy
+      - dashboard.name=Xray
+      - dashboard.protocol=socks5
+      - dashboard.port=10808
+      - dashboard.config=/xray/config.json
     dns: *default-dns
     networks:
       direct_internet:
@@ -191,6 +244,11 @@ services:
     restart: *default-restart
     labels:
       - autoheal=true
+      - dashboard.enable=true
+      - dashboard.category=proxy
+      - dashboard.name=SingBox Direct
+      - dashboard.protocol=socks5
+      - dashboard.port=7891
     network_mode: host
     healthcheck:
       test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 7891 || exit 1"]
@@ -205,6 +263,12 @@ services:
     image: ghcr.io/0xf00f00/psiphon-tunnel-core-docker:latest
     container_name: psiphon
     restart: *default-restart
+    labels:
+      - dashboard.enable=true
+      - dashboard.category=proxy
+      - dashboard.name=Psiphon
+      - dashboard.protocol=socks5
+      - dashboard.port=1080
     healthcheck:
       test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 1080 || exit 1"]
       <<: *proxy-healthcheck
@@ -223,6 +287,12 @@ services:
     image: ghcr.io/fatedier/frpc:v0.66.0
     container_name: frpc-proxy
     restart: *default-restart
+    labels:
+      - dashboard.enable=true
+      - dashboard.category=proxy
+      - dashboard.name=FRP Proxy
+      - dashboard.protocol=socks5
+      - dashboard.port=1080
     healthcheck:
       test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 1080 || exit 1"]
       <<: *proxy-healthcheck
@@ -247,6 +317,13 @@ services:
     profiles:
       - sni-spoofing
     restart: *default-restart
+    labels:
+      - dashboard.enable=true
+      - dashboard.category=proxy
+      - dashboard.name=SNI Spoofing
+      - dashboard.protocol=tls
+      - dashboard.port=40443
+      - dashboard.config=/sni-spoofing/config.ini
     cap_add:
       - NET_ADMIN
       - NET_RAW
@@ -259,10 +336,9 @@ services:
         gw_priority: 1000
       default:
         ipv4_address: 10.20.0.17
-    command: >
-      -listen 0.0.0.0:40443
-      -connect ${SNI_SPOOF_CONNECT}
-      -fake-sni ${SNI_SPOOF_FAKE_SNI}
+    volumes:
+      - ./sni-spoofing/config.ini:/etc/sni-spoofing/config.ini:ro
+    command: ["-config", "/etc/sni-spoofing/config.ini"]
 
   autoheal:
     image: willfarrell/autoheal:latest
@@ -285,6 +361,14 @@ services:
     restart: *default-restart
     labels:
       - autoheal=true
+      - dashboard.enable=true
+      - dashboard.category=dns
+      - dashboard.name=DNSTT Client
+      - dashboard.protocol=tunnel
+      - dashboard.port=7000
+      - dashboard.testable=false
+      - dashboard.widget=dnstt-dns
+      - dashboard.config=/dnstt/active_dns.txt
     healthcheck:
       test: ["CMD", "/dnstt/healthcheck.sh"]
       <<: *dns-healthcheck
@@ -313,6 +397,12 @@ services:
     profiles:
       - dnstt
     restart: *default-restart
+    labels:
+      - dashboard.enable=true
+      - dashboard.category=proxy
+      - dashboard.name=DNSTT SOCKS
+      - dashboard.protocol=socks5
+      - dashboard.port=${DNSTT_SOCKS_PORT:-5080}
     ports:
       - "${DNSTT_SOCKS_PORT:-5080}:1080"
     depends_on:
@@ -333,6 +423,30 @@ services:
       - SSH_OPTIONS=-D 0.0.0.0:1080 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
     volumes:
       - ./dnstt/id_rsa:/dnstt/id_rsa:ro
+
+  dashboard:
+    image: ghcr.io/0xf00f00/docker-proxy-client-dashboard:latest
+    container_name: dashboard
+    restart: *default-restart
+    labels:
+      - dashboard.enable=false
+    network_mode: host
+    environment:
+      - DASHBOARD_HOST_LAN_INTERFACE=${MACVLAN_PARENT:-eth0}
+      - DASHBOARD_PORT=${DASHBOARD_PORT:-8080}
+      - DASHBOARD_BIND=${DASHBOARD_BIND:-0.0.0.0}
+      - DASHBOARD_CLASH_API_URL=http://127.0.0.1:9090
+      - DASHBOARD_CLASH_API_SECRET=${CLASH_API_SECRET:-}
+      - DASHBOARD_COMPOSE_PROJECT_PATH=/compose
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./dns-scanner/out/active_dns.txt:/configs/dnstt/active_dns.txt
+      - ./xray/config.json:/configs/xray/config.json
+      - ./singbox-sub/config.json:/configs/singbox-sub/config.json
+      - ./clash/config.yaml:/configs/clash/config.yaml
+      - ./sni-spoofing/config.ini:/configs/sni-spoofing/config.ini
+      # Mount the repo root so we can update .env and run `docker compose up -d <svc>`
+      - .:/compose:rw
 
 # Network definitions
 networks:

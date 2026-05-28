@@ -1,0 +1,184 @@
+import asyncio
+import contextlib
+import threading
+from collections.abc import AsyncGenerator
+
+import docker.errors
+from fastapi import APIRouter, HTTPException
+
+from app.config import settings
+from app.models.schemas import ContainerListResponse, RestartResponse
+from app.services import docker_service
+from app.sse import event, sse_response
+
+router = APIRouter(prefix="/containers", tags=["containers"])
+
+HEARTBEAT_SEC = 10.0
+EVENT_DEBOUNCE_SEC = 0.3
+
+# Docker actions that affect what the dashboard cares about. Health-status
+# events come through as "health_status: healthy" etc., so we match on prefix.
+STATE_ACTIONS = {"start", "stop", "die", "kill", "restart", "create", "destroy", "pause", "unpause"}
+
+
+@router.get("/", response_model=ContainerListResponse)
+async def list_containers():
+    try:
+        containers = await asyncio.to_thread(docker_service.list_dashboard_containers)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Cannot connect to Docker: {e}") from None
+    return ContainerListResponse(containers=containers, host_lan_ip=settings.host_lan_ip)
+
+
+@router.post("/{container_name}/restart", response_model=RestartResponse)
+async def restart_container(container_name: str):
+    try:
+        await asyncio.to_thread(docker_service.restart_container, container_name)
+        return RestartResponse(success=True, message=f"Container {container_name} restarted")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from None
+
+
+@router.get("/{container_name}/logs")
+async def get_logs(container_name: str, tail: int = 100):
+    try:
+        logs = await asyncio.to_thread(docker_service.get_container_logs, container_name, tail)
+        return {"logs": logs}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from None
+
+
+@router.get("/stream")
+async def stream_containers():
+    """Push container state changes in near real-time.
+
+    Subscribes to the Docker events stream so transitions (start/stop/restart/
+    die/health_status/…) trigger an immediate snapshot, instead of waiting for
+    the next poll tick. A ``HEARTBEAT_SEC`` periodic tick still runs so the
+    stream stays healthy and recovers if the events socket drops.
+    """
+    loop = asyncio.get_running_loop()
+    wake = asyncio.Event()
+    stopped = threading.Event()
+
+    try:
+        client = docker_service.get_client()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Cannot connect to Docker: {e}") from None
+
+    event_stream = client.events(decode=True, filters={"type": "container"})
+
+    def listen() -> None:
+        try:
+            for ev in event_stream:
+                if stopped.is_set():
+                    return
+                action = str(ev.get("Action") or ev.get("status") or "")
+                head = action.split(":", 1)[0].strip()
+                if head in STATE_ACTIONS or head == "health_status":
+                    try:
+                        loop.call_soon_threadsafe(wake.set)
+                    except RuntimeError:
+                        return
+        except Exception:
+            # Stream closed or daemon disconnected — fall back to heartbeat polling.
+            pass
+
+    threading.Thread(target=listen, daemon=True).start()
+
+    async def gen() -> AsyncGenerator[str, None]:
+        last_payload: str | None = None
+        try:
+            while True:
+                try:
+                    containers = await asyncio.to_thread(docker_service.list_dashboard_containers)
+                    payload = ContainerListResponse(
+                        containers=containers, host_lan_ip=settings.host_lan_ip
+                    ).model_dump_json()
+                    if payload != last_payload:
+                        yield f"event: snapshot\ndata: {payload}\n\n"
+                        last_payload = payload
+                    else:
+                        yield ": ping\n\n"
+                except Exception as e:
+                    yield event("stream-error", {"detail": str(e)})
+
+                try:
+                    await asyncio.wait_for(wake.wait(), timeout=HEARTBEAT_SEC)
+                except TimeoutError:
+                    continue
+                wake.clear()
+                # Coalesce bursts (a `docker restart` fires kill+die+start within ms)
+                await asyncio.sleep(EVENT_DEBOUNCE_SEC)
+                wake.clear()
+        finally:
+            stopped.set()
+            with contextlib.suppress(Exception):
+                event_stream.close()
+
+    return sse_response(gen())
+
+
+@router.get("/{container_name}/logs/stream")
+async def stream_container_logs(container_name: str, tail: int = 200):
+    """Follow a container's logs over SSE.
+
+    Emits ``line`` events as each log line lands and a terminal ``end`` event
+    when the container exits or the client disconnects. Lines are accumulated
+    across chunk boundaries before being sent, since docker can split a single
+    log line across two reads.
+    """
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[tuple[str, str] | None] = asyncio.Queue(maxsize=4000)
+
+    try:
+        client = docker_service.get_client()
+        container = await asyncio.to_thread(client.containers.get, container_name)
+    except docker.errors.NotFound:
+        raise HTTPException(status_code=404, detail="Container not found") from None
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Cannot connect to Docker: {e}") from None
+
+    log_stream = container.logs(stream=True, follow=True, timestamps=True, tail=tail)
+
+    def push(event_name: str, data: str) -> None:
+        with contextlib.suppress(RuntimeError):
+            loop.call_soon_threadsafe(queue.put_nowait, (event_name, data))
+
+    def reader() -> None:
+        buffer = b""
+        try:
+            for chunk in log_stream:
+                if not chunk:
+                    continue
+                buffer += chunk
+                while b"\n" in buffer:
+                    line, _, buffer = buffer.partition(b"\n")
+                    push("line", line.decode("utf-8", errors="replace").rstrip("\r"))
+            if buffer:
+                push("line", buffer.decode("utf-8", errors="replace"))
+        except Exception as e:
+            push("stream-error", str(e))
+        finally:
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(queue.put_nowait, None)
+
+    threading.Thread(target=reader, daemon=True).start()
+
+    async def gen() -> AsyncGenerator[str, None]:
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                event_name, data = item
+                if event_name == "line":
+                    yield event("line", {"text": data})
+                else:
+                    yield event(event_name, {"detail": data})
+            yield event("end", {})
+        finally:
+            with contextlib.suppress(Exception):
+                log_stream.close()
+
+    return sse_response(gen())

@@ -12,6 +12,7 @@ stunnel_server/*
 
 singbox-sub/config.json
 xray/config.json
+sni-spoofing/config.ini
 
 frpc/certs/*
 !frpc/certs/.gitkeep
@@ -26,3 +27,12 @@ dns-scanner/out/*
 
 dnstt/id_rsa
 dnstt/id_rsa.pub
+
+node_modules
+dashboard/frontend/dist/
+.venv
+
+# Build / tool caches (any depth)
+__pycache__/
+.ruff_cache/
+*.tsbuildinfo

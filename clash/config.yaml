@@ -3,6 +3,8 @@ mixed-port: 7890
 allow-lan: true
 bind-address: '*'
 
+external-controller: 0.0.0.0:9090
+
 hosts:
   naive: 127.0.0.1
   naive-uot: 127.0.0.1
@@ -74,14 +76,13 @@ proxy-groups:
       - naive-uot
       - naive
       - frpc
-      # - psiphon
     url: 'http://www.gstatic.com/generate_204'
     interval: 300
     lazy: true
   - name: direct_interface
     type: select
     interface-name: eth0
-    proxies: [ 'DIRECT' ]
+    proxies: ['DIRECT']
 
 # update from https://github.com/bootmortis/iran-hosted-domains/releases/
 rule-providers:
