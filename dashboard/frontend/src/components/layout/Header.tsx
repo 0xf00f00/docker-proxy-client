@@ -1,6 +1,8 @@
-import { useQuery, type UseQueryResult } from "@tanstack/react-query";
-import { Network, Globe, Wifi, Loader2 } from "lucide-react";
-import { testSystemDns, testSystemConnectivity } from "@/api/client";
+import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
+import { Network, Globe, Wifi, Loader2, LogIn, LogOut } from "lucide-react";
+import { toast } from "sonner";
+import { logout, testSystemConnectivity, testSystemDns } from "@/api/client";
+import { AUTH_STATUS_KEY, useAuth } from "@/hooks/useAuth";
 import { cn } from "@/utils/cn";
 
 interface CheckResult {
@@ -45,9 +47,50 @@ export default function Header({ pauseAutoRefresh = false }: { pauseAutoRefresh?
         <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
           <StatusPill icon={<Globe className="h-3.5 w-3.5" />} label="DNS" query={dns} onClick={recheck} />
           <StatusPill icon={<Wifi className="h-3.5 w-3.5" />} label="Net" query={conn} onClick={recheck} />
+          <AuthButton />
         </div>
       </div>
     </header>
+  );
+}
+
+function AuthButton() {
+  const { enabled, authenticated, showLogin } = useAuth();
+  const qc = useQueryClient();
+
+  if (!enabled) return null;
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+      toast.success("Signed out");
+    } finally {
+      qc.invalidateQueries({ queryKey: AUTH_STATUS_KEY });
+    }
+  };
+
+  if (authenticated) {
+    return (
+      <button
+        type="button"
+        onClick={handleLogout}
+        className="inline-flex min-h-9 items-center gap-1.5 rounded-full bg-zinc-800 px-2.5 text-xs font-medium text-zinc-300 hover:bg-zinc-700"
+      >
+        <LogOut className="h-3.5 w-3.5" />
+        <span>Sign out</span>
+      </button>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={showLogin}
+      className="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex min-h-9 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium"
+    >
+      <LogIn className="h-3.5 w-3.5" />
+      <span>Sign in</span>
+    </button>
   );
 }
 

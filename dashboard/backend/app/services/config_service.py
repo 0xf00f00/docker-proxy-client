@@ -9,9 +9,9 @@ ALLOWED_EXTENSIONS = {".txt", ".json", ".yaml", ".yml", ".toml", ".conf", ".env"
 
 
 def _resolve_config_path(config_path: str) -> Path:
-    base = Path(settings.configs_base_path)
+    base = Path(settings.configs_base_path).resolve()
     resolved = (base / config_path.lstrip("/")).resolve()
-    if not str(resolved).startswith(str(base.resolve())):
+    if not resolved.is_relative_to(base):
         raise ValueError("Path traversal detected")
     return resolved
 

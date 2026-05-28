@@ -1,11 +1,14 @@
 import asyncio
+import logging
 
 from fastapi import APIRouter, HTTPException
 
+from app.auth import RequireAuth
 from app.models.schemas import ConfigFile, ConfigUpdate
 from app.services import config_service, docker_service, env_service
 
-router = APIRouter(prefix="/config", tags=["config"])
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/config", tags=["config"], dependencies=[RequireAuth])
 
 
 async def _require_config_path(container_name: str) -> str:

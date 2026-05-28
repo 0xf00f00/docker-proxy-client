@@ -4,9 +4,11 @@ a concrete controller — adding a new backend (xray, sing-box, …) only
 requires implementing the SystemProxyController interface."""
 
 import asyncio
+import logging
 
 from fastapi import APIRouter, HTTPException
 
+from app.auth import RequireAuth
 from app.models.schemas import (
     IpInfo,
     SystemProxyModeRequest,
@@ -18,6 +20,7 @@ from app.models.schemas import (
 from app.services import docker_service, ip_lookup, system_proxy
 from app.services.system_proxy.base import SystemProxyController
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/system-proxy", tags=["system-proxy"])
 
 
@@ -33,11 +36,12 @@ async def get_state():
     controller = _require_controller()
     try:
         return await controller.get_state()
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Controller error: {e}") from None
+    except Exception:
+        logger.exception("Controller get_state failed")
+        raise HTTPException(status_code=502, detail="Controller error") from None
 
 
-@router.put("/mode")
+@router.put("/mode", dependencies=[RequireAuth])
 async def set_mode(request: SystemProxyModeRequest):
     controller = _require_controller()
     try:
@@ -45,31 +49,35 @@ async def set_mode(request: SystemProxyModeRequest):
         return {"success": True, "mode": request.mode}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Controller error: {e}") from None
+    except Exception:
+        logger.exception("Controller set_mode failed")
+        raise HTTPException(status_code=502, detail="Controller error") from None
 
 
-@router.put("/active")
+@router.put("/active", dependencies=[RequireAuth])
 async def switch(request: SystemProxySwitchRequest):
     controller = _require_controller()
     try:
         await controller.switch(request.name)
         return {"success": True, "active": request.name}
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Controller error: {e}") from None
+    except Exception:
+        logger.exception("Controller switch failed")
+        raise HTTPException(status_code=502, detail="Controller error") from None
 
 
-@router.put("/order", response_model=SystemProxyReorderResult)
+@router.put("/order", response_model=SystemProxyReorderResult, dependencies=[RequireAuth])
 async def reorder(request: SystemProxyReorderRequest):
     controller = _require_controller()
     try:
         return await controller.reorder(request.routes)
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=500, detail=str(e)) from None
+    except FileNotFoundError:
+        logger.exception("Controller reorder: config file missing")
+        raise HTTPException(status_code=500, detail="Controller config not found") from None
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Reorder failed: {e}") from None
+    except Exception:
+        logger.exception("Controller reorder failed")
+        raise HTTPException(status_code=500, detail="Reorder failed") from None
 
 
 @router.get("/latencies")
@@ -77,8 +85,9 @@ async def test_latencies():
     controller = _require_controller()
     try:
         return await controller.test_latencies()
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Controller error: {e}") from None
+    except Exception:
+        logger.exception("Controller test_latencies failed")
+        raise HTTPException(status_code=502, detail="Controller error") from None
 
 
 def _proxy_url_for(protocol: str, address: str) -> str | None:

@@ -1,16 +1,19 @@
 import asyncio
 import contextlib
+import logging
 import threading
 from collections.abc import AsyncGenerator
 
 import docker.errors
 from fastapi import APIRouter, HTTPException
 
+from app.auth import RequireAuth
 from app.config import settings
 from app.models.schemas import ContainerActionResponse, ContainerListResponse
 from app.services import docker_service
 from app.sse import event, sse_response
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/containers", tags=["containers"])
 
 HEARTBEAT_SEC = 10.0
@@ -25,45 +28,58 @@ STATE_ACTIONS = {"start", "stop", "die", "kill", "restart", "create", "destroy",
 async def list_containers():
     try:
         containers = await asyncio.to_thread(docker_service.list_dashboard_containers)
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Cannot connect to Docker: {e}") from None
+    except Exception:
+        logger.exception("Failed to list containers")
+        raise HTTPException(status_code=503, detail="Cannot connect to Docker") from None
     return ContainerListResponse(containers=containers, host_lan_ip=settings.host_lan_ip)
 
 
-@router.post("/{container_name}/restart", response_model=ContainerActionResponse)
+@router.post("/{container_name}/restart", response_model=ContainerActionResponse, dependencies=[RequireAuth])
 async def restart_container(container_name: str):
     try:
         await asyncio.to_thread(docker_service.restart_container, container_name)
         return ContainerActionResponse(success=True, message=f"Container {container_name} restarted")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from None
+    except docker.errors.NotFound:
+        raise HTTPException(status_code=404, detail="Container not found") from None
+    except Exception:
+        logger.exception("Failed to restart container %s", container_name)
+        raise HTTPException(status_code=500, detail="Container action failed") from None
 
 
-@router.post("/{container_name}/start", response_model=ContainerActionResponse)
+@router.post("/{container_name}/start", response_model=ContainerActionResponse, dependencies=[RequireAuth])
 async def start_container(container_name: str):
     try:
         await asyncio.to_thread(docker_service.start_container, container_name)
         return ContainerActionResponse(success=True, message=f"Container {container_name} started")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from None
+    except docker.errors.NotFound:
+        raise HTTPException(status_code=404, detail="Container not found") from None
+    except Exception:
+        logger.exception("Failed to start container %s", container_name)
+        raise HTTPException(status_code=500, detail="Container action failed") from None
 
 
-@router.post("/{container_name}/stop", response_model=ContainerActionResponse)
+@router.post("/{container_name}/stop", response_model=ContainerActionResponse, dependencies=[RequireAuth])
 async def stop_container(container_name: str):
     try:
         await asyncio.to_thread(docker_service.stop_container, container_name)
         return ContainerActionResponse(success=True, message=f"Container {container_name} stopped")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from None
+    except docker.errors.NotFound:
+        raise HTTPException(status_code=404, detail="Container not found") from None
+    except Exception:
+        logger.exception("Failed to stop container %s", container_name)
+        raise HTTPException(status_code=500, detail="Container action failed") from None
 
 
-@router.get("/{container_name}/logs")
+@router.get("/{container_name}/logs", dependencies=[RequireAuth])
 async def get_logs(container_name: str, tail: int = 100):
     try:
         logs = await asyncio.to_thread(docker_service.get_container_logs, container_name, tail)
         return {"logs": logs}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from None
+    except docker.errors.NotFound:
+        raise HTTPException(status_code=404, detail="Container not found") from None
+    except Exception:
+        logger.exception("Failed to fetch logs for %s", container_name)
+        raise HTTPException(status_code=500, detail="Failed to fetch logs") from None
 
 
 @router.get("/stream")
@@ -81,8 +97,9 @@ async def stream_containers():
 
     try:
         client = docker_service.get_client()
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Cannot connect to Docker: {e}") from None
+    except Exception:
+        logger.exception("Cannot connect to Docker for stream")
+        raise HTTPException(status_code=503, detail="Cannot connect to Docker") from None
 
     event_stream = client.events(decode=True, filters={"type": "container"})
 
@@ -137,7 +154,7 @@ async def stream_containers():
     return sse_response(gen())
 
 
-@router.get("/{container_name}/logs/stream")
+@router.get("/{container_name}/logs/stream", dependencies=[RequireAuth])
 async def stream_container_logs(container_name: str, tail: int = 200):
     """Follow a container's logs over SSE.
 
@@ -154,8 +171,9 @@ async def stream_container_logs(container_name: str, tail: int = 200):
         container = await asyncio.to_thread(client.containers.get, container_name)
     except docker.errors.NotFound:
         raise HTTPException(status_code=404, detail="Container not found") from None
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Cannot connect to Docker: {e}") from None
+    except Exception:
+        logger.exception("Cannot fetch container %s for log stream", container_name)
+        raise HTTPException(status_code=503, detail="Cannot connect to Docker") from None
 
     log_stream = container.logs(stream=True, follow=True, timestamps=True, tail=tail)
 

@@ -341,7 +341,7 @@ services:
     command: -c /frpc.toml
 
   sni-spoofing:
-    image: ghcr.io/aleskxyz/sni-spoofing-go:latest
+    image: ghcr.io/aleskxyz/sni-spoofing-go:${SNI_SPOOFING_VERSION:-0.5.1}
     container_name: sni-spoofing
     restart: *default-restart
     labels:
@@ -416,6 +416,43 @@ services:
       default:
         ipv4_address: 10.20.0.16
 
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:v0.4.2
+    container_name: docker-socket-proxy
+    restart: *default-restart
+    environment:
+      - CONTAINERS=1
+      - EVENTS=1
+      - IMAGES=1
+      - INFO=1
+      - NETWORKS=1
+      - PING=1
+      - POST=1
+      - VERSION=1
+      - VOLUMES=1
+      - BUILD=1
+      - AUTH=0
+      - COMMIT=0
+      - CONFIGS=0
+      - DISTRIBUTION=0
+      - EXEC=0
+      - NODES=0
+      - PLUGINS=0
+      - SECRETS=0
+      - SERVICES=0
+      - SESSION=0
+      - SWARM=0
+      - SYSTEM=0
+      - TASKS=0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "127.0.0.1:2375:2375"
+    read_only: true
+    tmpfs:
+      - /run
+      - /tmp
+
   dashboard:
     image: ghcr.io/0xf00f00/docker-proxy-client-dashboard:latest
     container_name: dashboard
@@ -423,6 +460,11 @@ services:
     labels:
       - dashboard.enable=false
     network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     environment:
       - DASHBOARD_HOST_LAN_INTERFACE=${MACVLAN_PARENT:-eth0}
       - DASHBOARD_PORT=${DASHBOARD_PORT:-8080}
@@ -430,8 +472,10 @@ services:
       - DASHBOARD_CLASH_API_URL=http://127.0.0.1:9697
       - DASHBOARD_CLASH_API_SECRET=${CLASH_API_SECRET:-}
       - DASHBOARD_COMPOSE_PROJECT_PATH=/compose
+      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-}
+      - DASHBOARD_DOCKER_HOST=tcp://127.0.0.1:2375
+      - DOCKER_HOST=tcp://127.0.0.1:2375
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
       - ./xray/config.json:/configs/xray/config.json
       - ./singbox-sub/config.json:/configs/singbox-sub/config.json
       - ./clash/config.yaml:/configs/clash/config.yaml
@@ -440,6 +484,8 @@ services:
       - ./mdns/client_resolvers.txt:/configs/mdns/client_resolvers.txt
       # Mount the repo root so we can update .env and run `docker compose up -d <svc>`
       - .:/compose:rw
+    depends_on:
+      - docker-socket-proxy
 
 # Network definitions
 networks:

@@ -5,6 +5,11 @@ from pathlib import Path
 from app.config import settings
 
 _KEY_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
+
+
+def _safe_name(value: str) -> bool:
+    return bool(_NAME_RE.match(value))
 
 
 def _project_path() -> Path:
@@ -111,16 +116,21 @@ def _service_profiles(service_name: str) -> list[str]:
 
 
 def _run_compose(service_name: str, action_args: list[str]) -> tuple[bool, str]:
+    if not _safe_name(service_name):
+        return False, "Invalid service name"
     project = _project_path()
     project_name = _detect_project_name(service_name)
     profiles = _service_profiles(service_name)
 
     cmd = ["docker", "compose"]
-    if project_name:
+    if project_name and _safe_name(project_name):
         cmd.extend(["--project-name", project_name])
     for profile in profiles:
-        cmd.extend(["--profile", profile])
+        if _safe_name(profile):
+            cmd.extend(["--profile", profile])
     cmd.extend(action_args)
+    cmd.append("--")
+    cmd.append(service_name)
 
     try:
         result = subprocess.run(
@@ -142,9 +152,9 @@ def _run_compose(service_name: str, action_args: list[str]) -> tuple[bool, str]:
 
 def recreate_service(service_name: str) -> tuple[bool, str]:
     """Run `docker compose up -d --force-recreate <service>` to apply env changes."""
-    return _run_compose(service_name, ["up", "-d", "--force-recreate", service_name])
+    return _run_compose(service_name, ["up", "-d", "--force-recreate"])
 
 
 def restart_service(service_name: str) -> tuple[bool, str]:
     """Run `docker compose restart <service>` to bounce the process so it re-reads its config file."""
-    return _run_compose(service_name, ["restart", service_name])
+    return _run_compose(service_name, ["restart"])

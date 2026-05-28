@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     compose_project_path: str = "/compose"
     port: int = 8080
     bind: str = "0.0.0.0"
+    password: str = ""
 
     model_config = {"env_prefix": "DASHBOARD_", "env_file": ".env"}
 

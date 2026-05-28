@@ -1,11 +1,14 @@
 import asyncio
+import logging
 
 from fastapi import APIRouter, HTTPException
 
+from app.auth import RequireAuth
 from app.models.schemas import EnvUpdateRequest
 from app.services import docker_service, env_service
 
-router = APIRouter(prefix="/env", tags=["env"])
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/env", tags=["env"], dependencies=[RequireAuth])
 
 
 async def _editable_env_keys(container_name: str) -> list[str]:
@@ -22,8 +25,9 @@ async def get_env(container_name: str):
     keys = await _editable_env_keys(container_name)
     try:
         values = await asyncio.to_thread(env_service.read_env, keys)
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=500, detail=str(e)) from None
+    except FileNotFoundError:
+        logger.exception("Compose .env not found while reading env for %s", container_name)
+        raise HTTPException(status_code=500, detail="Compose project not found") from None
     return {"keys": keys, "values": values}
 
 
@@ -38,8 +42,9 @@ async def update_env(container_name: str, request: EnvUpdateRequest):
         await asyncio.to_thread(env_service.write_env, updates)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=500, detail=str(e)) from None
+    except FileNotFoundError:
+        logger.exception("Compose .env not found while writing env for %s", container_name)
+        raise HTTPException(status_code=500, detail="Compose project not found") from None
 
     success, message = await asyncio.to_thread(env_service.recreate_service, container_name)
     if not success:

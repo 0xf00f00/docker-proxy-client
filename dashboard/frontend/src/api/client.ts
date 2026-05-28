@@ -1,5 +1,6 @@
 import axios from "axios";
 import type {
+  AuthStatus,
   ContainerListResponse,
   ConnectivityResult,
   ConfigFile,
@@ -15,6 +16,38 @@ import type {
 } from "@/types";
 
 const api = axios.create({ baseURL: "/api/v1" });
+
+let onUnauthorized: () => void = () => {};
+
+export function setOnUnauthorized(cb: () => void): void {
+  onUnauthorized = cb;
+}
+
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (axios.isAxiosError(error) && error.response?.status === 401) {
+      const url = error.config?.url ?? "";
+      if (!url.startsWith("/auth/")) onUnauthorized();
+    }
+    return Promise.reject(error);
+  },
+);
+
+// ---------- Auth ----------
+
+export async function fetchAuthStatus(): Promise<AuthStatus> {
+  const { data } = await api.get<AuthStatus>("/auth/status");
+  return data;
+}
+
+export async function login(password: string): Promise<void> {
+  await api.post("/auth/login", { password });
+}
+
+export async function logout(): Promise<void> {
+  await api.post("/auth/logout");
+}
 
 // ---------- Containers ----------
 
