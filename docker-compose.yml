@@ -463,6 +463,9 @@ services:
     user: "${UID:-1000}:${GID:-1000}"
     cap_drop:
       - ALL
+    cap_add:
+      # Needed to bind privileged ports (e.g. DASHBOARD_PORT=80) as non-root.
+      - NET_BIND_SERVICE
     security_opt:
       - no-new-privileges:true
     environment:
