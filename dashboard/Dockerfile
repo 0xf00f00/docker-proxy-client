@@ -1,23 +1,35 @@
-FROM node:24-alpine AS frontend-build
-WORKDIR /app/frontend
+# syntax=docker/dockerfile:1.9
+
+FROM node:24-alpine AS frontend
+WORKDIR /fe
 COPY frontend/package.json frontend/package-lock.json* ./
-RUN npm install
+RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
 COPY frontend/ ./
 RUN npm run build
 
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm AS runtime
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=0
 WORKDIR /app
-# Install docker CLI + compose plugin for recreating containers after env edits
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
-    && install -m 0755 -d /etc/apt/keyrings \
-    && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
-    && chmod a+r /etc/apt/keyrings/docker.asc \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bookworm stable" > /etc/apt/sources.list.d/docker.list \
-    && apt-get update && apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin \
-    && rm -rf /var/lib/apt/lists/*
-COPY backend/pyproject.toml backend/uv.lock* ./
-RUN uv sync --no-dev --frozen 2>/dev/null || uv sync --no-dev
-COPY backend/ .
-COPY --from=frontend-build /app/frontend/dist /app/static
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    --mount=type=bind,source=backend/uv.lock,target=uv.lock \
+    --mount=type=bind,source=backend/pyproject.toml,target=pyproject.toml \
+    uv sync --locked --no-install-project --no-dev
+
+FROM python:3.12-slim-bookworm AS runtime
+COPY --from=docker:29.5-cli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=docker:29.5-cli /usr/local/libexec/docker/cli-plugins/docker-compose \
+                            /usr/local/libexec/docker/cli-plugins/docker-compose
+
+WORKDIR /app
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+COPY --from=builder /app/.venv /app/.venv
+COPY backend/ /app/
+COPY --from=frontend /fe/dist /app/static
+
 EXPOSE 8080
-CMD ["uv", "run", "python", "-m", "app.main"]
+CMD ["python", "-m", "app.main"]
