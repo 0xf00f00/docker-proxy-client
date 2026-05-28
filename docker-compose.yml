@@ -192,8 +192,6 @@ services:
   singbox-sub:
     image: ghcr.io/sagernet/sing-box:latest
     container_name: singbox-sub
-    profiles:
-      - singbox
     restart: *default-restart
     labels:
       - dashboard.enable=true
@@ -246,8 +244,6 @@ services:
   xray:
     image: ghcr.io/xtls/xray-core:latest
     container_name: xray
-    profiles:
-      - xray
     restart: *default-restart
     labels:
       - dashboard.enable=true
@@ -347,8 +343,6 @@ services:
   sni-spoofing:
     image: ghcr.io/aleskxyz/sni-spoofing-go:latest
     container_name: sni-spoofing
-    profiles:
-      - sni-spoofing
     restart: *default-restart
     labels:
       - dashboard.enable=true
