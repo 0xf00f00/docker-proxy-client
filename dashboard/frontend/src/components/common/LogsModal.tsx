@@ -38,9 +38,19 @@ export default function LogsModal({ containerName, displayName, onClose }: Props
       esRef.current = openLogStream(containerName, tail, {
         onLine: (text) =>
           setLines((prev) => (prev.length < MAX_LINES ? [...prev, text] : [...prev.slice(-MAX_LINES + 1), text])),
+        onOpen: () => {
+          // Fires on initial connect AND every successful reconnect. After
+          // a 401, the SSE wrapper pops the login modal but leaves the
+          // EventSource alive; once the new cookie lands the next retry
+          // lands here and the stream is back without any extra plumbing.
+          setStreaming(true);
+          setStreamError(null);
+        },
         onStreamError: (detail) => setStreamError(detail),
         onEnd: () => setStreaming(false),
         onError: () => {
+          // EventSource auto-reconnects; don't close. onOpen will clear
+          // this error if/when the connection recovers.
           setStreamError("Connection lost");
           setStreaming(false);
         },

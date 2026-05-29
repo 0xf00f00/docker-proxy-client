@@ -145,6 +145,28 @@ function jsonEvent<T>(es: EventSource, name: string, handler: (data: T) => void)
   es.addEventListener(name, (e) => handler(JSON.parse((e as MessageEvent).data) as T));
 }
 
+function createEventSource(url: string, onError?: (e: Event) => void): EventSource {
+  const es = new EventSource(url);
+  let probed = false;
+  es.onerror = (e) => {
+    onError?.(e);
+    // Only probe /auth/status on the first error — once we know whether
+    // auth is the cause, subsequent reconnect-attempt errors don't need
+    // to re-check. We deliberately don't close the stream: EventSource
+    // sends cookies fresh on each retry, so the next reconnect after a
+    // successful login picks up the new session and resumes automatically.
+    if (probed) return;
+    probed = true;
+    fetchAuthStatus().then(
+      (status) => {
+        if (status.enabled && !status.authenticated) onUnauthorized();
+      },
+      () => {},
+    );
+  };
+  return es;
+}
+
 export interface ConnectivityStreamHandlers {
   onServices: (services: string[]) => void;
   onResult: (result: ConnectivityResult) => void;
@@ -153,19 +175,19 @@ export interface ConnectivityStreamHandlers {
 }
 
 export function openConnectivityStream(handlers: ConnectivityStreamHandlers): EventSource {
-  const es = new EventSource("/api/v1/connectivity/test/stream");
+  const es = createEventSource("/api/v1/connectivity/test/stream", handlers.onError);
   jsonEvent<{ services: string[] }>(es, "services", ({ services }) => handlers.onServices(services));
   jsonEvent<ConnectivityResult>(es, "result", handlers.onResult);
   es.addEventListener("done", () => {
     handlers.onDone();
     es.close();
   });
-  es.onerror = handlers.onError;
   return es;
 }
 
 export interface LogStreamHandlers {
   onLine: (text: string) => void;
+  onOpen?: () => void;
   onEnd?: () => void;
   onStreamError?: (detail: string) => void;
   onError?: (err: Event) => void;
@@ -173,7 +195,8 @@ export interface LogStreamHandlers {
 
 export function openLogStream(containerName: string, tail: number, handlers: LogStreamHandlers): EventSource {
   const url = `/api/v1/containers/${encodeURIComponent(containerName)}/logs/stream?tail=${tail}`;
-  const es = new EventSource(url);
+  const es = createEventSource(url, handlers.onError);
+  if (handlers.onOpen) es.onopen = handlers.onOpen;
   jsonEvent<{ text: string }>(es, "line", ({ text }) => handlers.onLine(text));
   if (handlers.onStreamError) {
     jsonEvent<{ detail?: string }>(es, "stream-error", ({ detail }) => handlers.onStreamError!(detail ?? "Stream error"));
@@ -182,7 +205,6 @@ export function openLogStream(containerName: string, tail: number, handlers: Log
     handlers.onEnd?.();
     es.close();
   });
-  if (handlers.onError) es.onerror = handlers.onError;
   return es;
 }
 
@@ -192,7 +214,7 @@ export interface ContainerStreamHandlers {
 }
 
 export function openContainerStream(handlers: ContainerStreamHandlers): EventSource {
-  const es = new EventSource("/api/v1/containers/stream");
+  const es = createEventSource("/api/v1/containers/stream");
   jsonEvent<ContainerListResponse>(es, "snapshot", handlers.onSnapshot);
   if (handlers.onError) {
     jsonEvent<{ detail?: string }>(es, "stream-error", ({ detail }) => handlers.onError!(detail ?? "Stream error"));
@@ -206,17 +228,16 @@ export interface SpeedStreamHandlers {
 }
 
 export function openSpeedTestStream(handlers: SpeedStreamHandlers): EventSource {
-  const es = new EventSource("/api/v1/system/speed/stream");
+  const es = createEventSource("/api/v1/system/speed/stream", () => {
+    es.close();
+    handlers.onError?.();
+  });
   es.onmessage = (event) => {
     const data = JSON.parse(event.data) as SpeedTestProgress;
     handlers.onProgress(data);
     if (data.phase === "done" || data.phase === "cancelled" || data.phase === "error") {
       es.close();
     }
-  };
-  es.onerror = () => {
-    es.close();
-    handlers.onError?.();
   };
   return es;
 }
