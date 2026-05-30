@@ -165,7 +165,7 @@ services:
       - dashboard.enable=true
       - dashboard.category=proxy
       - dashboard.name=Clash Premium
-      - dashboard.protocol=http
+      - dashboard.protocol=mixed
       - dashboard.port=7890
       - dashboard.widget=system-proxy
       - dashboard.controller=clash
