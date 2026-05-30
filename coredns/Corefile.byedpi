@@ -1,0 +1,43 @@
+# Dedicated resolver for byedpi
+#
+# GFE domain-fronting: resolve every Google Front End (GFE) property to a clean
+# www.google.com IP.
+#
+# Deliberately NOT fronted -- edge-pinned content that returns HTTP 421
+# (Misdirected Request) when sent to a www.google.com GFE IP:
+#   - googlevideo.com: real videoplayback fronts to 421 / 0 bytes vs 206 + full
+#     stream natively (bytes live on a GGC edge node, not the GFE).
+#   - gvt0/1/2/3.com: the redirector is GFE-reachable, but the component download
+#     it 302s to lands on the SAME GGC edge (r#---sn-*.gvt1.com, 216.19.188.x) and
+#     fronts to 421. Left unmatched so they resolve to their real edge, where
+#     byedpi splits the SNI instead.
+.:53 {
+    errors
+    reload
+
+    # *.com GFE properties
+    rewrite stop {
+        name regex (?i)^(.*\.)?(google|googleapis|googleusercontent|gstatic|ggpht|ytimg|youtube|youtube-nocookie|youtubekids|youtubeeducation|withyoutube|googleadservices|googlesyndication|googletagmanager|google-analytics|googlecode|googlesource|googlehosted|gmail|googlemail|blogspot|blogger|chrome)\.com\.?$ www.google.com
+        answer auto
+    }
+    # youtu.be / yt.be short domains
+    rewrite stop {
+        name regex (?i)^(.*\.)?(youtu|yt)\.be\.?$ www.google.com
+        answer auto
+    }
+    # *.net GFE properties: doubleclick (ads), recaptcha (verified frontable;
+    # blocked reCAPTCHA breaks logins across the web)
+    rewrite stop {
+        name regex (?i)^(.*\.)?(doubleclick|recaptcha)\.net\.?$ www.google.com
+        answer auto
+    }
+    # Google short-link / misc GFE TLDs (all verified frontable, backend-matched)
+    rewrite stop {
+        name regex (?i)^(.*\.)?(g\.co|g\.cn|g\.dev|g\.page|goo\.gl|web\.dev|ai\.google)\.?$ www.google.com
+        answer auto
+    }
+
+    # Everything else (and the rewritten www.google.com lookups) -> shared CoreDNS
+    forward . 10.20.0.1
+    cache 300
+}

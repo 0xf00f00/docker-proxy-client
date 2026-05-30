@@ -265,6 +265,23 @@ services:
       - ./xray/config.json:/etc/xray/config.json:ro
     command: run -c /etc/xray/config.json
 
+  # Dedicated resolver for byedpi: fronts the whole GFE family to a clean
+  # www.google.com IP (see coredns/Corefile.byedpi). Scoped to byedpi only
+  coredns-byedpi:
+    image: coredns/coredns:latest
+    container_name: coredns-byedpi
+    restart: *default-restart
+    labels:
+      - dashboard.enable=false
+    volumes:
+      - ./coredns/Corefile.byedpi:/Corefile:ro
+    command: -conf /Corefile
+    networks:
+      default:
+        ipv4_address: 10.20.0.21
+    depends_on:
+      - coredns
+
   byedpi:
     image: tazihad/byedpi:${BYEDPI_VERSION:-v0.17.3}
     container_name: byedpi
@@ -280,7 +297,7 @@ services:
       - NET_ADMIN
       - NET_RAW
     dns:
-      - 10.20.0.1
+      - 10.20.0.21
     command: "-i 0.0.0.0 -p 1080 ${BYEDPI_DESYNC:--s 1:5:3+s}"
     networks:
       direct_internet:
@@ -289,7 +306,7 @@ services:
       default:
         ipv4_address: 10.20.0.20
     depends_on:
-      - coredns
+      - coredns-byedpi
 
   psiphon:
     image: ghcr.io/0xf00f00/psiphon-tunnel-core-docker:latest
