@@ -41,6 +41,6 @@ async def update_config(container_name: str, update: ConfigUpdate):
         return {
             "success": True,
             "applied": False,
-            "message": f"Saved, but failed to apply: {message}. Run `docker compose restart {container_name}` manually.",
+            "message": f"Saved, but failed to apply: {message}. Run `docker compose restart {container_name}`.",
         }
     return {"success": True, "applied": True, "message": "Saved and applied"}

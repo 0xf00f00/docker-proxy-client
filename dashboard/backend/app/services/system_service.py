@@ -176,7 +176,7 @@ def cancel_speed_test() -> bool:
     return False
 
 
-async def speed_test_stream() -> AsyncGenerator[str, None]:
+async def speed_test_stream() -> AsyncGenerator[str]:
     global _active_runner
 
     with _runner_lock:

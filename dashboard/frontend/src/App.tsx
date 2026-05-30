@@ -79,7 +79,13 @@ export default function App() {
           )}
 
           {state.kind === "ready" && (
-            <ProxyGrid proxies={proxies} connectivityResults={connectivity.results} testingSet={connectivity.testing} />
+            <ProxyGrid
+              proxies={proxies}
+              connectivityResults={connectivity.results}
+              testingSet={connectivity.testing}
+              running={connectivity.running}
+              onResult={connectivity.recordResult}
+            />
           )}
         </section>
 

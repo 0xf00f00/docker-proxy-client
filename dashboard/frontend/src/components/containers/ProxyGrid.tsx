@@ -6,29 +6,50 @@ interface Props {
   proxies: ContainerInfo[];
   connectivityResults: Record<string, ConnectivityResult>;
   testingSet?: Set<string>;
+  running?: boolean;
+  onResult?: (result: ConnectivityResult) => void;
+}
+
+function rankKey(p: ContainerInfo, conn: ConnectivityResult | undefined): [number, number] {
+  if (p.status !== "running") return [4, Infinity];
+  if (conn?.success) return [0, conn.latency_ms ?? Infinity];
+  if (conn) return [3, Infinity]; // probed and failed
+  if (p.health === "unhealthy") return [2, Infinity];
+  return [1, Infinity];
+}
+
+function rankedNames(proxies: ContainerInfo[], results: Record<string, ConnectivityResult>): string[] {
+  return [...proxies]
+    .sort((a, b) => {
+      const [ta, la] = rankKey(a, results[a.name]);
+      const [tb, lb] = rankKey(b, results[b.name]);
+      if (ta !== tb) return ta - tb;
+      if (la !== lb) return la - lb;
+      return a.dashboard.name.localeCompare(b.dashboard.name);
+    })
+    .map((p) => p.name);
 }
 
 /**
- * Stable visual order for the proxy list.
- *
- * The first time a set of containers appears (and any time one is added or
- * removed), we split running-first / stopped-after and remember that order.
- * After that, we keep the same order even as individual containers transition
- * between running and stopped — so clicking Stop doesn't snap a card down to
- * the "off" section mid-interaction. Order resets on reload.
+ * Order the proxy list by health and connection latency
  */
-function useStableOrder(proxies: ContainerInfo[]): ContainerInfo[] {
+function useHealthOrder(
+  proxies: ContainerInfo[],
+  results: Record<string, ConnectivityResult>,
+  running: boolean,
+): ContainerInfo[] {
   const orderRef = useRef<string[]>([]);
+  const prevRunningRef = useRef(false);
 
   const byName = new Map(proxies.map((p) => [p.name, p]));
   const prevSet = new Set(orderRef.current);
-  const setMatches =
-    orderRef.current.length === proxies.length && proxies.every((p) => prevSet.has(p.name));
+  const setMatches = orderRef.current.length === proxies.length && proxies.every((p) => prevSet.has(p.name));
 
-  if (!setMatches) {
-    const running = proxies.filter((p) => p.status === "running").map((p) => p.name);
-    const stopped = proxies.filter((p) => p.status !== "running").map((p) => p.name);
-    orderRef.current = [...running, ...stopped];
+  const justSettled = prevRunningRef.current && !running;
+  prevRunningRef.current = running;
+
+  if (orderRef.current.length === 0 || !setMatches || justSettled) {
+    orderRef.current = rankedNames(proxies, results);
   }
 
   // Filter out anything no longer present (defensive; should match after the recompute above).
@@ -38,8 +59,8 @@ function useStableOrder(proxies: ContainerInfo[]): ContainerInfo[] {
   });
 }
 
-export default function ProxyGrid({ proxies, connectivityResults, testingSet }: Props) {
-  const ordered = useStableOrder(proxies);
+export default function ProxyGrid({ proxies, connectivityResults, testingSet, running = false, onResult }: Props) {
+  const ordered = useHealthOrder(proxies, connectivityResults, running);
 
   if (proxies.length === 0) {
     return <p className="text-muted py-8 text-center text-sm">No proxy services found.</p>;
@@ -49,10 +70,11 @@ export default function ProxyGrid({ proxies, connectivityResults, testingSet }: 
     <div className="space-y-2.5 sm:space-y-3">
       {ordered.map((p) => (
         <ProxyCard
-          key={p.id}
+          key={p.name}
           container={p}
           connectivity={connectivityResults[p.name] ?? null}
           isTesting={testingSet?.has(p.name) ?? false}
+          onTestResult={onResult}
         />
       ))}
     </div>

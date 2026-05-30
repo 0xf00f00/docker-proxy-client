@@ -18,7 +18,7 @@ LAUNCH_DELAY_MIN_S = 0.15
 LAUNCH_DELAY_MAX_S = 0.5
 
 
-async def _run_staggered(testable: list[ContainerInfo]) -> AsyncGenerator[ConnectivityResult, None]:
+async def _run_staggered(testable: list[ContainerInfo]) -> AsyncGenerator[ConnectivityResult]:
     sem = asyncio.Semaphore(MAX_CONCURRENT_PROBES)
 
     async def probe(c: ContainerInfo, delay: float) -> ConnectivityResult:
@@ -32,7 +32,7 @@ async def _run_staggered(testable: list[ContainerInfo]) -> AsyncGenerator[Connec
         delays.append(acc)
         acc += random.uniform(LAUNCH_DELAY_MIN_S, LAUNCH_DELAY_MAX_S)
 
-    tasks = [asyncio.create_task(probe(c, d)) for c, d in zip(testable, delays)]
+    tasks = [asyncio.create_task(probe(c, d)) for c, d in zip(testable, delays, strict=True)]
     try:
         for coro in asyncio.as_completed(tasks):
             yield await coro
@@ -64,7 +64,7 @@ async def test_stream():
     containers = await asyncio.to_thread(docker_service.list_dashboard_containers)
     testable = docker_service.filter_testable(containers)
 
-    async def gen() -> AsyncGenerator[str, None]:
+    async def gen() -> AsyncGenerator[str]:
         yield event("services", {"services": [c.name for c in testable]})
         if not testable:
             yield event("done", {})

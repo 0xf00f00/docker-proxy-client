@@ -17,7 +17,7 @@ from app.models.schemas import (
     SystemProxyState,
     SystemProxySwitchRequest,
 )
-from app.services import docker_service, ip_lookup, system_proxy
+from app.services import ip_lookup, system_proxy
 from app.services.system_proxy.base import SystemProxyController
 
 logger = logging.getLogger(__name__)

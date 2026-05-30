@@ -201,6 +201,9 @@ services:
       - dashboard.port=2080
       - dashboard.config=/singbox-sub/config.json
     dns: *default-dns
+    healthcheck:
+      test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 2080 || exit 1"]
+      <<: *proxy-healthcheck
     networks:
       direct_internet:
         ipv4_address: 192.168.88.241
@@ -220,6 +223,7 @@ services:
         GOOSE_VERSION: ${GOOSE_VERSION:-v1.7.1}
     container_name: goose-relay
     restart: *default-restart
+    profiles: ["on-demand"]
     labels:
       - autoheal=true
       - dashboard.enable=true
@@ -334,6 +338,9 @@ services:
     dns:
       - 10.20.0.21
     command: "-i 0.0.0.0 -p 1080 ${BYEDPI_DESYNC:--s 1:5:3+s}"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 1080 || exit 1"]
+      <<: *proxy-healthcheck
     networks:
       direct_internet:
         ipv4_address: 192.168.88.248

@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException
 from app.auth import RequireAuth
 from app.config import settings
 from app.models.schemas import ContainerActionResponse, ContainerListResponse
-from app.services import docker_service
+from app.services import docker_service, env_service
 from app.sse import event, sse_response
 
 logger = logging.getLogger(__name__)
@@ -51,8 +51,17 @@ async def start_container(container_name: str):
     try:
         await asyncio.to_thread(docker_service.start_container, container_name)
         return ContainerActionResponse(success=True, message=f"Container {container_name} started")
-    except docker.errors.NotFound:
-        raise HTTPException(status_code=404, detail="Container not found") from None
+    except docker.errors.APIError as sdk_error:
+        # Raw SDK start can't create a never-created profiled service (NotFound) or
+        # reconcile a wedged one (500). Let compose drive it, then force-recreate.
+        ok, message = await asyncio.to_thread(env_service.start_service, container_name)
+        if not ok:
+            logger.warning("compose up for %s failed (%s); retrying with --force-recreate", container_name, message)
+            ok, message = await asyncio.to_thread(env_service.recreate_service, container_name)
+        if not ok:
+            logger.error("Failed to start %s via compose: %s (sdk: %s)", container_name, message, sdk_error)
+            raise HTTPException(status_code=500, detail="Container action failed") from None
+        return ContainerActionResponse(success=True, message=f"Container {container_name} started")
     except Exception:
         logger.exception("Failed to start container %s", container_name)
         raise HTTPException(status_code=500, detail="Container action failed") from None
@@ -121,7 +130,7 @@ async def stream_containers():
 
     threading.Thread(target=listen, daemon=True).start()
 
-    async def gen() -> AsyncGenerator[str, None]:
+    async def gen() -> AsyncGenerator[str]:
         last_payload: str | None = None
         try:
             while True:
@@ -201,7 +210,7 @@ async def stream_container_logs(container_name: str, tail: int = 200):
 
     threading.Thread(target=reader, daemon=True).start()
 
-    async def gen() -> AsyncGenerator[str, None]:
+    async def gen() -> AsyncGenerator[str]:
         try:
             while True:
                 item = await queue.get()

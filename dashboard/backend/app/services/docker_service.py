@@ -200,6 +200,91 @@ def _build_container_info(container: Container, labels: DashboardLabels) -> Cont
     )
 
 
+def _compose_labels_to_dict(labels: object) -> dict[str, str]:
+    """Normalize compose `labels` (list `["k=v"]` or map `{k: v}`) to a dict."""
+    if isinstance(labels, dict):
+        return {str(k): str(v) for k, v in labels.items()}
+    if isinstance(labels, list):
+        out: dict[str, str] = {}
+        for item in labels:
+            key, _, value = str(item).partition("=")
+            out[key.strip()] = value.strip()
+        return out
+    return {}
+
+
+def _declared_container_info(service_name: str, service: dict) -> ContainerInfo | None:
+    """Build a stopped "off" ContainerInfo from a compose service declaration.
+
+    For an on-demand proxy with no live container yet; network-derived fields stay
+    null since they can't be resolved without a running container.
+    """
+    labels = parse_dashboard_labels(_compose_labels_to_dict(service.get("labels")))
+    if labels is None:
+        return None
+    name = str(service.get("container_name") or service_name)
+    if not labels.name:
+        labels.name = name
+    return ContainerInfo(
+        id=name,
+        name=name,
+        image=str(service.get("image") or ""),
+        status="stopped",
+        health=None,
+        started_at=None,
+        dashboard=labels,
+        lan_address=None,
+        probe_address=None,
+    )
+
+
+def _find_declared_service(name: str) -> ContainerInfo | None:
+    """Resolve a dashboard service from docker-compose.yml by service key or container_name."""
+    from app.services import env_service
+
+    try:
+        services = env_service.load_compose_services()
+    except Exception:
+        return None
+
+    service = services.get(name)
+    resolved_name = name
+    if service is None:
+        for service_name, candidate in services.items():
+            if str(candidate.get("container_name") or service_name) == name:
+                service, resolved_name = candidate, service_name
+                break
+    if service is None:
+        return None
+    return _declared_container_info(resolved_name, service)
+
+
+def declared_ondemand_containers(live_names: set[str]) -> list[ContainerInfo]:
+    """Off cards for profiled services not in `live_names`.
+
+    Services behind a compose `profiles:` aren't created by a plain `up`, so they
+    have no live container to list; surface them from their declaration instead.
+    """
+    from app.services import env_service
+
+    result: list[ContainerInfo] = []
+    try:
+        services = env_service.load_compose_services()
+    except Exception:
+        return result
+
+    for service_name, service in services.items():
+        if not (service.get("profiles") or []):
+            continue
+        name = str(service.get("container_name") or service_name)
+        if name in live_names:
+            continue
+        info = _declared_container_info(service_name, service)
+        if info is not None:
+            result.append(info)
+    return result
+
+
 def list_dashboard_containers() -> list[ContainerInfo]:
     global _client
     try:
@@ -212,16 +297,21 @@ def list_dashboard_containers() -> list[ContainerInfo]:
     result = [
         _build_container_info(c, labels) for c in containers if (labels := parse_dashboard_labels(c.labels)) is not None
     ]
+    result.extend(declared_ondemand_containers({c.name for c in result}))
     result.sort(key=lambda c: (CATEGORY_ORDER.get(c.dashboard.category, 3), c.dashboard.name))
     return result
 
 
 def find_dashboard_container(name: str) -> ContainerInfo | None:
-    """Look up one dashboard-enabled container by name. Cheaper than `list_dashboard_containers`."""
+    """Look up one dashboard-enabled container by name. Cheaper than `list_dashboard_containers`.
+
+    Falls back to the compose declaration when no container exists yet, so callers
+    (e.g. the config editor) can resolve an on-demand service before it's started.
+    """
     try:
         container = get_client().containers.get(name)
     except NotFound:
-        return None
+        return _find_declared_service(name)
     labels = parse_dashboard_labels(container.labels)
     if labels is None:
         return None

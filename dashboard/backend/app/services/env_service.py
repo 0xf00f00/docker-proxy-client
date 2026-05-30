@@ -7,6 +7,8 @@ from app.config import settings
 _KEY_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 _NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
 
+_BUILD_TIMEOUT_SEC = 300
+
 
 def _safe_name(value: str) -> bool:
     return bool(_NAME_RE.match(value))
@@ -100,31 +102,103 @@ def _detect_project_name(service_name: str) -> str | None:
         return None
 
 
-def _service_profiles(service_name: str) -> list[str]:
-    """Extract the profiles a service belongs to from docker-compose.yml."""
+def _detect_any_project_name() -> str | None:
+    """Project name borrowed from any compose container.
+
+    An on-demand service has no container of its own to read it from yet, and
+    compose's default (the in-container cwd basename) would be wrong.
+    """
+    try:
+        from app.services.docker_service import get_client
+
+        for container in get_client().containers.list(all=True):
+            project = (container.labels or {}).get("com.docker.compose.project")
+            if project:
+                return project
+    except Exception:
+        return None
+    return None
+
+
+def _host_project_dir() -> str | None:
+    """Host path of the project, from the Source of the container's compose mount.
+
+    `docker compose` runs inside the dashboard container, but the daemon resolves
+    bind mounts against the host filesystem, so it needs the host path. The mount
+    Source is authoritative; the `project.working_dir` label can't be trusted —
+    containers the dashboard created from `/compose` carry a poisoned value.
+    """
+    target = settings.compose_project_path
+    try:
+        from app.services.docker_service import get_client
+
+        for container in get_client().containers.list(all=True):
+            for mount in container.attrs.get("Mounts", []) or []:
+                if mount.get("Destination") == target and mount.get("Source"):
+                    return mount["Source"]
+    except Exception:
+        return None
+    return None
+
+
+def _compose_file_args(project: Path) -> list[str]:
+    """`-f` flags for the local compose files, base before override.
+
+    Explicit because `--project-directory` moves compose's file discovery to the
+    host dir, which isn't readable from inside this container.
+    """
+    args: list[str] = []
+    for filename in (
+        "docker-compose.yml",
+        "docker-compose.yaml",
+        "docker-compose.override.yml",
+        "docker-compose.override.yaml",
+    ):
+        path = project / filename
+        if path.is_file():
+            args.extend(["-f", str(path)])
+    return args
+
+
+def load_compose_services() -> dict:
+    """Parse the ``services`` map from docker-compose.yml (empty dict on error)."""
     from ruamel.yaml import YAML
 
     compose_file = _project_path() / "docker-compose.yml"
     if not compose_file.is_file():
-        return []
+        return {}
     try:
         yaml = YAML(typ="safe")
         data = yaml.load(compose_file.read_text())
-        return data.get("services", {}).get(service_name, {}).get("profiles", []) or []
+        return data.get("services", {}) or {}
     except Exception:
-        return []
+        return {}
 
 
-def _run_compose(service_name: str, action_args: list[str]) -> tuple[bool, str]:
+def _service_profiles(service_name: str) -> list[str]:
+    """Extract the profiles a service belongs to from docker-compose.yml."""
+    return load_compose_services().get(service_name, {}).get("profiles", []) or []
+
+
+def _run_compose(service_name: str, action_args: list[str], timeout: int = 60) -> tuple[bool, str]:
     if not _safe_name(service_name):
         return False, "Invalid service name"
     project = _project_path()
-    project_name = _detect_project_name(service_name)
+    project_name = _detect_project_name(service_name) or _detect_any_project_name()
     profiles = _service_profiles(service_name)
+    host_dir = _host_project_dir()
 
     cmd = ["docker", "compose"]
     if project_name and _safe_name(project_name):
         cmd.extend(["--project-name", project_name])
+    # Resolve bind mounts against the host path, but read the compose files and
+    # .env from the container FS via explicit -f/--env-file (see _host_project_dir).
+    if host_dir and host_dir != str(project):
+        cmd.extend(["--project-directory", host_dir])
+        cmd.extend(_compose_file_args(project))
+        env_file = project / ".env"
+        if env_file.is_file():
+            cmd.extend(["--env-file", str(env_file)])
     for profile in profiles:
         if _safe_name(profile):
             cmd.extend(["--profile", profile])
@@ -138,12 +212,12 @@ def _run_compose(service_name: str, action_args: list[str]) -> tuple[bool, str]:
             cwd=str(project),
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=timeout,
         )
     except FileNotFoundError:
         return False, "docker CLI not available in this environment"
     except subprocess.TimeoutExpired:
-        return False, "docker compose timed out after 60s"
+        return False, f"docker compose timed out after {timeout}s"
 
     if result.returncode != 0:
         return False, result.stderr.strip() or result.stdout.strip() or "Unknown error"
@@ -152,9 +226,14 @@ def _run_compose(service_name: str, action_args: list[str]) -> tuple[bool, str]:
 
 def recreate_service(service_name: str) -> tuple[bool, str]:
     """Run `docker compose up -d --force-recreate <service>` to apply env changes."""
-    return _run_compose(service_name, ["up", "-d", "--force-recreate"])
+    return _run_compose(service_name, ["up", "-d", "--force-recreate"], timeout=_BUILD_TIMEOUT_SEC)
 
 
 def restart_service(service_name: str) -> tuple[bool, str]:
     """Run `docker compose restart <service>` to bounce the process so it re-reads its config file."""
     return _run_compose(service_name, ["restart"])
+
+
+def start_service(service_name: str) -> tuple[bool, str]:
+    """Run `docker compose up -d <service>` to create-and-start an on-demand service."""
+    return _run_compose(service_name, ["up", "-d"], timeout=_BUILD_TIMEOUT_SEC)

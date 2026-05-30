@@ -7,6 +7,7 @@ export interface ConnectivityState {
   testing: Set<string>;
   running: boolean;
   start: () => void;
+  recordResult: (result: ConnectivityResult) => void;
 }
 
 /**
@@ -22,6 +23,10 @@ export function useConnectivityTests({ initialDelayMs = 0 }: { initialDelayMs?: 
   const [testing, setTesting] = useState<Set<string>>(new Set());
   const [running, setRunning] = useState(false);
   const sourceRef = useRef<EventSource | null>(null);
+
+  const recordResult = useCallback((result: ConnectivityResult) => {
+    setResults((prev) => ({ ...prev, [result.service]: result }));
+  }, []);
 
   const start = useCallback(() => {
     sourceRef.current?.close();
@@ -59,5 +64,5 @@ export function useConnectivityTests({ initialDelayMs = 0 }: { initialDelayMs?: 
     };
   }, [initialDelayMs, start]);
 
-  return { results, testing, running, start };
+  return { results, testing, running, start, recordResult };
 }

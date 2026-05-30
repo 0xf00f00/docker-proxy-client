@@ -1,13 +1,27 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { RotateCw, Copy, FileEdit, ChevronDown, ChevronUp, Wifi, WifiOff, Loader2, Power, PowerOff, Sliders } from "lucide-react";
+import {
+  RotateCw,
+  Copy,
+  FileEdit,
+  ChevronDown,
+  ChevronUp,
+  Wifi,
+  WifiOff,
+  Loader2,
+  Power,
+  PowerOff,
+  Sliders,
+} from "lucide-react";
 import { toast } from "sonner";
 import type { ContainerInfo, ConnectivityResult } from "@/types";
 import { restartContainer, startContainer, stopContainer, testConnectivity } from "@/api/client";
 import { cn } from "@/utils/cn";
 import { getErrorMessage } from "@/utils/errors";
 import IpFlag from "@/components/common/IpFlag";
+import TelegramIcon from "@/components/common/TelegramIcon";
 import { ModalLoadingShell } from "@/components/common/Modal";
+import { isSocksCapable, telegramSocksLink } from "@/utils/telegram";
 
 const loadConfigModal = () => import("@/components/config/ConfigModal");
 const loadEnvModal = () => import("@/components/config/EnvModal");
@@ -31,6 +45,7 @@ interface Props {
   container: ContainerInfo;
   connectivity: ConnectivityResult | null;
   isTesting?: boolean;
+  onTestResult?: (result: ConnectivityResult) => void;
 }
 
 type LifecycleState = "running" | "restarting" | "starting-health" | "unhealthy" | "stopped" | "transient";
@@ -56,10 +71,14 @@ function modalLoadingTitle(kind: Exclude<ModalKind, null>, displayName: string):
 
 type ConfirmKind = "stop" | "restart" | null;
 
-export default function ProxyCard({ container, connectivity, isTesting = false }: Props) {
+// Settle delay after a started proxy reports healthy, before auto-probing it.
+const AUTO_TEST_AFTER_START_MS = 1500;
+
+export default function ProxyCard({ container, connectivity, isTesting = false, onTestResult }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [openModal, setOpenModal] = useState<ModalKind>(null);
   const [confirm, setConfirm] = useState<ConfirmKind>(null);
+  const [autoTestPending, setAutoTestPending] = useState(false);
   const queryClient = useQueryClient();
 
   const restartMutation = useMutation({
@@ -76,6 +95,7 @@ export default function ProxyCard({ container, connectivity, isTesting = false }
     mutationFn: () => startContainer(container.name),
     onSuccess: () => {
       toast.success(`${container.dashboard.name} starting`);
+      setAutoTestPending(true);
       queryClient.invalidateQueries({ queryKey: ["containers"] });
     },
     onError: (err) => toast.error(`Start failed: ${getErrorMessage(err)}`),
@@ -93,6 +113,7 @@ export default function ProxyCard({ container, connectivity, isTesting = false }
 
   const testMutation = useMutation({
     mutationFn: () => testConnectivity(container.name),
+    onSuccess: (result) => onTestResult?.(result),
   });
 
   const conn = testMutation.data ?? connectivity;
@@ -108,12 +129,28 @@ export default function ProxyCard({ container, connectivity, isTesting = false }
   const canTest = container.dashboard.testable && !!container.lan_address;
   const closeModal = () => setOpenModal(null);
 
+  // Auto-probe once a just-started proxy is healthy.
+  const runAutoTestRef = useRef<() => void>(() => {});
+  runAutoTestRef.current = () => testMutation.mutate();
+  useEffect(() => {
+    if (!autoTestPending || state !== "running" || !canTest) return;
+    const timer = setTimeout(() => {
+      runAutoTestRef.current();
+      setAutoTestPending(false);
+    }, AUTO_TEST_AFTER_START_MS);
+    return () => clearTimeout(timer);
+  }, [autoTestPending, state, canTest]);
+
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
     toast.success(`${label} copied`);
   };
 
   const [host, port] = container.lan_address?.split(":") ?? [];
+
+  // One-tap "Add to Telegram"
+  const telegramLink =
+    host && port && isRunning && isSocksCapable(container.dashboard.protocol) ? telegramSocksLink(host, port) : null;
 
   // Keep the card un-dimmed while a transition is in flight, even if status
   // flips mid-mutation — the "Stopping…/Starting…" badge is the better cue.
@@ -168,16 +205,12 @@ export default function ProxyCard({ container, connectivity, isTesting = false }
               canTest={canTest}
             />
           </div>
-          {canTest && isRunning && !isTransitioning && (
-            <InlineTestButton
-              testing={testing}
-              hasResult={!!conn}
-              onClick={() => testMutation.mutate()}
-            />
-          )}
-          {conn?.success && conn.ip_info && (
-            <IpFlag info={conn.ip_info} className="ml-1" />
-          )}
+          {state === "stopped" && !expanded ? (
+            <InlineStartButton starting={isStarting} onClick={() => startMutation.mutate()} />
+          ) : canTest && isRunning && !isTransitioning ? (
+            <InlineTestButton testing={testing} hasResult={!!conn} onClick={() => testMutation.mutate()} />
+          ) : null}
+          {conn?.success && conn.ip_info && <IpFlag info={conn.ip_info} className="ml-1" />}
           {expanded ? (
             <ChevronUp className="text-muted h-5 w-5 shrink-0" />
           ) : (
@@ -187,11 +220,23 @@ export default function ProxyCard({ container, connectivity, isTesting = false }
 
         {expanded && (
           <div className="border-border border-t px-3 pt-3 pb-3.5 sm:px-4 sm:pb-4">
-            {container.lan_address && (
+            {isRunning && container.lan_address && (
               <div className="mb-3 grid grid-cols-2 gap-2">
                 {host && <CopyField label="Host" value={host} onCopy={() => copyToClipboard(host, "Host")} />}
                 {port && <CopyField label="Port" value={port} onCopy={() => copyToClipboard(port, "Port")} />}
               </div>
+            )}
+
+            {telegramLink && (
+              <a
+                href={telegramLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mb-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-lg bg-[#229ED9] px-4 text-sm font-semibold text-white transition-colors hover:bg-[#1e8fc4] active:bg-[#1b82b3]"
+              >
+                <TelegramIcon className="h-5 w-5" />
+                Add to Telegram
+              </a>
             )}
 
             <div className="flex flex-wrap gap-2">
@@ -201,11 +246,7 @@ export default function ProxyCard({ container, connectivity, isTesting = false }
                   disabled={isTransitioning}
                   variant="destructive"
                   icon={
-                    isStopping ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <PowerOff className="h-3.5 w-3.5" />
-                    )
+                    isStopping ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PowerOff className="h-3.5 w-3.5" />
                   }
                 >
                   {isStopping ? "Stopping…" : "Stop"}
@@ -216,11 +257,7 @@ export default function ProxyCard({ container, connectivity, isTesting = false }
                   disabled={isTransitioning}
                   variant="positive"
                   icon={
-                    isStarting ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Power className="h-3.5 w-3.5" />
-                    )
+                    isStarting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Power className="h-3.5 w-3.5" />
                   }
                 >
                   {isStarting ? "Starting…" : "Start"}
@@ -251,7 +288,10 @@ export default function ProxyCard({ container, connectivity, isTesting = false }
                   Config
                 </ActionButton>
               )}
-              <ActionButton onClick={() => setOpenModal("logs")} icon={<span className="font-mono text-[10px]">LOG</span>}>
+              <ActionButton
+                onClick={() => setOpenModal("logs")}
+                icon={<span className="font-mono text-[10px]">LOG</span>}
+              >
                 Logs
               </ActionButton>
             </div>
@@ -267,25 +307,13 @@ export default function ProxyCard({ container, connectivity, isTesting = false }
         }
       >
         {openModal === "config" && container.dashboard.config && (
-          <ConfigModal
-            containerName={container.name}
-            displayName={container.dashboard.name}
-            onClose={closeModal}
-          />
+          <ConfigModal containerName={container.name} displayName={container.dashboard.name} onClose={closeModal} />
         )}
         {openModal === "env" && (
-          <EnvModal
-            containerName={container.name}
-            displayName={container.dashboard.name}
-            onClose={closeModal}
-          />
+          <EnvModal containerName={container.name} displayName={container.dashboard.name} onClose={closeModal} />
         )}
         {openModal === "logs" && (
-          <LogsModal
-            containerName={container.name}
-            displayName={container.dashboard.name}
-            onClose={closeModal}
-          />
+          <LogsModal containerName={container.name} displayName={container.dashboard.name} onClose={closeModal} />
         )}
         {confirm === "stop" && (
           <ConfirmDialog
@@ -336,11 +364,25 @@ function InlineTestButton({
       title={hasResult ? "Re-test" : "Test"}
       className="text-muted hover:text-foreground flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-zinc-800/70 hover:bg-zinc-700/80 active:bg-zinc-700 disabled:opacity-60"
     >
-      {testing ? (
-        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-      ) : (
-        <RotateCw className="h-3.5 w-3.5" />
-      )}
+      {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCw className="h-3.5 w-3.5" />}
+    </button>
+  );
+}
+
+function InlineStartButton({ starting, onClick }: { starting: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      disabled={starting}
+      aria-label="Start"
+      className="flex min-h-10 shrink-0 items-center gap-1.5 rounded-full bg-emerald-500/15 px-3.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/25 active:bg-emerald-500/30 disabled:opacity-60"
+    >
+      {starting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Power className="h-3.5 w-3.5" />}
+      {starting ? "Starting…" : "Start"}
     </button>
   );
 }
@@ -456,7 +498,7 @@ function StatusText({
   if (state === "starting-health")
     return <p className="text-xs text-sky-300">Starting up — waiting for healthcheck…</p>;
   if (testing) return <p className="text-primary text-xs">Testing connection…</p>;
-  if (state === "stopped") return <p className="text-xs text-zinc-500">Not running</p>;
+  if (state === "stopped") return null;
   if (state === "transient") return <p className="text-muted text-xs">Updating…</p>;
   if (state === "unhealthy") return <p className="text-xs text-red-300">Container reports unhealthy</p>;
   if (!canTest) return <p className="text-muted text-xs">Running</p>;
@@ -490,8 +532,7 @@ const ACTION_VARIANT_CLASS: Record<ActionVariant, string> = {
   default: "text-muted hover:text-foreground bg-zinc-800 active:bg-zinc-700",
   positive:
     "text-emerald-300 hover:text-emerald-200 bg-emerald-500/15 hover:bg-emerald-500/25 active:bg-emerald-500/30",
-  destructive:
-    "text-red-300 hover:text-red-200 bg-red-500/15 hover:bg-red-500/25 active:bg-red-500/30",
+  destructive: "text-red-300 hover:text-red-200 bg-red-500/15 hover:bg-red-500/25 active:bg-red-500/30",
 };
 
 function ActionButton({
