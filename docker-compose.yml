@@ -241,6 +241,41 @@ services:
     volumes:
       - ./goose-relay/client_config.json:/etc/goose-relay/client_config.json:ro
 
+  skirk:
+    image: ghcr.io/oiyoa/skirk:${SKIRK_VERSION:-latest}
+    container_name: skirk
+    restart: *default-restart
+    labels:
+      - dashboard.enable=true
+      - dashboard.category=proxy
+      - dashboard.name=Skirk
+      - dashboard.protocol=socks5
+      - dashboard.port=18080
+      - dashboard.env=SKIRK_CLIENT_CONFIG,SKIRK_POLL_MS,SKIRK_UPLOAD_CONCURRENCY,SKIRK_DOWNLOAD_CONCURRENCY
+    dns: *default-dns
+    networks:
+      direct_internet:
+        ipv4_address: 192.168.88.249
+        gw_priority: 1000
+      default:
+        ipv4_address: 10.20.0.22
+    command:
+      - serve-client
+      - --config
+      - ${SKIRK_CLIENT_CONFIG:-}
+      - --listen
+      - 0.0.0.0:18080
+      - --http-proxy-listen
+      - 0.0.0.0:18081
+      - --route-mode
+      - google_front_pinned
+      - --poll-ms
+      - ${SKIRK_POLL_MS:-1000}
+      - --upload-concurrency
+      - ${SKIRK_UPLOAD_CONCURRENCY:-0}
+      - --download-concurrency
+      - ${SKIRK_DOWNLOAD_CONCURRENCY:-0}
+
   xray:
     image: ghcr.io/xtls/xray-core:latest
     container_name: xray
