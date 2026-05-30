@@ -275,12 +275,13 @@ services:
       - dashboard.name=ByeDPI
       - dashboard.protocol=socks5
       - dashboard.port=1080
+      - dashboard.env=BYEDPI_DESYNC
     cap_add:
       - NET_ADMIN
       - NET_RAW
     dns:
       - 10.20.0.1
-    command: ["-i", "0.0.0.0", "-p", "1080", "-Y", "-s", "1:5:3+s"]
+    command: "-i 0.0.0.0 -p 1080 ${BYEDPI_DESYNC:--s 1:5:3+s}"
     networks:
       direct_internet:
         ipv4_address: 192.168.88.248
