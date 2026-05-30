@@ -265,24 +265,28 @@ services:
       - ./xray/config.json:/etc/xray/config.json:ro
     command: run -c /etc/xray/config.json
 
-  singbox-direct:
-    image: ghcr.io/sagernet/sing-box:latest
-    container_name: singbox-direct
+  byedpi:
+    image: tazihad/byedpi:${BYEDPI_VERSION:-v0.17.3}
+    container_name: byedpi
     restart: *default-restart
     labels:
-      - autoheal=true
       - dashboard.enable=true
       - dashboard.category=proxy
-      - dashboard.name=SingBox Direct
+      - dashboard.name=ByeDPI
       - dashboard.protocol=socks5
-      - dashboard.port=7891
-    network_mode: host
-    healthcheck:
-      test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 7891 || exit 1"]
-      <<: *proxy-healthcheck
-    volumes:
-      - ./singbox-direct/config.json:/etc/sing-box/config.json:ro
-    command: -C /etc/sing-box/ run
+      - dashboard.port=1080
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    dns:
+      - 10.20.0.1
+    command: ["-i", "0.0.0.0", "-p", "1080", "-Y", "-s", "1:5:3+s"]
+    networks:
+      direct_internet:
+        ipv4_address: 192.168.88.248
+        gw_priority: 1000
+      default:
+        ipv4_address: 10.20.0.20
     depends_on:
       - coredns
 
@@ -503,7 +507,9 @@ networks:
       config:
         - subnet: 192.168.88.0/24
           gateway: 192.168.88.1
-          # Reserve .240-.247 for containers (avoid conflicts with router DHCP)
+          # Dynamic pool .240-.247 (avoid conflicts with router DHCP); static
+          # ipv4_address assignments (e.g. byedpi .248) may sit outside this pool
+          # as long as they're within the /24 subnet and clear of DHCP.
           ip_range: 192.168.88.240/29
   # Default bridge network with static IP assignments for reliable Clash access
   default:
