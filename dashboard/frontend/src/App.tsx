@@ -4,6 +4,7 @@ import Header from "@/components/layout/Header";
 import SpeedTest from "@/components/system/SpeedTest";
 import ProxyGrid from "@/components/containers/ProxyGrid";
 import DnsSection from "@/components/containers/DnsSection";
+import ScannerSection from "@/components/scanner/ScannerSection";
 import { getWidget } from "@/components/widgets/registry";
 import { useContainerStream } from "@/hooks/useContainerStream";
 import { useConnectivityTests } from "@/hooks/useConnectivityTests";
@@ -94,6 +95,10 @@ export default function App() {
             <DnsSection services={dnsServices} />
           </section>
         )}
+
+        <section className="mt-6 sm:mt-8">
+          <ScannerSection />
+        </section>
       </main>
     </div>
   );

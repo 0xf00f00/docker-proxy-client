@@ -1,0 +1,71 @@
+{
+  "remarks": "Fallback xray: your-fallback-host.example reached two ways with internal failover",
+  "log": { "loglevel": "warning" },
+  "inbounds": [
+    {
+      "listen": "0.0.0.0",
+      "port": 10809,
+      "protocol": "socks",
+      "settings": { "auth": "noauth", "udp": true },
+      "sniffing": { "enabled": true, "destOverride": ["http", "tls"], "routeOnly": true },
+      "tag": "socks-in"
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "via-byedpi",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          { "address": "your-fallback-host.example", "port": 443,
+            "users": [ { "id": "00000000-0000-0000-0000-000000000000", "encryption": "none", "level": 8 } ] }
+        ]
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "tls",
+        "tlsSettings": { "allowInsecure": false, "serverName": "your-fallback-host.example", "alpn": ["h2"], "fingerprint": "chrome" },
+        "xhttpSettings": { "host": "your-fallback-host.example", "mode": "auto", "path": "/your-worker-path" },
+        "sockopt": { "dialerProxy": "bridge-byedpi" }
+      }
+    },
+    {
+      "tag": "bridge-byedpi",
+      "protocol": "socks",
+      "settings": { "servers": [ { "address": "byedpi", "port": 1080 } ] }
+    },
+    {
+      "tag": "via-sni-spoofing-fallback",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          { "address": "sni-spoofing-fallback", "port": 40443,
+            "users": [ { "id": "00000000-0000-0000-0000-000000000000", "encryption": "none", "level": 8 } ] }
+        ]
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "tls",
+        "tlsSettings": { "allowInsecure": false, "serverName": "your-fallback-host.example", "alpn": ["h2"], "fingerprint": "chrome" },
+        "xhttpSettings": { "host": "your-fallback-host.example", "mode": "auto", "path": "/your-worker-path" }
+      }
+    },
+    { "protocol": "freedom", "tag": "direct" },
+    { "protocol": "blackhole", "tag": "block" }
+  ],
+  "observatory": {
+    "subjectSelector": ["via-"],
+    "probeURL": "https://www.gstatic.com/generate_204",
+    "probeInterval": "30s"
+  },
+  "routing": {
+    "domainStrategy": "AsIs",
+    "balancers": [
+      { "tag": "fb", "selector": ["via-"], "strategy": { "type": "leastPing" } }
+    ],
+    "rules": [
+      { "type": "field", "ip": ["geoip:private"], "outboundTag": "direct" },
+      { "type": "field", "network": "tcp,udp", "balancerTag": "fb" }
+    ]
+  }
+}

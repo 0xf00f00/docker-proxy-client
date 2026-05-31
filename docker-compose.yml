@@ -184,6 +184,7 @@ services:
       - "psiphon:10.20.0.14"
       - "frpc-proxy:10.20.0.15"
       - "xray:10.20.0.18"
+      - "xray-fallback:10.20.0.24"
     depends_on:
       - naive
       - naive-uot
@@ -431,6 +432,147 @@ services:
       - ./sni-spoofing/config.ini:/etc/sni-spoofing/config.ini:ro
     command: ["-config", "/etc/sni-spoofing/config.ini"]
 
+  sni-spoofing-fallback:
+    image: ghcr.io/aleskxyz/sni-spoofing-go:${SNI_SPOOFING_VERSION:-0.5.1}
+    container_name: sni-spoofing-fallback
+    restart: *default-restart
+    labels:
+      - autoheal=true
+      - dashboard.enable=true
+      - dashboard.category=proxy
+      - dashboard.name=SNI Spoofing Auto
+      - dashboard.protocol=tls
+      - dashboard.port=40443
+      - dashboard.config=/sni-spoofing-fallback/config.ini
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/40443'"]
+      <<: *proxy-healthcheck
+    networks:
+      direct_internet:
+        ipv4_address: 192.168.88.251
+        gw_priority: 1000
+      default:
+        ipv4_address: 10.20.0.23
+    volumes:
+      - ./sni-spoofing-fallback/config.ini:/etc/sni-spoofing/config.ini:ro
+    command: ["-config", "/etc/sni-spoofing/config.ini"]
+
+  xray-fallback:
+    image: ghcr.io/xtls/xray-core:latest
+    container_name: xray-fallback
+    restart: *default-restart
+    labels:
+      - dashboard.enable=true
+      - dashboard.category=proxy
+      - dashboard.name=Xray Fallback
+      - dashboard.protocol=socks5
+      - dashboard.port=10809
+      - dashboard.config=/xray-fallback/config.json
+    dns: *default-dns
+    networks:
+      direct_internet:
+        ipv4_address: 192.168.88.253
+        gw_priority: 1000
+      default:
+        ipv4_address: 10.20.0.24
+    volumes:
+      - ./xray-fallback/config.json:/etc/xray/config.json:ro
+    command: ["run", "-c", "/etc/xray/config.json"]
+    depends_on:
+      - sni-spoofing-fallback
+      - byedpi
+
+  cf-edge-scanner:
+    build:
+      context: ./cf-edge-scanner
+      args:
+        CFST_VERSION: ${CFST_VERSION:-2.3.5}
+    image: cf-edge-scanner:local
+    container_name: cf-edge-scanner
+    restart: *default-restart
+    labels:
+      - dashboard.enable=false
+      # Weekly scan schedule, driven by the ofelia sidecar (job-exec drops the
+      # same .scan-now trigger the dashboard uses). NOTE: ofelia cron is 6-field
+      # (leading seconds); default = Mondays 05:00 local (TZ set on ofelia).
+      - ofelia.enabled=true
+      - ofelia.job-exec.weekly-scan.schedule=${CF_SCAN_CRON:-0 0 5 * * 1}
+      - ofelia.job-exec.weekly-scan.command=touch /out/.scan-now
+    environment:
+      # Low concurrency on purpose: the uplink is ~2 MB/s and must stay usable
+      # while scanning. -dd (in scan.sh) already drops the bandwidth-heavy phase.
+      - THREADS=${CF_THREADS:-5}
+      - PING_COUNT=${CF_PING_COUNT:-10}
+      - PORT=${CF_PORT:-443}
+      - LOSS_MAX=${CF_LOSS_MAX:-0.10}
+      - LAT_MAX=${CF_LAT_MAX:-1000}
+      - POOL_SIZE=${CF_POOL_SIZE:-10}
+      # TLS-survival gate (post-rank): drop edges DPI resets despite clean ping
+      - TLS_CHECK=${CF_TLS_CHECK:-1}
+      - TLS_SNI=${CF_TLS_SNI:-cp.cloudflare.com}
+    networks:
+      direct_internet:
+        ipv4_address: 192.168.88.250
+        gw_priority: 1000
+    volumes:
+      - ./cf-edge-scanner/cf-ranges.txt:/cf-ranges.txt:ro
+      - ./cf-edge-scanner/out:/out
+
+  # Docker-native cron. Reads job labels off other services and execs into them
+  # on schedule -- here, a weekly `touch /out/.scan-now` inside cf-edge-scanner.
+  # Keeps the timer out of the scanner so the heavy sweep only runs when poked.
+  ofelia:
+    image: mcuadros/ofelia:latest
+    container_name: ofelia
+    restart: *default-restart
+    depends_on:
+      - cf-edge-scanner
+    command: daemon --docker
+    labels:
+      - dashboard.enable=false
+    environment:
+      - TZ=${TZ:-UTC}   # ofelia evaluates the cron schedule in this zone
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  cf-edge-picker:
+    build:
+      context: ./cf-edge-picker
+    image: cf-edge-picker:local
+    container_name: cf-edge-picker
+    restart: *default-restart
+    labels:
+      - dashboard.enable=false
+    environment:
+      - FRONT_HOST=${FALLBACK_HOST:?set FALLBACK_HOST in .env}
+      - PORT=443
+      - PING_COUNT=10
+      - KEEP_MAX=0.20
+      - PICK_MAX=0.10
+      - MAX_CANDIDATES=3
+      - BASE_INTERVAL=600
+      - MAX_BACKOFF=21600
+      - MIN_RESTART_GAP=300
+      - QUARANTINE_TTL=3600
+      - SNISPOOF_CONTAINER=sni-spoofing-fallback
+    networks:
+      direct_internet:
+        ipv4_address: 192.168.88.252
+        gw_priority: 1000
+    volumes:
+      - ./cf-edge-scanner/out:/pool:ro
+      - ./coredns/fallback:/coredns-fallback
+      - ./sni-spoofing-fallback:/snispoof2
+      - ./cf-edge-picker/state:/state
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - sni-spoofing-fallback
+      - xray-fallback
+      - cf-edge-scanner
+
   autoheal:
     image: willfarrell/autoheal:latest
     container_name: autoheal
@@ -548,6 +690,8 @@ services:
       - ./singbox-sub/config.json:/configs/singbox-sub/config.json
       - ./clash/config.yaml:/configs/clash/config.yaml
       - ./sni-spoofing/config.ini:/configs/sni-spoofing/config.ini
+      - ./sni-spoofing-fallback/config.ini:/configs/sni-spoofing-fallback/config.ini
+      - ./xray-fallback/config.json:/configs/xray-fallback/config.json
       - ./goose-relay/client_config.json:/configs/goose-relay/client_config.json
       - ./mdns/client_resolvers.txt:/configs/mdns/client_resolvers.txt
       # Mount the repo root so we can update .env and run `docker compose up -d <svc>`

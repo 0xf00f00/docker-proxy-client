@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2, RefreshCw, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
@@ -16,6 +16,7 @@ import { arrayMove, SortableContext, verticalListSortingStrategy } from "@dnd-ki
 import {
   fetchSystemProxyEgressIp,
   fetchSystemProxyState,
+  openSystemProxyStream,
   setSystemProxyMode,
   switchSystemProxy,
   testSystemProxyLatencies,
@@ -45,9 +46,15 @@ export default function SystemProxyWidget() {
   } = useQuery({
     queryKey: ["system-proxy-state"],
     queryFn: fetchSystemProxyState,
-    refetchInterval: 15_000,
     retry: 1,
   });
+
+  useEffect(() => {
+    const es = openSystemProxyStream({
+      onState: (next) => queryClient.setQueryData(["system-proxy-state"], next),
+    });
+    return () => es.close();
+  }, [queryClient]);
 
   // Egress IP. Re-keyed on the active route so switching/reordering naturally
   // triggers a refetch; backend caches for 60s so refetch on focus is cheap.

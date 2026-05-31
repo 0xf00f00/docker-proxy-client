@@ -11,8 +11,9 @@ export default defineConfig({
     },
   },
   server: {
+    port: Number(process.env.DASHBOARD_DEV_PORT) || 8080,
     proxy: {
-      "/api": `http://127.0.0.1:${process.env.DASHBOARD_PORT || "8080"}`,
+      "/api": `http://127.0.0.1:${process.env.DASHBOARD_API_PORT || "8081"}`,
     },
   },
   build: {

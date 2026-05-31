@@ -45,6 +45,26 @@ export interface ContainerListResponse {
   host_lan_ip: string;
 }
 
+export interface EdgeTest {
+  sent: number;
+  received: number;
+  loss: number;
+  latency_ms: number;
+  ts: string;
+}
+
+export interface ScannerStatus {
+  scanner_running: boolean;
+  scanning: boolean;
+  picker_running: boolean;
+  last_scan: string | null;
+  pool: string[];
+  byedpi_ip: string | null;
+  snispoof_ip: string | null;
+  tests: Record<string, EdgeTest>;
+  testing_ip: string | null;
+}
+
 export interface IpInfo {
   ip: string;
   country_code: string | null;
@@ -104,6 +124,11 @@ export interface SystemConnectivityResult {
   latency_ms: number;
   status_code?: number;
   error?: string;
+}
+
+export interface SystemHealthResult {
+  dns: SystemDnsResult;
+  connectivity: SystemConnectivityResult;
 }
 
 export interface SpeedTestProgress {

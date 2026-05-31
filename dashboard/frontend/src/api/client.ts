@@ -6,13 +6,13 @@ import type {
   ConfigFile,
   IpInfo,
   SpeedTestProgress,
-  SystemDnsResult,
-  SystemConnectivityResult,
+  SystemHealthResult,
   SystemProxyMode,
   SystemProxyReorderResult,
   SystemProxyState,
   ServiceEnv,
   ServiceUpdateResult,
+  ScannerStatus,
 } from "@/types";
 
 const api = axios.create({ baseURL: "/api/v1" });
@@ -61,6 +61,21 @@ export async function startContainer(name: string): Promise<void> {
 
 export async function stopContainer(name: string): Promise<void> {
   await api.post(`/containers/${name}/stop`);
+}
+
+// ---------- Scanner ----------
+
+export async function fetchScannerStatus(): Promise<ScannerStatus> {
+  const { data } = await api.get<ScannerStatus>("/scanner/status");
+  return data;
+}
+
+export async function runScan(): Promise<void> {
+  await api.post("/scanner/run");
+}
+
+export async function testEdge(ip: string): Promise<void> {
+  await api.post("/scanner/test", { ip });
 }
 
 // ---------- Connectivity ----------
@@ -124,13 +139,8 @@ export async function fetchSystemProxyEgressIp(): Promise<IpInfo | null> {
 
 // ---------- System ----------
 
-export async function testSystemDns(): Promise<SystemDnsResult> {
-  const { data } = await api.get<SystemDnsResult>("/system/dns");
-  return data;
-}
-
-export async function testSystemConnectivity(): Promise<SystemConnectivityResult> {
-  const { data } = await api.get<SystemConnectivityResult>("/system/connectivity");
+export async function fetchSystemHealth(): Promise<SystemHealthResult> {
+  const { data } = await api.get<SystemHealthResult>("/system/health");
   return data;
 }
 
@@ -145,11 +155,16 @@ function jsonEvent<T>(es: EventSource, name: string, handler: (data: T) => void)
   es.addEventListener(name, (e) => handler(JSON.parse((e as MessageEvent).data) as T));
 }
 
-function createEventSource(url: string, onError?: (e: Event) => void): EventSource {
+function createEventSource(
+  url: string,
+  onError?: (e: Event) => void,
+  { probeAuth = false }: { probeAuth?: boolean } = {},
+): EventSource {
   const es = new EventSource(url);
   let probed = false;
   es.onerror = (e) => {
     onError?.(e);
+    if (!probeAuth) return;
     // Only probe /auth/status on the first error — once we know whether
     // auth is the cause, subsequent reconnect-attempt errors don't need
     // to re-check. We deliberately don't close the stream: EventSource
@@ -195,7 +210,8 @@ export interface LogStreamHandlers {
 
 export function openLogStream(containerName: string, tail: number, handlers: LogStreamHandlers): EventSource {
   const url = `/api/v1/containers/${encodeURIComponent(containerName)}/logs/stream?tail=${tail}`;
-  const es = createEventSource(url, handlers.onError);
+  // The only auth-gated stream: a 401 here (expired session) should re-prompt login.
+  const es = createEventSource(url, handlers.onError, { probeAuth: true });
   if (handlers.onOpen) es.onopen = handlers.onOpen;
   jsonEvent<{ text: string }>(es, "line", ({ text }) => handlers.onLine(text));
   if (handlers.onStreamError) {
@@ -216,6 +232,34 @@ export interface ContainerStreamHandlers {
 export function openContainerStream(handlers: ContainerStreamHandlers): EventSource {
   const es = createEventSource("/api/v1/containers/stream");
   jsonEvent<ContainerListResponse>(es, "snapshot", handlers.onSnapshot);
+  if (handlers.onError) {
+    jsonEvent<{ detail?: string }>(es, "stream-error", ({ detail }) => handlers.onError!(detail ?? "Stream error"));
+  }
+  return es;
+}
+
+export interface ScannerStreamHandlers {
+  onStatus: (status: ScannerStatus) => void;
+  onError?: (detail: string) => void;
+}
+
+export function openScannerStream(handlers: ScannerStreamHandlers): EventSource {
+  const es = createEventSource("/api/v1/scanner/stream");
+  jsonEvent<ScannerStatus>(es, "status", handlers.onStatus);
+  if (handlers.onError) {
+    jsonEvent<{ detail?: string }>(es, "stream-error", ({ detail }) => handlers.onError!(detail ?? "Stream error"));
+  }
+  return es;
+}
+
+export interface SystemProxyStreamHandlers {
+  onState: (state: SystemProxyState) => void;
+  onError?: (detail: string) => void;
+}
+
+export function openSystemProxyStream(handlers: SystemProxyStreamHandlers): EventSource {
+  const es = createEventSource("/api/v1/system-proxy/state/stream");
+  jsonEvent<SystemProxyState>(es, "state", handlers.onState);
   if (handlers.onError) {
     jsonEvent<{ detail?: string }>(es, "stream-error", ({ detail }) => handlers.onError!(detail ?? "Stream error"));
   }

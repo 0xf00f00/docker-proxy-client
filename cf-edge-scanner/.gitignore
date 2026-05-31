@@ -1,0 +1,5 @@
+# Local env and generated scan artifacts -- never commit these.
+.env
+vendor/
+out/*
+!out/.gitkeep

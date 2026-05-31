@@ -76,25 +76,30 @@ Set `dashboard.enable=false` or remove all `dashboard.*` labels.
 
 ## Development
 
-The Docker container is the single source of truth. Run it; develop against it.
+Hot-reload dev with **no image rebuilds**, served on the **same port as production (http://localhost:8080)**:
 
 ```bash
-# 1. Start the dashboard container (from project root)
+# 1. Backend — runs in-container (host networking) with uvicorn --reload on a
+#    bind-mounted source, so edits hot-reload in place. Brings up the stack too.
+#    Use --build the first time, or when backend deps change.
 docker compose up -d --build dashboard
 
-# 2. Frontend hot-reload (optional — Vite proxies /api to :8080)
-cd dashboard/frontend
-npm install
-npm run dev       # Vite dev server on :5173
-
-# Lint
-npm run lint      # ESLint
-npm run format    # Prettier
-cd ../backend && uvx ruff check app/ && uvx ruff format app/
+# 2. Frontend — native Vite HMR on :8080, proxies /api to the backend on :8081
+cd dashboard/frontend && npm install && npm run dev
 ```
 
-Backend changes: rebuild the container (`docker compose up -d --build dashboard`).
-Do not run a second backend on the host — there's no `/configs` mount outside the container, so it will 404 on Config requests.
+Open **http://localhost:8080**. Edit a `.py` → the container's uvicorn reloads; edit a `.tsx` → instant Vite HMR.
+
+**Why the backend runs in-container (not host-native):** Docker Desktop runs containers inside a VM, and macOS has no route to the proxy bridge/macvlan subnets (`10.20.0.x`, `172.30.0.x`). A host-native backend could only reach services that publish a port, so connectivity probes for bridge-only services (byedpi, frp, mdns, …) would fail. Running the backend on host networking — exactly like production — lets it reach every container's bridge IP. The dev bind-mount + `--reload` wiring lives in `docker-compose.override.yml` (local, uncommitted).
+
+```bash
+# Lint / format
+cd dashboard/frontend && npm run lint && npm run format
+cd dashboard/backend  && uvx ruff check app/ && uvx ruff format app/
+
+# Rebuild the production image (only when testing the artifact)
+docker compose up -d --build dashboard
+```
 
 ## Build
 

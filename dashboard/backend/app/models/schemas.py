@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel
 
 
@@ -113,3 +115,27 @@ class SystemProxyReorderResult(BaseModel):
 class ContainerActionResponse(BaseModel):
     success: bool
     message: str
+
+
+class EdgeTest(BaseModel):
+    sent: int
+    received: int
+    loss: float
+    latency_ms: float
+    ts: datetime
+
+
+class ScannerStatus(BaseModel):
+    scanner_running: bool
+    scanning: bool = False
+    picker_running: bool
+    last_scan: datetime | None = None
+    pool: list[str] = []
+    byedpi_ip: str | None = None
+    snispoof_ip: str | None = None
+    tests: dict[str, EdgeTest] = {}
+    testing_ip: str | None = None
+
+
+class EdgeTestRequest(BaseModel):
+    ip: str

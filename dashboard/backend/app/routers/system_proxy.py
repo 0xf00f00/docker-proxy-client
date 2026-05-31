@@ -5,6 +5,7 @@ requires implementing the SystemProxyController interface."""
 
 import asyncio
 import logging
+from collections.abc import AsyncGenerator
 
 from fastapi import APIRouter, HTTPException
 
@@ -19,9 +20,15 @@ from app.models.schemas import (
 )
 from app.services import ip_lookup, system_proxy
 from app.services.system_proxy.base import SystemProxyController
+from app.sse import event, sse_response
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/system-proxy", tags=["system-proxy"])
+
+# In auto mode the controller re-ranks routes on its own health checks, so the
+# active proxy can change with no user action. Sample this often enough that
+# failover surfaces near-instantly; get_state() is two cheap local API calls.
+STREAM_POLL_SEC = 3.0
 
 
 def _require_controller() -> SystemProxyController:
@@ -39,6 +46,34 @@ async def get_state():
     except Exception:
         logger.exception("Controller get_state failed")
         raise HTTPException(status_code=502, detail="Controller error") from None
+
+
+@router.get("/state/stream")
+async def stream_state():
+    """Push system-proxy state live over SSE.
+
+    Samples ``get_state()`` every ``STREAM_POLL_SEC`` and emits a ``state``
+    event only on change, so auto-mode failover (active proxy switching without
+    user action) shows up promptly without the client polling.
+    """
+    controller = _require_controller()
+
+    async def gen() -> AsyncGenerator[str]:
+        last: str | None = None
+        while True:
+            try:
+                state = await controller.get_state()
+                payload = state.model_dump_json()
+                if payload != last:
+                    yield f"event: state\ndata: {payload}\n\n"
+                    last = payload
+                else:
+                    yield ": ping\n\n"
+            except Exception as e:
+                yield event("stream-error", {"detail": str(e)})
+            await asyncio.sleep(STREAM_POLL_SEC)
+
+    return sse_response(gen())
 
 
 @router.put("/mode", dependencies=[RequireAuth])

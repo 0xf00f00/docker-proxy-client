@@ -8,7 +8,7 @@ import "./app.css";
 
 const queryClient = new QueryClient({
   defaultOptions: {
-    queries: { refetchInterval: 10_000, retry: 1 },
+    queries: { retry: 1 },
   },
 });
 

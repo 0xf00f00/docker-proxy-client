@@ -36,3 +36,7 @@ dashboard/frontend/dist/
 __pycache__/
 .ruff_cache/
 *.tsbuildinfo
+
+xray-fallback/config.json
+sni-spoofing-fallback/config.ini
+coredns/fallback/edge.hosts

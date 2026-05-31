@@ -1,7 +1,7 @@
-import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Network, Globe, Wifi, Loader2, LogIn, LogOut } from "lucide-react";
 import { toast } from "sonner";
-import { logout, testSystemConnectivity, testSystemDns } from "@/api/client";
+import { logout, fetchSystemHealth } from "@/api/client";
 import { AUTH_STATUS_KEY, useAuth } from "@/hooks/useAuth";
 import { cn } from "@/utils/cn";
 
@@ -10,28 +10,24 @@ interface CheckResult {
   latency_ms: number;
 }
 
-// Tighter cadence than proxy probes because these are cheap (one DNS lookup,
-// one HEAD to gstatic). Polling pauses while a speed test or "Test All" is in
-// flight so we don't contend with the user's active measurement.
-const POLL_MS = 10_000;
+// "Is my uplink up?" — a periodic active measurement (one DNS lookup + one HEAD
+// to gstatic), now a single round trip. Polling pauses while a speed test or
+// "Test All" is in flight so we don't contend with the user's active
+// measurement.
+const POLL_MS = 25_000;
 
 export default function Header({ pauseAutoRefresh = false }: { pauseAutoRefresh?: boolean }) {
-  const dns = useQuery({
-    queryKey: ["system-dns"],
-    queryFn: testSystemDns,
-    refetchInterval: pauseAutoRefresh ? false : POLL_MS,
-    retry: 0,
-  });
-  const conn = useQuery({
-    queryKey: ["system-connectivity"],
-    queryFn: testSystemConnectivity,
+  const health = useQuery({
+    queryKey: ["system-health"],
+    queryFn: fetchSystemHealth,
     refetchInterval: pauseAutoRefresh ? false : POLL_MS,
     retry: 0,
   });
 
+  // One fetch backs both pills. On error, blank both so they fail together
+  // rather than showing stale halves; `isFetching`/`isPending` are shared.
   const recheck = () => {
-    dns.refetch();
-    conn.refetch();
+    health.refetch();
   };
 
   return (
@@ -45,8 +41,24 @@ export default function Header({ pauseAutoRefresh = false }: { pauseAutoRefresh?
           <h1 className="truncate text-base font-bold sm:text-lg">Proxy Dashboard</h1>
         </div>
         <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
-          <StatusPill icon={<Globe className="h-3.5 w-3.5" />} label="DNS" query={dns} onClick={recheck} />
-          <StatusPill icon={<Wifi className="h-3.5 w-3.5" />} label="Net" query={conn} onClick={recheck} />
+          <StatusPill
+            icon={<Globe className="h-3.5 w-3.5" />}
+            label="DNS"
+            data={health.isError ? undefined : health.data?.dns}
+            isError={health.isError}
+            isFetching={health.isFetching}
+            isPending={health.isPending}
+            onClick={recheck}
+          />
+          <StatusPill
+            icon={<Wifi className="h-3.5 w-3.5" />}
+            label="Net"
+            data={health.isError ? undefined : health.data?.connectivity}
+            isError={health.isError}
+            isFetching={health.isFetching}
+            isPending={health.isPending}
+            onClick={recheck}
+          />
           <AuthButton />
         </div>
       </div>
@@ -97,15 +109,20 @@ function AuthButton() {
 function StatusPill({
   icon,
   label,
-  query,
+  data,
+  isError,
+  isFetching,
+  isPending,
   onClick,
 }: {
   icon: React.ReactNode;
   label: string;
-  query: UseQueryResult<CheckResult>;
+  data: CheckResult | undefined;
+  isError: boolean;
+  isFetching: boolean;
+  isPending: boolean;
   onClick: () => void;
 }) {
-  const { data, isError, isFetching, isPending } = query;
   // Treat the latest attempt as authoritative: if it errored, ignore stale `data`
   // so the pill collapses to a clean failure state instead of mixing red + a
   // ghost latency from the previous success.
