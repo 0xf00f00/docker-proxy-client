@@ -7,7 +7,9 @@ Maps the generic mode names to Clash's terminology:
 
 import asyncio
 import io
+import json
 import time
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -107,6 +109,29 @@ class ClashController(SystemProxyController):
         except Exception:
             active = None
         return SystemProxyReorderResult(success=True, routes=routes, active=active)
+
+    async def stream_traffic(self) -> AsyncIterator[tuple[int, int]]:
+        """Stream Clash's ``/traffic`` endpoint as (up, down) bytes/sec samples.
+
+        Clash owns the TUN interface, so this is the ground-truth rate for the
+        whole system proxy. Clash emits one newline-delimited JSON object per
+        second. The stream is held open until Clash closes it or errors.
+        """
+        url = f"{settings.clash_api_url}/traffic"
+        async with (
+            httpx.AsyncClient(timeout=None, headers=self._headers()) as c,
+            c.stream("GET", url) as resp,
+        ):
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except ValueError:
+                    continue
+                yield int(data.get("up", 0) or 0), int(data.get("down", 0) or 0)
 
     async def test_latencies(self) -> dict[str, int]:
         state = await self.get_state()

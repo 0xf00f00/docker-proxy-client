@@ -14,6 +14,7 @@ import type {
   ServiceUpdateResult,
   ScannerStatus,
   EdgeTestResponse,
+  TrafficSnapshot,
 } from "@/types";
 
 const api = axios.create({ baseURL: "/api/v1" });
@@ -269,6 +270,17 @@ export function openSystemProxyStream(handlers: SystemProxyStreamHandlers): Even
   if (handlers.onError) {
     jsonEvent<{ detail?: string }>(es, "stream-error", ({ detail }) => handlers.onError!(detail ?? "Stream error"));
   }
+  return es;
+}
+
+export interface TrafficStreamHandlers {
+  onSnapshot: (snapshot: TrafficSnapshot) => void;
+  onError?: (err: Event) => void;
+}
+
+export function openTrafficStream(handlers: TrafficStreamHandlers): EventSource {
+  const es = createEventSource("/api/v1/traffic/stream", handlers.onError);
+  jsonEvent<TrafficSnapshot>(es, "traffic", handlers.onSnapshot);
   return es;
 }
 

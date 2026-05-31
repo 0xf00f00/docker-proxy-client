@@ -1,8 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Network, Globe, Wifi, Loader2, LogIn, LogOut } from "lucide-react";
+import { Network, Globe, Wifi, Loader2, LogIn, LogOut, ArrowDown, ArrowUp } from "lucide-react";
 import { toast } from "sonner";
 import { logout, fetchSystemHealth } from "@/api/client";
 import { AUTH_STATUS_KEY, useAuth } from "@/hooks/useAuth";
+import { useTraffic } from "@/hooks/useTraffic";
+import { formatRate, formatRateShort } from "@/utils/format";
+import Sparkline from "@/components/common/Sparkline";
 import { cn } from "@/utils/cn";
 
 interface CheckResult {
@@ -32,15 +35,18 @@ export default function Header({ pauseAutoRefresh = false }: { pauseAutoRefresh?
 
   return (
     <header
-      className="border-border bg-card/95 supports-[backdrop-filter]:bg-card/80 sticky top-0 z-30 border-b backdrop-blur"
+      className="border-border bg-card border-b"
       style={{ paddingTop: "env(safe-area-inset-top)" }}
     >
       <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 px-3 py-2.5 sm:px-4 sm:py-3">
         <div className="flex min-w-0 items-center gap-2 sm:gap-3">
           <Network className="text-primary h-5 w-5 shrink-0" />
-          <h1 className="truncate text-base font-bold sm:text-lg">Proxy Dashboard</h1>
+          {/* The icon is the brand mark on phones; the wordmark only truncated to
+              "Pr.." there, so show it from sm up where there's room. */}
+          <h1 className="hidden truncate text-base font-bold sm:block sm:text-lg">Proxy Dashboard</h1>
         </div>
         <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+          <TrafficPill />
           <StatusPill
             icon={<Globe className="h-3.5 w-3.5" />}
             label="DNS"
@@ -62,7 +68,80 @@ export default function Header({ pauseAutoRefresh = false }: { pauseAutoRefresh?
           <AuthButton />
         </div>
       </div>
+      <TrafficStrip />
     </header>
+  );
+}
+
+function SkeletonBar({ className }: { className?: string }) {
+  return <span className={cn("inline-block animate-pulse rounded bg-zinc-700/70", className)} aria-hidden="true" />;
+}
+
+/**
+ * Always-on "how busy is the network right now" readout: the system-proxy
+ * total up/down with a 60s sparkline. Three states, so it never reads as broken:
+ * a skeleton until the first sample arrives, an explicit "0" when genuinely idle
+ * (with a flat line), and live numbers when active. Desktop only — the mobile
+ * readout lives in TrafficStrip. Per-proxy detail lives on the cards.
+ */
+function TrafficPill() {
+  const { system, systemHistory, status } = useTraffic();
+  const loading = status === "connecting";
+  const idle = !loading && system.down < 1 && system.up < 1;
+
+  return (
+    <div
+      className={cn(
+        "hidden min-h-9 items-center gap-1.5 rounded-full bg-zinc-800 px-2.5 sm:inline-flex",
+        (loading || idle) && "opacity-80",
+      )}
+      aria-label={loading ? "Network activity — connecting" : `Network activity — download ${formatRate(system.down)}, upload ${formatRate(system.up)}`}
+      title="Live network activity (system proxy)"
+    >
+      <Sparkline down={systemHistory.map((s) => s.down)} up={systemHistory.map((s) => s.up)} />
+      <div className="flex flex-col gap-0.5 text-[10px] leading-none font-medium tabular-nums">
+        <span className={cn("inline-flex items-center gap-0.5", loading || idle ? "text-zinc-500" : "text-sky-400")}>
+          <ArrowDown className="h-2.5 w-2.5 shrink-0" />
+          {loading ? <SkeletonBar className="h-2 w-7" /> : <span className="min-w-[2.25rem]">{idle ? "0" : formatRateShort(system.down)}</span>}
+        </span>
+        <span className={cn("inline-flex items-center gap-0.5", loading || idle ? "text-zinc-500" : "text-emerald-400")}>
+          <ArrowUp className="h-2.5 w-2.5 shrink-0" />
+          {loading ? <SkeletonBar className="h-2 w-7" /> : <span className="min-w-[2.25rem]">{idle ? "0" : formatRateShort(system.up)}</span>}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Mobile counterpart to TrafficPill: a slim full-width strip below the top
+ * header row (sm:hidden). Phones have no spare width in the top row, but plenty
+ * across a dedicated line — so this gets a wider sparkline and full-precision
+ * rates ("1.2 MB/s"), plus an explicit "0 B/s" idle state and a loading skeleton.
+ */
+function TrafficStrip() {
+  const { system, systemHistory, status } = useTraffic();
+  const loading = status === "connecting";
+  const idle = !loading && system.down < 1 && system.up < 1;
+
+  return (
+    <div
+      className="border-border/60 mx-auto flex max-w-3xl items-center gap-3 border-t px-3 py-1.5 sm:hidden"
+      aria-label={loading ? "Network activity — connecting" : `Network activity — download ${formatRate(system.down)}, upload ${formatRate(system.up)}`}
+    >
+      <span className="text-muted text-[10px] font-medium tracking-wide uppercase">Network</span>
+      <Sparkline down={systemHistory.map((s) => s.down)} up={systemHistory.map((s) => s.up)} width={72} height={18} />
+      <div className="ml-auto flex items-center gap-3 text-xs tabular-nums">
+        <span className={cn("inline-flex items-center gap-1", loading || idle ? "text-zinc-500" : "text-sky-400")}>
+          <ArrowDown className="h-3 w-3 shrink-0" />
+          {loading ? <SkeletonBar className="h-3 w-16" /> : idle ? "0 B/s" : formatRate(system.down)}
+        </span>
+        <span className={cn("inline-flex items-center gap-1", loading || idle ? "text-zinc-500" : "text-emerald-400")}>
+          <ArrowUp className="h-3 w-3 shrink-0" />
+          {loading ? <SkeletonBar className="h-3 w-16" /> : idle ? "0 B/s" : formatRate(system.up)}
+        </span>
+      </div>
+    </div>
   );
 }
 

@@ -1,3 +1,4 @@
+from collections.abc import AsyncIterator
 from typing import Protocol, runtime_checkable
 
 from app.models.schemas import SystemProxyReorderResult, SystemProxyState
@@ -31,4 +32,17 @@ class SystemProxyController(Protocol):
 
     async def test_latencies(self) -> dict[str, int]:
         """Probe every route and return a map of name -> latency_ms (-1 for failure)."""
+        ...
+
+
+@runtime_checkable
+class SupportsTrafficStream(Protocol):
+    """Optional capability: a controller that can report whole-system throughput."""
+
+    def stream_traffic(self) -> AsyncIterator[tuple[int, int]]:
+        """Return an async iterator of ``(up_bps, down_bps)`` samples as they arrive.
+
+        Implemented as an async generator. Long-lived: runs until the underlying
+        connection drops, then returns or raises so the caller can reconnect.
+        """
         ...

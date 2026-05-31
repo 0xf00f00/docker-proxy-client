@@ -139,6 +139,13 @@ export interface SystemHealthResult {
   connectivity: SystemConnectivityResult;
 }
 
+/** A live throughput snapshot. All rates are bytes/second. */
+export interface TrafficSnapshot {
+  ts: number;
+  system: { up: number; down: number };
+  proxies: Record<string, number>;
+}
+
 export interface SpeedTestProgress {
   phase: "init" | "server" | "download" | "upload" | "done" | "cancelled" | "error";
   download_mbps: number | null;

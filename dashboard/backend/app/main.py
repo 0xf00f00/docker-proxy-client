@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.middleware import SecurityHeadersMiddleware
 from app.routers import auth as auth_router
-from app.routers import config_editor, connectivity, containers, env_editor, scanner, system, system_proxy
+from app.routers import config_editor, connectivity, containers, env_editor, scanner, system, system_proxy, traffic
 from app.services import docker_service
 
 
@@ -20,7 +20,7 @@ app = FastAPI(title="Proxy Dashboard", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(SecurityHeadersMiddleware)
 
-for module in (auth_router, containers, connectivity, config_editor, system_proxy, system, env_editor, scanner):
+for module in (auth_router, containers, connectivity, config_editor, system_proxy, system, env_editor, scanner, traffic):
     app.include_router(module.router, prefix="/api/v1")
 
 static_dir = Path(__file__).parent.parent / "static"

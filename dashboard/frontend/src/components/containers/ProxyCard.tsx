@@ -20,6 +20,7 @@ import { cn } from "@/utils/cn";
 import { getErrorMessage } from "@/utils/errors";
 import IpFlag from "@/components/common/IpFlag";
 import TelegramIcon from "@/components/common/TelegramIcon";
+import { CardActivityGlow, CardThroughput } from "@/components/containers/CardActivity";
 import { ModalLoadingShell } from "@/components/common/Modal";
 import { isSocksCapable, telegramSocksLink } from "@/utils/telegram";
 
@@ -158,7 +159,8 @@ export default function ProxyCard({ container, connectivity, isTesting = false, 
 
   return (
     <>
-      <div className={cn("border-border bg-card overflow-hidden rounded-xl border", dimmed && "opacity-60")}>
+      <div className={cn("border-border bg-card relative overflow-hidden rounded-xl border", dimmed && "opacity-60")}>
+        {isRunning && <CardActivityGlow name={container.name} />}
         <div
           role="button"
           tabIndex={0}
@@ -174,7 +176,7 @@ export default function ProxyCard({ container, connectivity, isTesting = false, 
             }
           }}
           aria-expanded={expanded}
-          className="flex w-full cursor-pointer items-center gap-3 px-4 py-3.5 text-left select-none active:bg-zinc-800/40 sm:py-4"
+          className="relative z-[1] flex w-full cursor-pointer items-center gap-3 px-4 py-3.5 text-left select-none active:bg-zinc-800/40 sm:py-4"
         >
           <ConnectionIndicator
             conn={conn}
@@ -195,15 +197,20 @@ export default function ProxyCard({ container, connectivity, isTesting = false, 
                 isStopping={isStopping}
               />
             </div>
-            <StatusText
-              conn={conn}
-              state={state}
-              isRestarting={isRestarting}
-              isStarting={isStarting}
-              isStopping={isStopping}
-              testing={testing}
-              canTest={canTest}
-            />
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <StatusText
+                  conn={conn}
+                  state={state}
+                  isRestarting={isRestarting}
+                  isStarting={isStarting}
+                  isStopping={isStopping}
+                  testing={testing}
+                  canTest={canTest}
+                />
+              </div>
+              <CardThroughput name={container.name} running={isRunning} />
+            </div>
           </div>
           {state === "stopped" && !expanded ? (
             <InlineStartButton starting={isStarting} onClick={() => startMutation.mutate()} />
