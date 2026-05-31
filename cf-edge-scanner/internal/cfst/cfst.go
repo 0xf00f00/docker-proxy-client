@@ -71,7 +71,7 @@ func (c Client) Ping(ctx context.Context, ip netip.Addr) (Stats, error) {
 	}
 	outPath := out.Name()
 	_ = out.Close()
-	defer os.Remove(outPath)
+	defer func() { _ = os.Remove(outPath) }()
 
 	args := []string{
 		"-ip", ip.String(),
@@ -127,7 +127,7 @@ func readEdges(path string) ([]Edge, error) {
 		}
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	return parseEdges(f)
 }
 

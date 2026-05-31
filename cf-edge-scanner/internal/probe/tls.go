@@ -31,7 +31,7 @@ func TLSSurvives(ctx context.Context, ip netip.Addr, port int, sni string, hold 
 	if err != nil {
 		return false, err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if dl, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(dl)

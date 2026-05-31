@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Versioned pre-commit hook. Enable in a fresh clone with:
+#   git config core.hooksPath .githooks
+#
+# Runs the cf-edge-scanner CI checks only when staged changes touch that module,
+# so commits elsewhere in the repo are unaffected. Bypass with `git commit -n`.
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+
+if git diff --cached --name-only --diff-filter=ACMR | grep -q '^cf-edge-scanner/.*\.go$\|^cf-edge-scanner/go\.\(mod\|sum\)$'; then
+  echo "cf-edge-scanner changed -- running CI checks"
+  "${repo_root}/cf-edge-scanner/scripts/check.sh"
+fi

@@ -10,6 +10,7 @@ import (
 	"time"
 )
 
+// Config is the scanner's runtime configuration, sourced from the environment.
 type Config struct {
 	// HTTP control API bind address (served on the bridge network, published to
 	// 127.0.0.1 on the host; the host cannot reach the macvlan egress IP).
@@ -51,6 +52,8 @@ type Config struct {
 	TLSGap     time.Duration
 }
 
+// Load reads and validates the configuration from environment variables,
+// applying the documented defaults for any that are unset.
 func Load() (Config, error) {
 	c := Config{
 		APIAddr:         env("CF_API_ADDR", ":8088"),

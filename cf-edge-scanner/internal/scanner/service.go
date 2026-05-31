@@ -20,6 +20,7 @@ import (
 // scanBuffer is small: scans dedup to at most one active job.
 const scanBuffer = 4
 
+// Service owns the scan/test worker lanes, job store, and cfst client.
 type Service struct {
 	cfg   config.Config
 	cf    cfst.Client
@@ -37,6 +38,8 @@ type Service struct {
 	scanCancel context.CancelFunc // cancels the running scan, if any
 }
 
+// New constructs a Service, creating the output directory and loading the
+// persisted job store.
 func New(cfg config.Config, log *slog.Logger) (*Service, error) {
 	if err := os.MkdirAll(cfg.OutDir, 0o755); err != nil {
 		return nil, err
@@ -93,6 +96,7 @@ func (s *Service) Start(ctx context.Context) {
 // Wait blocks until all worker lanes have drained after ctx cancellation.
 func (s *Service) Wait() { s.wg.Wait() }
 
+// Egress reports the source IP the scanner egresses from (the macvlan address).
 func (s *Service) Egress() string { return s.egress }
 
 // CancelScan stops the active scan: an in-flight one via its context, a
@@ -169,7 +173,7 @@ func detectEgress() string {
 	if err != nil {
 		return ""
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	if a, ok := c.LocalAddr().(*net.UDPAddr); ok {
 		return a.IP.String()
 	}

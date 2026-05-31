@@ -6,15 +6,19 @@ import (
 	"time"
 )
 
+// JobType distinguishes a full scan from a single-IP interactive test.
 type JobType string
 
+// Job types.
 const (
 	JobScan JobType = "scan"
 	JobTest JobType = "test"
 )
 
+// JobState is the lifecycle state of a job.
 type JobState string
 
+// Job states.
 const (
 	StateQueued  JobState = "queued"
 	StateRunning JobState = "running"
@@ -24,6 +28,8 @@ const (
 
 func (s JobState) terminal() bool { return s == StateDone || s == StateFailed }
 
+// Job is a unit of work (scan or test) tracked through the store and surfaced
+// to the dashboard.
 type Job struct {
 	ID         string     `json:"id"`
 	Type       JobType    `json:"type"`
