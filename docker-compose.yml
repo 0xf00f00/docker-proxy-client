@@ -486,24 +486,22 @@ services:
       - byedpi
 
   cf-edge-scanner:
-    build:
-      context: ./cf-edge-scanner
-      args:
-        CFST_VERSION: ${CFST_VERSION:-2.3.5}
-    image: cf-edge-scanner:local
+    image: ghcr.io/0xf00f00/docker-proxy-client-cf-edge-scanner:${CF_SCANNER_VERSION:-latest}
     container_name: cf-edge-scanner
     restart: *default-restart
+    init: true   # tini also runs inside the image; belt-and-suspenders zombie reaping
     labels:
       - dashboard.enable=false
-      # Weekly scan schedule, driven by the ofelia sidecar (job-exec drops the
-      # same .scan-now trigger the dashboard uses). NOTE: ofelia cron is 6-field
-      # (leading seconds); default = Mondays 05:00 local (TZ set on ofelia).
+      - autoheal=true   # restart if the /healthz check fails
+      # Weekly scan schedule, driven by the ofelia sidecar (job-exec POSTs to the
+      # scanner's control API, the same call the dashboard makes). NOTE: ofelia
+      # cron is 6-field (leading seconds); default = Mondays 05:00 local (TZ on ofelia).
       - ofelia.enabled=true
       - ofelia.job-exec.weekly-scan.schedule=${CF_SCAN_CRON:-0 0 5 * * 1}
-      - ofelia.job-exec.weekly-scan.command=touch /out/.scan-now
+      - ofelia.job-exec.weekly-scan.command=curl -fsS -XPOST http://127.0.0.1:8088/scans
     environment:
       # Low concurrency on purpose: the uplink is ~2 MB/s and must stay usable
-      # while scanning. -dd (in scan.sh) already drops the bandwidth-heavy phase.
+      # while scanning. The bandwidth-heavy download phase is disabled in cfst.
       - THREADS=${CF_THREADS:-5}
       - PING_COUNT=${CF_PING_COUNT:-10}
       - PORT=${CF_PORT:-443}
@@ -514,17 +512,20 @@ services:
       - TLS_SNI=${CF_TLS_SNI:-hcaptcha.com}
       - SCAN_TIMEOUT=${CF_SCAN_TIMEOUT:-21600}
       - TEST_TIMEOUT=${CF_TEST_TIMEOUT:-180}
+      - CF_TEST_CONCURRENCY=${CF_TEST_CONCURRENCY:-3}
+      - CF_PREFLIGHT=${CF_PREFLIGHT:-true}
+    ports:
+      - "127.0.0.1:${CF_API_PORT:-8088}:8088"
     networks:
       direct_internet:
         ipv4_address: 192.168.88.250
         gw_priority: 1000
+      default: {}
     volumes:
       - ./cf-edge-scanner/cf-ranges.txt:/cf-ranges.txt:ro
       - ./cf-edge-scanner/out:/out
 
-  # Docker-native cron. Reads job labels off other services and execs into them
-  # on schedule -- here, a weekly `touch /out/.scan-now` inside cf-edge-scanner.
-  # Keeps the timer out of the scanner so the heavy sweep only runs when poked.
+  # Docker-native cron
   ofelia:
     image: mcuadros/ofelia:latest
     container_name: ofelia

@@ -89,6 +89,13 @@ export default function ScannerSection() {
   const sawInflight = useRef(false);
   const testMut = useMutation({
     mutationFn: (ip: string) => testEdge(ip),
+    onSuccess: (res, ip) => {
+      // Cooldown hit
+      if (!res.pending) {
+        toast.info(`Skipped — ${ip} was tested recently`);
+        setPendingTest((cur) => (cur === ip ? null : cur));
+      }
+    },
     onError: (e) => toast.error(`Test failed: ${getErrorMessage(e)}`),
   });
   useEffect(() => {

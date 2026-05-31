@@ -53,8 +53,15 @@ export interface EdgeTest {
   ts: string;
 }
 
+export interface EdgeTestResponse {
+  success: boolean;
+  message: string;
+  pending: boolean;
+}
+
 export interface ScannerStatus {
   scanner_running: boolean;
+  scanner_api_reachable: boolean;
   scanning: boolean;
   picker_running: boolean;
   last_scan: string | null;

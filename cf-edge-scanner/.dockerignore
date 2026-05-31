@@ -1,0 +1,16 @@
+# Keep the build context minimal: only Go sources, go.mod, and cf-ranges.txt
+# are needed. Everything below is excluded from the image build.
+.git
+.gitignore
+.dockerignore
+Dockerfile
+*.md
+.golangci.yml
+
+# Test files are never compiled into the binary.
+*_test.go
+
+# Generated scan artifacts (bind-mounted at runtime; never baked in).
+out/
+vendor/
+.env

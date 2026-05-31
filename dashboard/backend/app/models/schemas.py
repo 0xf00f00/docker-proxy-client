@@ -127,6 +127,9 @@ class EdgeTest(BaseModel):
 
 class ScannerStatus(BaseModel):
     scanner_running: bool
+    # False when the scanner's control API is unreachable (status is then served
+    # from the on-disk fallback). Distinct from scanner_running (container up).
+    scanner_api_reachable: bool = True
     scanning: bool = False
     picker_running: bool
     last_scan: datetime | None = None
@@ -140,3 +143,13 @@ class ScannerStatus(BaseModel):
 
 class EdgeTestRequest(BaseModel):
     ip: str
+
+
+class EdgeTestResponse(BaseModel):
+    """Outcome of a single-IP test request. `pending` is True when a fresh probe
+    is actually running (the UI keeps its spinner until a new result streams in)
+    and False when the scanner served a cached result within its cooldown -- that
+    result is already in /scanner/status, so the UI must stop waiting."""
+    success: bool
+    message: str
+    pending: bool

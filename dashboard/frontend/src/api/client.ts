@@ -13,6 +13,7 @@ import type {
   ServiceEnv,
   ServiceUpdateResult,
   ScannerStatus,
+  EdgeTestResponse,
 } from "@/types";
 
 const api = axios.create({ baseURL: "/api/v1" });
@@ -78,8 +79,9 @@ export async function cancelScan(): Promise<void> {
   await api.post("/scanner/cancel");
 }
 
-export async function testEdge(ip: string): Promise<void> {
-  await api.post("/scanner/test", { ip });
+export async function testEdge(ip: string): Promise<EdgeTestResponse> {
+  const { data } = await api.post<EdgeTestResponse>("/scanner/test", { ip });
+  return data;
 }
 
 // ---------- Connectivity ----------

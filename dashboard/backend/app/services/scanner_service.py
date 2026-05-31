@@ -1,6 +1,9 @@
 import ipaddress
+import json
+import os
 import re
-import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -8,29 +11,19 @@ from app.config import settings
 from app.models.schemas import EdgeTest, ScannerStatus
 from app.services import docker_service
 
+# The scanner's Go control API
+_API_BASE = os.environ.get("DASHBOARD_SCANNER_API_URL", "http://127.0.0.1:8088")
+_API_TIMEOUT = 2.0
+# SSE read timeout: must exceed the scanner's heartbeat (15s) so a healthy idle
+# stream isn't torn down; a longer gap means the connection is dead -> reconnect.
+_EVENT_READ_TIMEOUT = 30.0
+
 _BASE = Path(settings.compose_project_path)
 _POOL = _BASE / "cf-edge-scanner" / "out" / "pool.txt"
-_LAST_SCAN = _BASE / "cf-edge-scanner" / "out" / ".last-scan"
-_TRIGGER = _BASE / "cf-edge-scanner" / "out" / ".scan-now"
-_CANCEL = _BASE / "cf-edge-scanner" / "out" / ".scan-stop"
-_SCANNING = _BASE / "cf-edge-scanner" / "out" / ".scanning"
-_TEST_REQ = _BASE / "cf-edge-scanner" / "out" / ".test-request"
-_TESTING = _BASE / "cf-edge-scanner" / "out" / ".testing"
-_TEST_RESULTS = _BASE / "cf-edge-scanner" / "out" / "test-results.txt"
 _BYEDPI_HOSTS = _BASE / "coredns" / "fallback" / "edge.hosts"
 _SNISPOOF_CONF = _BASE / "sni-spoofing-fallback" / "config.ini"
 
 _CONNECT_RE = re.compile(r"^\s*connect\s*=\s*([^:\s]+)", re.MULTILINE)
-
-_STALE_AFTER = 30.0
-
-
-def _fresh(path: Path) -> bool:
-    """True if path exists and was touched within _STALE_AFTER seconds."""
-    try:
-        return (time.time() - path.stat().st_mtime) < _STALE_AFTER
-    except OSError:
-        return False
 
 
 def _running(name: str) -> bool:
@@ -68,79 +61,137 @@ def _snispoof_ip() -> str | None:
 
 
 def _last_scan() -> datetime | None:
+    # pool.txt's mtime: it's rewritten atomically only on a successful scan.
     try:
-        return datetime.fromtimestamp(int(_LAST_SCAN.read_text().strip()), tz=timezone.utc)
-    except (OSError, ValueError):
+        return datetime.fromtimestamp(_POOL.stat().st_mtime, tz=timezone.utc)
+    except OSError:
         return None
 
 
-def _tests() -> dict[str, EdgeTest]:
-    # one line per IP: "<ip> <sent> <received> <loss> <latency_ms> <epoch>"
-    out: dict[str, EdgeTest] = {}
+def _api_get(path: str) -> dict | None:
     try:
-        lines = _TEST_RESULTS.read_text().splitlines()
-    except OSError:
-        return out
-    for line in lines:
-        parts = line.split()
-        if len(parts) != 6:
+        with urllib.request.urlopen(f"{_API_BASE}{path}", timeout=_API_TIMEOUT) as resp:
+            return json.load(resp)
+    except (urllib.error.URLError, OSError, ValueError, TimeoutError):
+        return None
+
+
+def _api_post(path: str, body: dict | None = None) -> dict | None:
+    data = json.dumps(body).encode() if body is not None else b""
+    req = urllib.request.Request(
+        f"{_API_BASE}{path}", data=data, method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=_API_TIMEOUT) as resp:
+        raw = resp.read()
+    try:
+        return json.loads(raw) if raw else None
+    except ValueError:
+        return None
+
+
+def iter_events():
+    """Block on the scanner's SSE event stream, yielding once per pushed event.
+
+    Used purely as a change signal -- the caller re-reads merged status via
+    get_status(). Returns (or raises) on disconnect; the caller reconnects.
+    """
+    req = urllib.request.Request(
+        f"{_API_BASE}/events", headers={"Accept": "text/event-stream"}
+    )
+    with urllib.request.urlopen(req, timeout=_EVENT_READ_TIMEOUT) as resp:
+        for raw in resp:
+            if raw.startswith(b"data:"):
+                yield
+
+
+def _parse_dt(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def _tests_from_api(raw: dict) -> dict[str, EdgeTest]:
+    out: dict[str, EdgeTest] = {}
+    for ip, r in raw.items():
+        ts = _parse_dt(r.get("ts"))
+        if ts is None:
             continue
-        ip, sent, recv, loss, lat, ts = parts
         try:
             out[ip] = EdgeTest(
-                sent=int(sent),
-                received=int(recv),
-                loss=float(loss),
-                latency_ms=float(lat),
-                ts=datetime.fromtimestamp(int(ts), tz=timezone.utc),
+                sent=int(r["sent"]),
+                received=int(r["received"]),
+                loss=float(r["loss"]),
+                latency_ms=float(r["latency_ms"]),
+                ts=ts,
             )
-        except ValueError:
+        except (KeyError, ValueError, TypeError):
             continue
     return out
 
 
-def _testing_ip() -> str | None:
-    # Only report an active test if the marker is fresh -- a stale .testing is a
-    # crash leftover (run.sh records it as failed and clears it on restart).
-    if not _fresh(_TESTING):
-        return None
-    try:
-        return _TESTING.read_text().strip() or None
-    except OSError:
-        return None
-
-
 def get_status() -> ScannerStatus:
+    snap = _api_get("/status")
+    reachable = snap is not None
+    if reachable:
+        scanning = bool(snap.get("scanning", False))
+        last_scan = _parse_dt(snap.get("last_scan"))
+        pool = snap.get("pool") or []
+        tests = _tests_from_api(snap.get("tests") or {})
+        testing_ip = snap.get("testing_ip") or None
+        test_pending = bool(snap.get("test_pending", False))
+    else:
+        # API unreachable: degrade off the only persisted artifacts (pool +
+        # last_scan). Live state (scanning/tests/testing) is simply shown idle.
+        scanning = False
+        last_scan = _last_scan()
+        pool = _pool()
+        tests = {}
+        testing_ip = None
+        test_pending = False
+
     return ScannerStatus(
         scanner_running=_running("cf-edge-scanner"),
-        scanning=_fresh(_SCANNING),
+        scanner_api_reachable=reachable,
+        scanning=scanning,
         picker_running=_running("cf-edge-picker"),
-        last_scan=_last_scan(),
-        pool=_pool(),
+        last_scan=last_scan,
+        pool=pool,
         byedpi_ip=_first_token(_BYEDPI_HOSTS),
         snispoof_ip=_snispoof_ip(),
-        tests=_tests(),
-        testing_ip=_testing_ip(),
-        test_pending=_TEST_REQ.exists(),
+        tests=tests,
+        testing_ip=testing_ip,
+        test_pending=test_pending,
     )
 
 
 def trigger_scan() -> None:
-    _TRIGGER.parent.mkdir(parents=True, exist_ok=True)
-    _TRIGGER.write_text("")
+    _api_post("/scans")
 
 
 def cancel_scan() -> None:
-    # Drop a queued scan by removing its trigger, and stop an in-flight one by
-    # dropping the stop marker the scanner's run-loop watches for. A stale marker
-    # is harmless: the next scan clears it before it starts.
-    _TRIGGER.unlink(missing_ok=True)
-    _CANCEL.parent.mkdir(parents=True, exist_ok=True)
-    _CANCEL.write_text("")
+    _api_post("/scans/cancel")
 
 
-def trigger_test(ip: str) -> None:
+def trigger_test(ip: str) -> bool:
+    """Enqueue an interactive probe of `ip`.
+
+    Returns True when a fresh probe is actually in flight (the dashboard should
+    keep its spinner until a new result streams in), and False when the scanner
+    served a cached result within its cooldown -- in that case no probe runs and
+    no further state change is coming, so the caller must stop waiting and just
+    show the result already present in get_status().
+    """
     # Validate before it reaches the scanner's `cfst -ip <ip>` (injection guard).
     ipaddress.ip_address(ip)
-    _TEST_REQ.parent.mkdir(parents=True, exist_ok=True)
-    _TEST_REQ.write_text(ip)
+    resp = _api_post("/tests", {"ip": ip})
+    job_id = (resp or {}).get("job_id")
+    if not job_id:
+        return False
+    # A cooldown-reused job is already terminal (done/failed); a freshly
+    # enqueued one is queued or running.
+    job = _api_get(f"/jobs/{job_id}") or {}
+    return job.get("state") in ("queued", "running")
