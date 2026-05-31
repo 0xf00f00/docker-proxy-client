@@ -1,12 +1,14 @@
 import asyncio
+import contextlib
 import random
 from collections.abc import AsyncGenerator
 
 from fastapi import APIRouter
 
-from app.models.schemas import ConnectivityResult, ContainerInfo
+from app.models.schemas import ConnectivityResult, ContainerInfo, StabilityResult
 from app.services import connectivity_service, docker_service
-from app.sse import event, sse_response
+from app.services.connectivity_tests import stability
+from app.sse import comment, event, sse_response
 
 router = APIRouter(prefix="/connectivity", tags=["connectivity"])
 
@@ -83,3 +85,72 @@ async def test_single(container_name: str):
     if not container:
         return ConnectivityResult(service=container_name, success=False, error="Container not found", tested_via="n/a")
     return await connectivity_service.test_proxy_connectivity(container)
+
+
+async def _stability_error(container_name: str, detail: str) -> StabilityResult:
+    regime = await stability.regime_mod.get_regime()
+    return StabilityResult(
+        service=container_name, grade="inconclusive", tested_via="n/a", regime=regime,
+        attempts=0, ok=0, resets=0, timeouts=0, other_errors=0,
+        failure_rate=0.0, failure_rate_lower=0.0, error=detail,
+    )
+
+
+@router.get("/stability/{container_name}/stream")
+async def test_stability_stream(container_name: str):
+    """Deep stability probe, streamed (see docs/proxy-stability-detection.md).
+
+    Emits live `phase`/`regime`/`progress` events, then a final `result` (or
+    `error`) and `done`. The probe runs as a background task feeding a queue, so
+    a client disconnect cancels it (tearing down in-flight httpx requests); a
+    heartbeat every 10s keeps intermediaries from dropping an idle stream.
+    """
+    container = await asyncio.to_thread(docker_service.find_dashboard_container, container_name)
+
+    async def gen() -> AsyncGenerator[str]:
+        if not container:
+            result = await _stability_error(container_name, "Container not found")
+            yield event("result", result.model_dump(mode="json"))
+            yield event("done", {})
+            return
+        if not container.dashboard.testable or not container.probe_address:
+            result = await _stability_error(container_name, "Not testable or no probe address")
+            yield event("result", result.model_dump(mode="json"))
+            yield event("done", {})
+            return
+
+        queue: asyncio.Queue[tuple[str, dict] | None] = asyncio.Queue()
+
+        async def on_event(name: str, data: dict) -> None:
+            await queue.put((name, data))
+
+        async def runner() -> None:
+            try:
+                result = await stability.test_stability(container, on_event=on_event)
+                await queue.put(("result", result.model_dump(mode="json")))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                await queue.put(("error", {"detail": str(exc)}))
+            finally:
+                await queue.put(None)  # sentinel: runner finished
+
+        task = asyncio.create_task(runner())
+        try:
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=10.0)
+                except TimeoutError:
+                    yield comment()  # heartbeat — proves the stream is alive
+                    continue
+                if item is None:
+                    break
+                name, data = item
+                yield event(name, data)
+            yield event("done", {})
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    return sse_response(gen())

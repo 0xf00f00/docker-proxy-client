@@ -4,7 +4,7 @@ import os
 import re
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.config import settings
@@ -63,7 +63,7 @@ def _snispoof_ip() -> str | None:
 def _last_scan() -> datetime | None:
     # pool.txt's mtime: it's rewritten atomically only on a successful scan.
     try:
-        return datetime.fromtimestamp(_POOL.stat().st_mtime, tz=timezone.utc)
+        return datetime.fromtimestamp(_POOL.stat().st_mtime, tz=UTC)
     except OSError:
         return None
 

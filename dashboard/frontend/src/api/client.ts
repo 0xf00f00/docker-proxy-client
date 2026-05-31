@@ -3,6 +3,9 @@ import type {
   AuthStatus,
   ContainerListResponse,
   ConnectivityResult,
+  RegimeInfo,
+  StabilityProgress,
+  StabilityResult,
   ConfigFile,
   IpInfo,
   SpeedTestProgress,
@@ -207,6 +210,41 @@ export function openConnectivityStream(handlers: ConnectivityStreamHandlers): Ev
   return es;
 }
 
+export interface StabilityStreamHandlers {
+  onPhase?: (phase: string) => void;
+  onRegime?: (regime: RegimeInfo) => void;
+  onProgress?: (progress: StabilityProgress) => void;
+  onResult: (result: StabilityResult) => void;
+  /** Called once on any abnormal end (connection dropped, server error). */
+  onError: (detail?: string) => void;
+  onDone?: () => void;
+}
+
+/** Open the streamed stability probe. Emits live phase/regime/progress events,
+ *  then a final result. The probe is heavy (~1 min); streaming gives the UI
+ *  real-time feedback and a definite end on success, error, or disconnect. */
+export function openStabilityStream(name: string, handlers: StabilityStreamHandlers): EventSource {
+  const url = `/api/v1/connectivity/stability/${encodeURIComponent(name)}/stream`;
+  // Guard so the terminal callbacks (result/error/done) fire exactly once: a
+  // server-side close right after "done" can also surface as an onerror, and a
+  // mid-run drop must clear loading rather than silently reconnect.
+  let finished = false;
+  const finish = (cb: () => void) => {
+    if (finished) return;
+    finished = true;
+    es.close();
+    cb();
+  };
+  const es = createEventSource(url, () => finish(() => handlers.onError()));
+  jsonEvent<{ phase: string }>(es, "phase", ({ phase }) => handlers.onPhase?.(phase));
+  jsonEvent<RegimeInfo>(es, "regime", (r) => handlers.onRegime?.(r));
+  jsonEvent<StabilityProgress>(es, "progress", (p) => handlers.onProgress?.(p));
+  jsonEvent<StabilityResult>(es, "result", (r) => handlers.onResult(r));
+  jsonEvent<{ detail?: string }>(es, "error", ({ detail }) => finish(() => handlers.onError(detail)));
+  es.addEventListener("done", () => finish(() => handlers.onDone?.()));
+  return es;
+}
+
 export interface LogStreamHandlers {
   onChunk: (text: string) => void;
   onOpen?: () => void;
@@ -222,7 +260,9 @@ export function openLogStream(containerName: string, tail: number, handlers: Log
   if (handlers.onOpen) es.onopen = handlers.onOpen;
   jsonEvent<{ text: string }>(es, "chunk", ({ text }) => handlers.onChunk(text));
   if (handlers.onStreamError) {
-    jsonEvent<{ detail?: string }>(es, "stream-error", ({ detail }) => handlers.onStreamError!(detail ?? "Stream error"));
+    jsonEvent<{ detail?: string }>(es, "stream-error", ({ detail }) =>
+      handlers.onStreamError!(detail ?? "Stream error"),
+    );
   }
   es.addEventListener("end", () => {
     handlers.onEnd?.();

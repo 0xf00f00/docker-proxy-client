@@ -64,6 +64,60 @@ class ConnectivityResult(BaseModel):
     ip_info: IpInfo | None = None
 
 
+class RegimeInfo(BaseModel):
+    """Network-regime classification for a stability batch (see
+    docs/proxy-stability-detection.md §4a). Decides whether a proxy verdict is
+    even meaningful right now, and whether a direct international baseline is
+    usable."""
+
+    # normal | dpi_degraded | iran_only | total_outage | unknown
+    regime: str
+    # Is the direct international path usable as a throughput baseline? False
+    # during Iran-only blackouts / outages — proxy grades are then suppressed.
+    intl_up: bool
+    direct_goodput_mbps: float | None = None
+    detail: str = ""
+
+
+class StabilityResult(BaseModel):
+    """Outcome of an active stability probe for one proxy (§3-§4).
+
+    Unlike ConnectivityResult (one pass/fail + mean latency) this samples the
+    *distribution*: connection-establishment reliability, mid-stream survival,
+    goodput shape, and the latency tail — then grades it.
+    """
+
+    service: str
+    # good | degraded | bad | inconclusive
+    grade: str
+    tested_via: str
+    regime: RegimeInfo
+    # Signal 1 — connection-establishment reliability.
+    attempts: int
+    ok: int
+    resets: int
+    timeouts: int
+    other_errors: int
+    failure_rate: float
+    # Wilson lower bound on the failure rate (small samples can't over-trigger).
+    failure_rate_lower: float
+    # Signal 4 — latency tail (of successful connects), not the mean.
+    latency_p50_ms: float | None = None
+    latency_p95_ms: float | None = None
+    # Signal 3 — goodput shape (MB/s). `goodput_completed` doubles as Signal 2
+    # (mid-stream survival): a download that drops part-way is a survival failure.
+    goodput_mbps: float | None = None
+    goodput_peak_mbps: float | None = None
+    goodput_completed: bool = False
+    stalled: bool = False
+    decayed: bool = False
+    # P / gstatic, only when the direct international baseline was usable.
+    direct_ratio: float | None = None
+    summary: str = ""
+    reasons: list[str] = []
+    error: str | None = None
+
+
 class ConfigFile(BaseModel):
     content: str
     filename: str

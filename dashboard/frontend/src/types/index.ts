@@ -93,6 +93,56 @@ export interface ConnectivityResult {
   ip_info: IpInfo | null;
 }
 
+export type NetworkRegime = "normal" | "dpi_degraded" | "iran_only" | "total_outage" | "unknown";
+
+export interface RegimeInfo {
+  regime: NetworkRegime;
+  intl_up: boolean;
+  direct_goodput_mbps: number | null;
+  detail: string;
+}
+
+export type StabilityGrade = "good" | "degraded" | "bad" | "inconclusive";
+
+export type StabilityPhase = "regime" | "connecting" | "speed";
+
+/** Live progress emitted while a stability probe runs. */
+export interface StabilityProgress {
+  phase: StabilityPhase;
+  done: number;
+  total: number;
+  ok: number;
+  resets: number;
+  timeouts: number;
+  downloaded?: number;
+  download_target?: number;
+}
+
+export interface StabilityResult {
+  service: string;
+  grade: StabilityGrade;
+  tested_via: string;
+  regime: RegimeInfo;
+  attempts: number;
+  ok: number;
+  resets: number;
+  timeouts: number;
+  other_errors: number;
+  failure_rate: number;
+  failure_rate_lower: number;
+  latency_p50_ms: number | null;
+  latency_p95_ms: number | null;
+  goodput_mbps: number | null;
+  goodput_peak_mbps: number | null;
+  goodput_completed: boolean;
+  stalled: boolean;
+  decayed: boolean;
+  direct_ratio: number | null;
+  summary: string;
+  reasons: string[];
+  error: string | null;
+}
+
 export interface ConfigFile {
   content: string;
   filename: string;

@@ -20,7 +20,8 @@ app = FastAPI(title="Proxy Dashboard", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(SecurityHeadersMiddleware)
 
-for module in (auth_router, containers, connectivity, config_editor, system_proxy, system, env_editor, scanner, traffic):
+_routers = (auth_router, containers, connectivity, config_editor, system_proxy, system, env_editor, scanner, traffic)
+for module in _routers:
     app.include_router(module.router, prefix="/api/v1")
 
 static_dir = Path(__file__).parent.parent / "static"

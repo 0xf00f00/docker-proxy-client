@@ -12,10 +12,16 @@ import {
   Power,
   PowerOff,
   Sliders,
+  Activity,
+  ShieldCheck,
+  ShieldAlert,
+  ShieldX,
+  HelpCircle,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { ContainerInfo, ConnectivityResult } from "@/types";
+import type { ContainerInfo, ConnectivityResult, StabilityResult, StabilityGrade, StabilityProgress } from "@/types";
 import { restartContainer, startContainer, stopContainer, testConnectivity } from "@/api/client";
+import { useStabilityCheck } from "@/hooks/useStabilityCheck";
 import { cn } from "@/utils/cn";
 import { getErrorMessage } from "@/utils/errors";
 import IpFlag from "@/components/common/IpFlag";
@@ -75,6 +81,15 @@ type ConfirmKind = "stop" | "restart" | null;
 // Settle delay after a started proxy reports healthy, before auto-probing it.
 const AUTO_TEST_AFTER_START_MS = 1500;
 
+// The stability probe drives traffic through the proxy as a SOCKS/HTTP forward
+// proxy. TLS-handshake proxies (sni-spoofing) and other non-forwarding services
+// can't be exercised this way, so the button is hidden for them rather than
+// shown only to return "unsupported protocol".
+const STABILITY_PROTOCOLS = new Set(["socks5", "socks", "http", "mixed"]);
+function supportsStability(protocol: string): boolean {
+  return STABILITY_PROTOCOLS.has(protocol.split("+")[0] ?? "");
+}
+
 export default function ProxyCard({ container, connectivity, isTesting = false, onTestResult }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [openModal, setOpenModal] = useState<ModalKind>(null);
@@ -117,6 +132,8 @@ export default function ProxyCard({ container, connectivity, isTesting = false, 
     onSuccess: (result) => onTestResult?.(result),
   });
 
+  const stabilityCheck = useStabilityCheck(container.name);
+
   const conn = testMutation.data ?? connectivity;
   const state = lifecycle(container.status, container.health);
   const isRunning = state === "running" || state === "unhealthy" || state === "starting-health";
@@ -128,6 +145,7 @@ export default function ProxyCard({ container, connectivity, isTesting = false, 
   const isTransitioning = isRestarting || isStarting || isStopping;
   const testing = (isTesting || testMutation.isPending) && !isTransitioning;
   const canTest = container.dashboard.testable && !!container.lan_address;
+  const showStability = canTest && isRunning && supportsStability(container.dashboard.protocol);
   const closeModal = () => setOpenModal(null);
 
   // Auto-probe once a just-started proxy is healthy.
@@ -234,6 +252,15 @@ export default function ProxyCard({ container, connectivity, isTesting = false, 
               </div>
             )}
 
+            {showStability && (stabilityCheck.running || stabilityCheck.result || stabilityCheck.error) && (
+              <StabilityPanel
+                result={stabilityCheck.result}
+                progress={stabilityCheck.progress}
+                running={stabilityCheck.running}
+                error={stabilityCheck.error}
+              />
+            )}
+
             {telegramLink && (
               <a
                 href={telegramLink}
@@ -283,6 +310,21 @@ export default function ProxyCard({ container, connectivity, isTesting = false, 
                   }
                 >
                   {isRestarting ? "Restarting…" : "Restart"}
+                </ActionButton>
+              )}
+              {showStability && (
+                <ActionButton
+                  onClick={() => stabilityCheck.start()}
+                  disabled={isTransitioning || stabilityCheck.running}
+                  icon={
+                    stabilityCheck.running ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Activity className="h-3.5 w-3.5" />
+                    )
+                  }
+                >
+                  {stabilityCheck.running ? "Checking…" : "Check stability"}
                 </ActionButton>
               )}
               {container.dashboard.env && container.dashboard.env.length > 0 && (
@@ -512,6 +554,165 @@ function StatusText({
   if (!conn) return <p className="text-muted text-xs">Not tested yet</p>;
   if (conn.success) return <p className="text-xs text-emerald-400">Connected · {conn.latency_ms}ms</p>;
   return <p className="text-destructive truncate text-xs">Cannot connect{conn.error ? ` — ${conn.error}` : ""}</p>;
+}
+
+const GRADE_META: Record<StabilityGrade, { label: string; chip: string; Icon: typeof ShieldCheck; blurb: string }> = {
+  good: {
+    label: "Stable",
+    chip: "bg-emerald-500/15 text-emerald-300",
+    Icon: ShieldCheck,
+    blurb: "Connections are reliable right now.",
+  },
+  degraded: {
+    label: "Shaky",
+    chip: "bg-amber-500/15 text-amber-300",
+    Icon: ShieldAlert,
+    blurb: "Working, but showing signs of trouble.",
+  },
+  bad: {
+    label: "Unstable",
+    chip: "bg-red-500/15 text-red-300",
+    Icon: ShieldX,
+    blurb: "Dropping or throttling connections — consider switching.",
+  },
+  inconclusive: {
+    label: "Can't tell",
+    chip: "bg-zinc-700/60 text-zinc-300",
+    Icon: HelpCircle,
+    blurb: "Couldn't judge this connection right now.",
+  },
+};
+
+// Plain-language explanation for the abnormal regimes, so a non-technical user
+// understands an "inconclusive" result is about the whole internet link, not
+// this specific proxy.
+function regimeBanner(result: StabilityResult): string | null {
+  const r = result.regime.regime;
+  if (r === "iran_only")
+    return "Your internet is in Iran-only mode right now — international sites are blocked for everyone, so no proxy can be judged. This isn't a problem with this proxy.";
+  if (r === "total_outage")
+    return "Your internet appears to be down right now — nothing is reachable. Try again once it's back.";
+  return null;
+}
+
+function progressText(p: StabilityProgress | null): string {
+  if (!p || p.phase === "regime") return "Checking your internet…";
+  if (p.phase === "connecting") return `Testing connections… ${p.done}/${p.total} (${p.ok} OK)`;
+  if (p.phase === "speed") {
+    if (p.downloaded && p.download_target) {
+      const pct = Math.min(100, Math.round((p.downloaded / p.download_target) * 100));
+      return `Measuring speed… ${pct}%`;
+    }
+    return "Measuring speed…";
+  }
+  return "Checking stability…";
+}
+
+function progressPercent(p: StabilityProgress | null): number {
+  if (!p) return 0;
+  // Two weighted phases: connections (0–70%) then download (70–100%).
+  if (p.phase === "regime") return 3;
+  if (p.phase === "connecting") return Math.round((p.done / Math.max(1, p.total)) * 70);
+  if (p.phase === "speed") {
+    const dl = p.downloaded && p.download_target ? p.downloaded / p.download_target : 0;
+    return 70 + Math.round(dl * 30);
+  }
+  return 0;
+}
+
+function StabilityPanel({
+  result,
+  progress,
+  running,
+  error,
+}: {
+  result: StabilityResult | null;
+  progress: StabilityProgress | null;
+  running: boolean;
+  error: string | null;
+}) {
+  // Live, in-progress view — shown until a final result (or error) arrives.
+  if (running && !result) {
+    return (
+      <div className="border-border bg-muted/20 mb-3 rounded-lg border p-3">
+        <div className="flex items-center gap-2">
+          <Loader2 className="text-muted h-4 w-4 shrink-0 animate-spin" />
+          <p className="text-muted text-xs">{progressText(progress)}</p>
+        </div>
+        <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
+          <div
+            className="bg-primary h-full rounded-full transition-[width] duration-500 ease-out"
+            style={{ width: `${progressPercent(progress)}%` }}
+          />
+        </div>
+        {progress && progress.resets > 0 && (
+          <p className="mt-2 text-[11px] text-amber-300">{progress.resets} reset so far</p>
+        )}
+      </div>
+    );
+  }
+
+  // Connection dropped / server error before a result — never leave a spinner.
+  if (error && !result) {
+    return (
+      <div className="border-border bg-muted/20 mb-3 rounded-lg border p-3">
+        <p className="text-destructive text-xs">{error}</p>
+        <p className="text-muted mt-1 text-[11px]">Tap “Check stability” to try again.</p>
+      </div>
+    );
+  }
+
+  if (!result) return null;
+
+  const meta = GRADE_META[result.grade];
+  const banner = regimeBanner(result);
+
+  return (
+    <div className="border-border bg-muted/20 mb-3 rounded-lg border p-3">
+      <div className="flex items-center gap-2">
+        <span
+          className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold", meta.chip)}
+        >
+          <meta.Icon className="h-3.5 w-3.5" />
+          {meta.label}
+        </span>
+        {running && <Loader2 className="text-muted h-3.5 w-3.5 animate-spin" />}
+      </div>
+
+      <p className="text-muted mt-2 text-xs">{meta.blurb}</p>
+
+      {banner && <p className="mt-2 rounded-md bg-zinc-800/60 p-2 text-xs text-zinc-300">{banner}</p>}
+
+      {result.error && !banner && <p className="text-destructive mt-2 text-xs">{result.error}</p>}
+
+      {result.grade !== "inconclusive" && result.attempts > 0 && (
+        <>
+          {result.summary && <p className="text-foreground/80 mt-2 font-mono text-[11px]">{result.summary}</p>}
+          <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+            <Metric label="Connected" value={`${result.ok}/${result.attempts}`} />
+            {result.resets > 0 && <Metric label="Reset by filter" value={String(result.resets)} warn />}
+            {result.timeouts > 0 && <Metric label="Timed out" value={String(result.timeouts)} warn />}
+            {result.goodput_mbps !== null && <Metric label="Speed" value={`${result.goodput_mbps} MB/s`} />}
+            {result.direct_ratio !== null && (
+              <Metric label="vs direct" value={`${Math.round(result.direct_ratio * 100)}%`} />
+            )}
+            {result.latency_p95_ms !== null && (
+              <Metric label="Latency (p95)" value={`${Math.round(result.latency_p95_ms)}ms`} />
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function Metric({ label, value, warn = false }: { label: string; value: string; warn?: boolean }) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-muted">{label}</span>
+      <span className={cn("font-mono", warn ? "text-amber-300" : "text-foreground/80")}>{value}</span>
+    </div>
+  );
 }
 
 function CopyField({ label, value, onCopy }: { label: string; value: string; onCopy: () => void }) {
