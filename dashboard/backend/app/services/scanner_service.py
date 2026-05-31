@@ -1,5 +1,6 @@
 import ipaddress
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -11,6 +12,7 @@ _BASE = Path(settings.compose_project_path)
 _POOL = _BASE / "cf-edge-scanner" / "out" / "pool.txt"
 _LAST_SCAN = _BASE / "cf-edge-scanner" / "out" / ".last-scan"
 _TRIGGER = _BASE / "cf-edge-scanner" / "out" / ".scan-now"
+_CANCEL = _BASE / "cf-edge-scanner" / "out" / ".scan-stop"
 _SCANNING = _BASE / "cf-edge-scanner" / "out" / ".scanning"
 _TEST_REQ = _BASE / "cf-edge-scanner" / "out" / ".test-request"
 _TESTING = _BASE / "cf-edge-scanner" / "out" / ".testing"
@@ -19,6 +21,16 @@ _BYEDPI_HOSTS = _BASE / "coredns" / "fallback" / "edge.hosts"
 _SNISPOOF_CONF = _BASE / "sni-spoofing-fallback" / "config.ini"
 
 _CONNECT_RE = re.compile(r"^\s*connect\s*=\s*([^:\s]+)", re.MULTILINE)
+
+_STALE_AFTER = 30.0
+
+
+def _fresh(path: Path) -> bool:
+    """True if path exists and was touched within _STALE_AFTER seconds."""
+    try:
+        return (time.time() - path.stat().st_mtime) < _STALE_AFTER
+    except OSError:
+        return False
 
 
 def _running(name: str) -> bool:
@@ -88,6 +100,10 @@ def _tests() -> dict[str, EdgeTest]:
 
 
 def _testing_ip() -> str | None:
+    # Only report an active test if the marker is fresh -- a stale .testing is a
+    # crash leftover (run.sh records it as failed and clears it on restart).
+    if not _fresh(_TESTING):
+        return None
     try:
         return _TESTING.read_text().strip() or None
     except OSError:
@@ -97,7 +113,7 @@ def _testing_ip() -> str | None:
 def get_status() -> ScannerStatus:
     return ScannerStatus(
         scanner_running=_running("cf-edge-scanner"),
-        scanning=_SCANNING.exists(),
+        scanning=_fresh(_SCANNING),
         picker_running=_running("cf-edge-picker"),
         last_scan=_last_scan(),
         pool=_pool(),
@@ -105,12 +121,22 @@ def get_status() -> ScannerStatus:
         snispoof_ip=_snispoof_ip(),
         tests=_tests(),
         testing_ip=_testing_ip(),
+        test_pending=_TEST_REQ.exists(),
     )
 
 
 def trigger_scan() -> None:
     _TRIGGER.parent.mkdir(parents=True, exist_ok=True)
     _TRIGGER.write_text("")
+
+
+def cancel_scan() -> None:
+    # Drop a queued scan by removing its trigger, and stop an in-flight one by
+    # dropping the stop marker the scanner's run-loop watches for. A stale marker
+    # is harmless: the next scan clears it before it starts.
+    _TRIGGER.unlink(missing_ok=True)
+    _CANCEL.parent.mkdir(parents=True, exist_ok=True)
+    _CANCEL.write_text("")
 
 
 def trigger_test(ip: str) -> None:

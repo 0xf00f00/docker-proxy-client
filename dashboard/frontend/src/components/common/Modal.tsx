@@ -63,7 +63,7 @@ export default function Modal({
             </div>
           </div>
 
-          <div className="flex-1 overflow-hidden">{children}</div>
+          <div className="relative flex-1 overflow-hidden">{children}</div>
 
           {footer && (
             <div className="border-border flex items-center justify-end gap-2 border-t px-4 py-3">{footer}</div>

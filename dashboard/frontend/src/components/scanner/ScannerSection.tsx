@@ -1,20 +1,30 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Loader2, Power, RotateCw } from "lucide-react";
+import { Loader2, Power, RotateCw, Square } from "lucide-react";
 import { toast } from "sonner";
 import type { EdgeTest, ScannerStatus } from "@/types";
-import { openScannerStream, runScan, startContainer, testEdge } from "@/api/client";
+import { cancelScan, openScannerStream, runScan, startContainer, testEdge } from "@/api/client";
 import { getErrorMessage } from "@/utils/errors";
 import { cn } from "@/utils/cn";
 import { ModalLoadingShell } from "@/components/common/Modal";
 
-const LogsModal = lazy(() => import("@/components/common/LogsModal"));
+const loadLogsModal = () => import("@/components/common/LogsModal");
+const LogsModal = lazy(loadLogsModal);
 
 const SPIN = <Loader2 className="h-3.5 w-3.5 animate-spin" />;
 const LOG = <span className="font-mono text-[10px]">LOG</span>;
 
 type LogTarget = { container: string; name: string } | null;
 type Variant = "default" | "positive" | "destructive";
+
+// In-progress phases of a per-IP test, in the order they occur.
+type TestPhase = "testing" | "queued-scan" | "queued" | "starting";
+const PHASE_LABEL: Record<TestPhase, string> = {
+  testing: "testing…",
+  "queued-scan": "queued · scan running",
+  queued: "queued…",
+  starting: "starting…",
+};
 
 const VARIANT: Record<Variant, string> = {
   default: "text-muted hover:text-foreground bg-zinc-800 active:bg-zinc-700",
@@ -32,6 +42,10 @@ export default function ScannerSection() {
   useEffect(() => {
     const es = openScannerStream({ onStatus: setData });
     return () => es.close();
+  }, []);
+
+  useEffect(() => {
+    void loadLogsModal();
   }, []);
 
   // Optimistic "Scanning…" from click until the scan demonstrably finishes
@@ -55,36 +69,75 @@ export default function ScannerSection() {
     },
     onError: (e) => toast.error(`Scan failed: ${getErrorMessage(e)}`),
   });
+  const cancel = useMutation({
+    mutationFn: cancelScan,
+    onSuccess: () => {
+      toast.success("Stopping scan");
+      setPending(false);
+    },
+    onError: (e) => toast.error(`Stop failed: ${getErrorMessage(e)}`),
+  });
   const start = useMutation({
     mutationFn: () => startContainer("cf-edge-scanner"),
     onSuccess: () => toast.success("Scanner starting"),
     onError: (e) => toast.error(`Start failed: ${getErrorMessage(e)}`),
   });
 
-  // Per-IP reliability test. Optimistic "testing…" from click until that IP's
-  // result timestamp advances (or a timeout), independent of the live marker.
+  // Per-IP reliability test.
   const [pendingTest, setPendingTest] = useState<string | null>(null);
   const testBaseline = useRef<string | undefined>(undefined);
+  const sawInflight = useRef(false);
   const testMut = useMutation({
     mutationFn: (ip: string) => testEdge(ip),
     onError: (e) => toast.error(`Test failed: ${getErrorMessage(e)}`),
   });
   useEffect(() => {
     if (!pendingTest) return;
-    const t = data?.tests?.[pendingTest];
+    const ip = pendingTest;
+    const t = data?.tests?.[ip];
     if (t && t.ts !== testBaseline.current) {
       setPendingTest(null);
       return;
     }
-    const timer = setTimeout(() => setPendingTest(null), 60_000);
+    const running = data?.scanner_running ?? false;
+    const inflight = running && (!!data?.test_pending || data?.testing_ip === ip || !!data?.scanning);
+    if (inflight) {
+      sawInflight.current = true;
+      const timer = setTimeout(() => setPendingTest(null), 15 * 60_000); // hard backstop
+      return () => clearTimeout(timer);
+    }
+    if (sawInflight.current) {
+      const timer = setTimeout(() => {
+        toast.error("Test produced no result — check scanner logs");
+        setPendingTest(null);
+      }, 8_000);
+      return () => clearTimeout(timer);
+    }
+    // Never observed in flight: scanner didn't pick it up. Give it a window, then
+    // give up rather than spin.
+    const timer = setTimeout(() => {
+      if (!(data?.scanner_running ?? false)) toast.error("Scanner isn't running — start it, then test");
+      setPendingTest(null);
+    }, 30_000);
     return () => clearTimeout(timer);
-  }, [pendingTest, data?.tests]);
+  }, [pendingTest, data?.tests, data?.test_pending, data?.testing_ip, data?.scanning, data?.scanner_running]);
   const onTest = (ip: string) => {
     testBaseline.current = data?.tests?.[ip]?.ts;
+    sawInflight.current = false;
     setPendingTest(ip);
     testMut.mutate(ip);
   };
-  const testingIp = pendingTest ?? data?.testing_ip ?? null;
+
+  // The in-progress phase to show for an IP, or null if it isn't being tested.
+  const testPhase = (ip: string): TestPhase | null => {
+    if (data?.testing_ip === ip) return "testing";
+    if (pendingTest !== ip) return null;
+    if (data?.scanning) return "queued-scan";
+    if (data?.test_pending) return "queued";
+    return "starting";
+  };
+  // Block new tests while one is pending/running (avoid piling up requests).
+  const testBusy = pendingTest !== null || data?.testing_ip != null;
 
   const running = data?.scanner_running ?? false;
   const scanning = (data?.scanning ?? false) || pending;
@@ -112,8 +165,8 @@ export default function ScannerSection() {
         </div>
 
         <div className="border-border divide-border grid grid-cols-2 divide-x border-t">
-          <Pick label="Primary edge" ip={data?.byedpi_ip} tests={data?.tests} testingIp={testingIp} onTest={onTest} />
-          <Pick label="Backup edge" ip={data?.snispoof_ip} tests={data?.tests} testingIp={testingIp} onTest={onTest} />
+          <Pick label="Primary edge" ip={data?.byedpi_ip} tests={data?.tests} phaseFor={testPhase} busy={testBusy} running={running} onTest={onTest} />
+          <Pick label="Backup edge" ip={data?.snispoof_ip} tests={data?.tests} phaseFor={testPhase} busy={testBusy} running={running} onTest={onTest} />
         </div>
 
         {data && data.pool.length > 0 && (
@@ -136,8 +189,8 @@ export default function ScannerSection() {
                         {ip}
                         {role && <span className="text-muted"> · {role}</span>}
                       </span>
-                      <EdgeResult test={data.tests?.[ip]} testing={testingIp === ip} />
-                      <TestButton onClick={() => onTest(ip)} disabled={testingIp !== null} testing={testingIp === ip} />
+                      <EdgeResult test={data.tests?.[ip]} phase={testPhase(ip)} />
+                      <TestButton onClick={() => onTest(ip)} disabled={testBusy || !running} busy={testPhase(ip) !== null} />
                     </li>
                   );
                 })}
@@ -147,13 +200,24 @@ export default function ScannerSection() {
         )}
 
         <div className="border-border flex flex-wrap gap-2 border-t px-4 py-3">
-          <Btn
-            onClick={() => scan.mutate()}
-            disabled={busy || scanning || !running}
-            icon={scan.isPending || scanning ? SPIN : <RotateCw className="h-3.5 w-3.5" />}
-          >
-            {scanning ? "Scanning…" : "Scan now"}
-          </Btn>
+          {scanning ? (
+            <Btn
+              onClick={() => cancel.mutate()}
+              disabled={cancel.isPending}
+              variant="destructive"
+              icon={cancel.isPending ? SPIN : <Square className="h-3.5 w-3.5" />}
+            >
+              {cancel.isPending ? "Stopping…" : "Stop scan"}
+            </Btn>
+          ) : (
+            <Btn
+              onClick={() => scan.mutate()}
+              disabled={busy || !running}
+              icon={scan.isPending ? SPIN : <RotateCw className="h-3.5 w-3.5" />}
+            >
+              Scan now
+            </Btn>
+          )}
           {!running && (
             <Btn onClick={() => start.mutate()} disabled={busy} variant="positive" icon={start.isPending ? SPIN : <Power className="h-3.5 w-3.5" />}>
               Start
@@ -179,13 +243,17 @@ function Pick({
   label,
   ip,
   tests,
-  testingIp,
+  phaseFor,
+  busy,
+  running,
   onTest,
 }: {
   label: string;
   ip: string | null | undefined;
   tests: Record<string, EdgeTest> | undefined;
-  testingIp: string | null;
+  phaseFor: (ip: string) => TestPhase | null;
+  busy: boolean;
+  running: boolean;
   onTest: (ip: string) => void;
 }) {
   return (
@@ -194,16 +262,16 @@ function Pick({
       <p className="truncate font-mono text-sm">{ip ?? "—"}</p>
       {ip && (
         <div className="mt-1.5 flex items-center gap-2">
-          <EdgeResult test={tests?.[ip]} testing={testingIp === ip} />
-          <TestButton onClick={() => onTest(ip)} disabled={testingIp !== null} testing={testingIp === ip} />
+          <EdgeResult test={tests?.[ip]} phase={phaseFor(ip)} />
+          <TestButton onClick={() => onTest(ip)} disabled={busy || !running} busy={phaseFor(ip) !== null} />
         </div>
       )}
     </div>
   );
 }
 
-function EdgeResult({ test, testing }: { test?: EdgeTest; testing: boolean }) {
-  if (testing) return <span className="text-muted inline-flex items-center gap-1 text-[10px]">{SPIN} testing…</span>;
+function EdgeResult({ test, phase }: { test?: EdgeTest; phase: TestPhase | null }) {
+  if (phase) return <span className="text-muted inline-flex items-center gap-1 text-[10px]">{SPIN} {PHASE_LABEL[phase]}</span>;
   if (!test) return null;
   const loss = Math.round(test.loss * 100);
   const cls = loss === 0 ? "text-emerald-400" : loss <= 20 ? "text-amber-400" : "text-red-400";
@@ -214,7 +282,7 @@ function EdgeResult({ test, testing }: { test?: EdgeTest; testing: boolean }) {
   );
 }
 
-function TestButton({ onClick, disabled, testing }: { onClick: () => void; disabled: boolean; testing: boolean }) {
+function TestButton({ onClick, disabled, busy }: { onClick: () => void; disabled: boolean; busy: boolean }) {
   return (
     <button
       type="button"
@@ -222,7 +290,7 @@ function TestButton({ onClick, disabled, testing }: { onClick: () => void; disab
       disabled={disabled}
       className="text-muted hover:text-foreground ml-auto shrink-0 rounded bg-zinc-800 px-2.5 py-1.5 text-[10px] font-medium active:bg-zinc-700 disabled:opacity-50"
     >
-      {testing ? "…" : "Test"}
+      {busy ? "…" : "Test"}
     </button>
   );
 }

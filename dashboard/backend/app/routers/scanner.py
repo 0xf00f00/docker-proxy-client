@@ -64,6 +64,16 @@ async def run_now():
 # Public, like the other measurement endpoints (connectivity test, speed test):
 # it only probes one IP's reachability and reports back over the (public)
 # scanner stream — it changes no config. IP is validated as an injection guard.
+@router.post("/cancel", response_model=ContainerActionResponse, dependencies=[RequireAuth])
+async def cancel_now():
+    try:
+        await asyncio.to_thread(scanner_service.cancel_scan)
+        return ContainerActionResponse(success=True, message="Scan stop requested")
+    except Exception:
+        logger.exception("Failed to cancel scan")
+        raise HTTPException(status_code=500, detail="Failed to cancel scan") from None
+
+
 @router.post("/test", response_model=ContainerActionResponse)
 async def test_edge(req: EdgeTestRequest):
     try:

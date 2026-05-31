@@ -1,4 +1,5 @@
 import asyncio
+import codecs
 import contextlib
 import logging
 import threading
@@ -167,10 +168,9 @@ async def stream_containers():
 async def stream_container_logs(container_name: str, tail: int = 200):
     """Follow a container's logs over SSE.
 
-    Emits ``line`` events as each log line lands and a terminal ``end`` event
-    when the container exits or the client disconnects. Lines are accumulated
-    across chunk boundaries before being sent, since docker can split a single
-    log line across two reads.
+    Emits ``chunk`` events carrying the raw decoded log stream (carriage
+    returns, ANSI escapes and all) for an xterm.js terminal to render, plus a
+    terminal ``end`` event when the container exits or the client disconnects.
     """
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue[tuple[str, str] | None] = asyncio.Queue(maxsize=4000)
@@ -191,17 +191,17 @@ async def stream_container_logs(container_name: str, tail: int = 200):
             loop.call_soon_threadsafe(queue.put_nowait, (event_name, data))
 
     def reader() -> None:
-        buffer = b""
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         try:
             for chunk in log_stream:
                 if not chunk:
                     continue
-                buffer += chunk
-                while b"\n" in buffer:
-                    line, _, buffer = buffer.partition(b"\n")
-                    push("line", line.decode("utf-8", errors="replace").rstrip("\r"))
-            if buffer:
-                push("line", buffer.decode("utf-8", errors="replace"))
+                text = decoder.decode(chunk)
+                if text:
+                    push("chunk", text)
+            tail = decoder.decode(b"", final=True)
+            if tail:
+                push("chunk", tail)
         except Exception as e:
             push("stream-error", str(e))
         finally:
@@ -217,8 +217,8 @@ async def stream_container_logs(container_name: str, tail: int = 200):
                 if item is None:
                     break
                 event_name, data = item
-                if event_name == "line":
-                    yield event("line", {"text": data})
+                if event_name == "chunk":
+                    yield event("chunk", {"text": data})
                 else:
                     yield event(event_name, {"detail": data})
             yield event("end", {})

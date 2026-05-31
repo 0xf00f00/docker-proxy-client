@@ -1,5 +1,8 @@
-import { useState, useEffect, useRef, useCallback, useLayoutEffect } from "react";
-import { Pause, Play, Trash2 } from "lucide-react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { Loader2, Pause, Play, Trash2 } from "lucide-react";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import "@xterm/xterm/css/xterm.css";
 import { openLogStream } from "@/api/client";
 import { cn } from "@/utils/cn";
 import Modal from "@/components/common/Modal";
@@ -12,32 +15,96 @@ interface Props {
 
 const INITIAL_TAIL = 200;
 const RESUME_TAIL = 0;
-const MAX_LINES = 5000;
+const SCROLLBACK = 5000;
+const MAX_BUFFER = 1_000_000;
+
+const TERMINAL_THEME = {
+  background: "#09090b", // zinc-950
+  foreground: "#d4d4d8", // zinc-300
+  cursor: "#09090b", // hide the cursor in a read-only viewer (= background)
+  selectionBackground: "#3f3f46", // zinc-700
+};
 
 export default function LogsModal({ containerName, displayName, onClose }: Props) {
-  const [lines, setLines] = useState<string[]>([]);
   const [streaming, setStreaming] = useState(true);
   const [streamError, setStreamError] = useState<string | null>(null);
+  const [hasOutput, setHasOutput] = useState(false);
 
   const esRef = useRef<EventSource | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const termRef = useRef<Terminal | null>(null);
+  const mountRef = useRef<HTMLDivElement>(null);
+  const bufferRef = useRef("");
 
-  // While live, pin to the bottom on every render that changes line count.
-  // useLayoutEffect runs after DOM mutation but before paint, so we never show
-  // a flash of "not-at-bottom" in between new lines arriving.
-  useLayoutEffect(() => {
-    if (!streaming) return;
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [lines, streaming]);
+  useEffect(() => {
+    let term: Terminal | null = null;
+    let fit: FitAddon | null = null;
+    let raf = 0;
+    let ro: ResizeObserver | null = null;
+    let attempts = 0;
+
+    const tick = () => {
+      const mount = mountRef.current;
+      const w = mount?.clientWidth ?? 0;
+      const h = mount?.clientHeight ?? 0;
+
+      if (mount && w > 0 && h > 0) {
+        if (!term) {
+          term = new Terminal({
+            convertEol: true, // docker logs are \n-only; render \n as a full CR+LF
+            scrollback: SCROLLBACK,
+            disableStdin: true,
+            cursorBlink: false,
+            fontSize: 12,
+            fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+            theme: TERMINAL_THEME,
+          });
+          fit = new FitAddon();
+          term.loadAddon(fit);
+          term.open(mount);
+          termRef.current = term;
+          if (bufferRef.current) term.write(bufferRef.current); // replay backlog
+
+          // Once open, keep the terminal fitted to later size changes too.
+          ro = new ResizeObserver(() => {
+            try {
+              fit?.fit();
+            } catch {
+              /* corrected on the next resize */
+            }
+          });
+          ro.observe(mount);
+        }
+        try {
+          fit?.fit();
+        } catch {
+          /* measurement not ready yet; the next frame retries */
+        }
+        if (term.cols !== 80 || term.rows !== 24) return; // settled — stop polling
+      }
+      if (++attempts < 180) raf = requestAnimationFrame(tick); // ~3s safety cap
+    };
+    raf = requestAnimationFrame(tick);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      ro?.disconnect();
+      term?.dispose();
+      term = null;
+      termRef.current = null;
+    };
+  }, []);
 
   const open = useCallback(
     (tail: number) => {
       setStreamError(null);
       setStreaming(true);
       esRef.current = openLogStream(containerName, tail, {
-        onLine: (text) =>
-          setLines((prev) => (prev.length < MAX_LINES ? [...prev, text] : [...prev.slice(-MAX_LINES + 1), text])),
+        onChunk: (text) => {
+          setHasOutput(true);
+          const next = bufferRef.current + text;
+          bufferRef.current = next.length > MAX_BUFFER ? next.slice(-MAX_BUFFER) : next;
+          termRef.current?.write(text);
+        },
         onOpen: () => {
           // Fires on initial connect AND every successful reconnect. After
           // a 401, the SSE wrapper pops the login modal but leaves the
@@ -75,7 +142,12 @@ export default function LogsModal({ containerName, displayName, onClose }: Props
 
   const handlePauseResume = () => (streaming ? close() : open(RESUME_TAIL));
 
-  const hasContent = lines.length > 0;
+  const handleClear = () => {
+    bufferRef.current = "";
+    termRef.current?.reset();
+    setHasOutput(false);
+  };
+
   const isLiveBadge = streaming && !streamError;
 
   return (
@@ -86,10 +158,6 @@ export default function LogsModal({ containerName, displayName, onClose }: Props
       subtitle={
         <div className="flex items-center gap-2">
           <StatusBadge live={isLiveBadge} error={streamError} />
-          <span className="text-muted text-[11px]">
-            {lines.length} {lines.length === 1 ? "line" : "lines"}
-            {lines.length >= MAX_LINES && " (capped)"}
-          </span>
         </div>
       }
       headerActions={
@@ -100,23 +168,27 @@ export default function LogsModal({ containerName, displayName, onClose }: Props
             icon={streaming ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
           />
           <IconButton
-            onClick={() => setLines([])}
+            onClick={handleClear}
             label="Clear logs"
             icon={<Trash2 className="h-4 w-4" />}
-            disabled={!hasContent}
+            disabled={!hasOutput}
           />
         </>
       }
     >
-      <div ref={scrollRef} className="h-full overflow-auto">
-        {!hasContent ? (
-          <div className="text-muted flex h-full items-center justify-center text-sm">
-            {streaming ? "Waiting for log output…" : "No logs."}
+      <div className="absolute inset-0 bg-[#09090b]">
+        <div ref={mountRef} className="absolute inset-0 p-2 sm:p-3" />
+        {!hasOutput && (
+          <div className="text-muted pointer-events-none absolute inset-0 flex items-center justify-center gap-2 text-sm">
+            {streaming && !streamError ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span>Connecting to log stream…</span>
+              </>
+            ) : (
+              <span>{streamError ?? "No logs."}</span>
+            )}
           </div>
-        ) : (
-          <pre className="p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-zinc-300 sm:p-4 sm:text-xs">
-            {lines.join("\n")}
-          </pre>
         )}
       </div>
     </Modal>

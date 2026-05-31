@@ -135,6 +135,7 @@ class ScannerStatus(BaseModel):
     snispoof_ip: str | None = None
     tests: dict[str, EdgeTest] = {}
     testing_ip: str | None = None
+    test_pending: bool = False
 
 
 class EdgeTestRequest(BaseModel):

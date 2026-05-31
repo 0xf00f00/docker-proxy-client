@@ -19,8 +19,9 @@ POOL_SIZE=${POOL_SIZE:-10}
 # open a TLS session, hold it idle (DPI commonly resets idle TLS), then send one
 # tiny request and require a valid Cloudflare trace back. Sequential, spaced,
 # ~1 KB per check -- so it never disturbs normal traffic.
+# Default OFF: this probe is a NAKED handshake
 TLS_CHECK=${TLS_CHECK:-0} # set to 1 to enable; requires openssl in PATH
-TLS_SNI=${TLS_SNI:-cp.cloudflare.com}
+TLS_SNI=${TLS_SNI:-hcaptcha.com}
 TLS_HOLD=${TLS_HOLD:-3}        # idle seconds after handshake before the request
 TLS_TIMEOUT=${TLS_TIMEOUT:-10} # hard cap per candidate
 TLS_GAP=${TLS_GAP:-2}          # polite pause between candidates

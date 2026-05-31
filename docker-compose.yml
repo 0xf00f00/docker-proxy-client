@@ -510,9 +510,10 @@ services:
       - LOSS_MAX=${CF_LOSS_MAX:-0.10}
       - LAT_MAX=${CF_LAT_MAX:-1000}
       - POOL_SIZE=${CF_POOL_SIZE:-10}
-      # TLS-survival gate (post-rank): drop edges DPI resets despite clean ping
-      - TLS_CHECK=${CF_TLS_CHECK:-1}
-      - TLS_SNI=${CF_TLS_SNI:-cp.cloudflare.com}
+      - TLS_CHECK=${CF_TLS_CHECK:-0}
+      - TLS_SNI=${CF_TLS_SNI:-hcaptcha.com}
+      - SCAN_TIMEOUT=${CF_SCAN_TIMEOUT:-21600}
+      - TEST_TIMEOUT=${CF_TEST_TIMEOUT:-180}
     networks:
       direct_internet:
         ipv4_address: 192.168.88.250

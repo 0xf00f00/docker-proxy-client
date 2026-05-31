@@ -63,6 +63,7 @@ export interface ScannerStatus {
   snispoof_ip: string | null;
   tests: Record<string, EdgeTest>;
   testing_ip: string | null;
+  test_pending: boolean;
 }
 
 export interface IpInfo {

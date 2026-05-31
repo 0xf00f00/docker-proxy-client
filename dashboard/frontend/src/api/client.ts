@@ -74,6 +74,10 @@ export async function runScan(): Promise<void> {
   await api.post("/scanner/run");
 }
 
+export async function cancelScan(): Promise<void> {
+  await api.post("/scanner/cancel");
+}
+
 export async function testEdge(ip: string): Promise<void> {
   await api.post("/scanner/test", { ip });
 }
@@ -201,7 +205,7 @@ export function openConnectivityStream(handlers: ConnectivityStreamHandlers): Ev
 }
 
 export interface LogStreamHandlers {
-  onLine: (text: string) => void;
+  onChunk: (text: string) => void;
   onOpen?: () => void;
   onEnd?: () => void;
   onStreamError?: (detail: string) => void;
@@ -213,7 +217,7 @@ export function openLogStream(containerName: string, tail: number, handlers: Log
   // The only auth-gated stream: a 401 here (expired session) should re-prompt login.
   const es = createEventSource(url, handlers.onError, { probeAuth: true });
   if (handlers.onOpen) es.onopen = handlers.onOpen;
-  jsonEvent<{ text: string }>(es, "line", ({ text }) => handlers.onLine(text));
+  jsonEvent<{ text: string }>(es, "chunk", ({ text }) => handlers.onChunk(text));
   if (handlers.onStreamError) {
     jsonEvent<{ detail?: string }>(es, "stream-error", ({ detail }) => handlers.onStreamError!(detail ?? "Stream error"));
   }
