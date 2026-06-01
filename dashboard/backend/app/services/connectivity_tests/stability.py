@@ -6,24 +6,26 @@ conditions that actually break under DPI: connection *concurrency* (what a docke
 pull does) and *sustained load* (what makes a Google Meet call choppy). This
 creates both and grades them separately:
 
-  Bulk  — under many parallel streams, the reset/stall rate.
-  Call  — latency spikes/jitter *while the tunnel is saturated*, which is what
-          governs real-time media quality; average throughput does not.
+  Bulk  — under many parallel DOWNLOAD streams, the reset/stall rate.
+  Call  — latency spikes/jitter while the UPLOAD is saturated. Calls break in the
+          upload direction: the uplink is the scarce side and a single muxed
+          tunnel head-of-line-blocks the call behind bulk bytes. The download
+          direction has headroom, so saturating downloads does NOT reproduce the
+          lag — Call is probed under its own short upload-saturation phase.
 
-Quota: users pay for metered data, so this is kept light. The N streams that
-create the load are each byte-capped, and the latency probes ride *that same*
-load (no separate saturation phase) — so a run moves ~CONCURRENCY x
-STREAM_CAP_BYTES (DATA_BUDGET_MB), not the hundreds of MB a time-capped soak
-would; a DPI reset/stall shows early in a flow, so the cap doesn't hide it.
+Quota: users pay for metered data, so this is kept light. The download streams
+are byte-capped (~CONCURRENCY x STREAM_CAP_BYTES). The upload phase saturates the
+scarce uplink for a fixed UPLOAD_WINDOW_S and is then cancelled, so it moves only
+~uplink-rate x window (a few MB, link-bounded), well under the download budget.
 
-WARNING: it briefly saturates the tunnel, degrading any live user for its
-duration — on-demand / quiet-window only, never an unattended loop.
+WARNING: it briefly saturates the tunnel (both directions), degrading any live
+user for its duration — on-demand / quiet-window only, never an unattended loop.
 """
 
 import asyncio
 import statistics
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 
 import httpx
 
@@ -35,6 +37,17 @@ EventCb = Callable[[str, dict], Awaitable[None]]
 LATENCY_URL = "http://www.gstatic.com/generate_204"
 STREAM_CAP_BYTES = 3_000_000
 LOAD_URL = f"https://speed.cloudflare.com/__down?bytes={STREAM_CAP_BYTES}"
+
+# Upload-saturation (Call) phase. Calls break in the upload direction, so call
+# latency is probed while the uplink is saturated — not during the (healthy)
+# download phase. The uplink is the scarce side, so a short fixed window saturates
+# it on a few streams; we cancel them when the window ends. The per-stream cap is
+# only a ceiling — actual data moved ≈ uplink-rate x window (a few MB).
+UPLOAD_URL = "https://speed.cloudflare.com/__up"
+UPLOAD_CONCURRENCY = 6
+UPLOAD_WINDOW_S = 12.0
+UPLOAD_STREAM_CAP_BYTES = 2_000_000
+UPLOAD_CHUNK = 65_536
 
 CONCURRENCY = 10  # enough parallel streams to trip concurrency-triggered DPI
 STREAM_TIMEOUT = 45.0
@@ -51,12 +64,18 @@ LONGLIVED_COUNT = 2
 LONGLIVED_HOLD_S = 45.0
 LONGLIVED_TRICKLE_S = 15.0
 
-# Worst-case data a run moves (probes are ~0-byte 204s; trickle is negligible).
-DATA_BUDGET_MB = round(CONCURRENCY * STREAM_CAP_BYTES / 1_000_000)
+# Worst-case data ceiling (probes are ~0-byte 204s; trickle is negligible). The
+# upload phase is link-bounded in practice, so the real figure is well under this.
+DATA_BUDGET_MB = round(
+    (CONCURRENCY * STREAM_CAP_BYTES + UPLOAD_CONCURRENCY * UPLOAD_STREAM_CAP_BYTES) / 1_000_000
+)
 
-# Grading. Live-calibrated 2026-05-31: under load p50/p95 stayed ~200ms but max
-# hit 2-3s — calls freeze on those tail spikes, so we grade on max-inflation and
-# the fraction of probes over SPIKE_THRESHOLD, not p95.
+# Grading. Tail-spike based: p50/p95 can look fine while max hits multiple seconds
+# — calls freeze on those spikes, so we grade on max-inflation and the fraction of
+# probes over SPIKE_THRESHOLD, not p95. NOTE: the Call signal now comes from the
+# UPLOAD-saturation phase (see _load_and_probe). The thresholds below were first
+# calibrated under download load (2026-05-31) and likely need re-calibration
+# against upload-loaded numbers, which run higher.
 SPIKE_THRESHOLD_MS = 1000.0  # an RTT spike past this freezes a Meet call
 BULK_BAD_RATE = 0.10
 BULK_DEGRADED_RATE = 0.03
@@ -131,32 +150,69 @@ async def _latency_probe(proxy_url: str) -> float | None:
         return None
 
 
-async def _load_and_probe(proxy_url: str, emit: EventCb) -> dict:
-    """One saturation event serving both signals: CONCURRENCY byte-capped streams
-    are the load (→ reset/stall counts) while latency is probed *during* them (→
-    loaded spikes/jitter/loss). Combining them is what keeps data to DATA_BUDGET_MB
-    instead of running soak and a separate saturation phase back to back."""
-    await emit("progress", {"phase": "idle"})
-    idle = [ms for _ in range(IDLE_PROBES) if (ms := await _latency_probe(proxy_url)) is not None]
-    idle_p50 = _median(idle)
+async def _one_upload_stream(proxy_url: str) -> None:
+    """Saturate the uplink with a byte-capped zero-body POST. The cap is only a
+    ceiling — on a slow uplink the surrounding window cancels the task first, so
+    this moves ~uplink-rate x window, not the cap. Outcome is unused: the Call
+    signal is the latency probed *during* this load, not the stream's fate."""
+    sent = 0
 
-    await emit("progress", {"phase": "load"})
-    streams = [asyncio.create_task(_one_stream(proxy_url)) for _ in range(CONCURRENCY)]
+    async def body() -> AsyncIterator[bytes]:
+        nonlocal sent
+        chunk = b"\x00" * UPLOAD_CHUNK
+        while sent < UPLOAD_STREAM_CAP_BYTES:
+            yield chunk
+            sent += len(chunk)
 
+    try:
+        async with httpx.AsyncClient(proxy=proxy_url, timeout=httpx.Timeout(STREAM_TIMEOUT)) as client:
+            await client.post(UPLOAD_URL, content=body())
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        pass
+
+
+async def _probe_during(proxy_url: str, streams: list[asyncio.Task], deadline: float) -> tuple[list[float], int]:
+    """Probe latency repeatedly while `streams` are the load, until they all
+    finish or `deadline` passes. Returns (loaded_latencies_ms, loss_count)."""
     loaded: list[float] = []
     loss = 0
-    deadline = time.monotonic() + STREAM_TIMEOUT
-    await asyncio.sleep(1.0)  # let the load ramp before the first loaded probe
+    await asyncio.sleep(1.0)  # let the load ramp before the first probe
     while not all(t.done() for t in streams) and time.monotonic() < deadline:
         ms = await _latency_probe(proxy_url)
         if ms is None:
             loss += 1
         else:
             loaded.append(ms)
+    return loaded, loss
 
+
+async def _load_and_probe(proxy_url: str, emit: EventCb) -> dict:
+    """Two load phases over one idle baseline. DOWNLOAD concurrency feeds the Bulk
+    grade (DPI reset/stall under many parallel streams). UPLOAD saturation feeds
+    the Call grade: calls break in the upload direction (scarce uplink + a muxed
+    tunnel that HOL-blocks the call behind bulk), and the download direction has
+    headroom, so probing call latency under downloads would understate the lag."""
+    await emit("progress", {"phase": "idle"})
+    idle = [ms for _ in range(IDLE_PROBES) if (ms := await _latency_probe(proxy_url)) is not None]
+    idle_p50 = _median(idle)
+
+    # Bulk: parallel byte-capped downloads, run to completion → reset/stall counts.
+    await emit("progress", {"phase": "load"})
+    dl = [asyncio.create_task(_one_stream(proxy_url)) for _ in range(CONCURRENCY)]
     counts = {"completed": 0, "reset": 0, "stalled": 0}
-    for o in await asyncio.gather(*streams):
+    for o in await asyncio.gather(*dl):
         counts[o] += 1
+
+    # Call: saturate the uplink for a fixed window, probe latency during it, then
+    # cancel the upload streams to bound the data moved.
+    await emit("progress", {"phase": "load"})
+    ul = [asyncio.create_task(_one_upload_stream(proxy_url)) for _ in range(UPLOAD_CONCURRENCY)]
+    loaded, loss = await _probe_during(proxy_url, ul, time.monotonic() + UPLOAD_WINDOW_S)
+    for t in ul:
+        t.cancel()
+    await asyncio.gather(*ul, return_exceptions=True)
 
     loaded_max = max(loaded) if loaded else None
     probed = len(loaded) + loss

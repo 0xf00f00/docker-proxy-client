@@ -394,7 +394,7 @@ export default function ProxyCard({ container, connectivity, isTesting = false, 
             open
             onOpenChange={(o) => !o && setConfirm(null)}
             title="Check this proxy's stability?"
-            message="This briefly pushes traffic through the proxy (about 30 MB of data) to reveal download drops and call-quality problems. While it runs, anyone using the proxies right now — calls, downloads — will be slower. Best run when no one is online."
+            message="This briefly pushes traffic through the proxy (about 30 MB of downloads plus a short upload burst) to reveal download drops and call-quality problems. While it runs, anyone using the proxies right now — calls, downloads — will be slower. Best run when no one is online."
             confirmLabel="Run check"
             onConfirm={() => {
               setConfirm(null);
