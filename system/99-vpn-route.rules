@@ -1,0 +1,16 @@
+# Re-apply VPN routes whenever the clash TUN device appears.
+#
+# Clash runs network_mode: host, so the TUN it creates lives in the host net
+# namespace and the host can route through it. Every clash (re)start destroys
+# the old utun (udev "remove") and creates a fresh one (udev "add"), which
+# re-fires this rule -- covering manual restarts, `docker compose restart`,
+# dashboard-driven restarts, and autoheal alike.
+#
+# We do NOT apply routes from here: at "add" time the device is registered but
+# not yet UP/attached, and udev kills long-running RUN commands. Instead we hand
+# off to a systemd oneshot (runs independently of udev's timeout) that waits for
+# the interface to be carrier-ready, then applies routes.
+#
+# If clash ever names the device with a suffix (utun0, ...), switch KERNEL to
+# "utun*" and use the templated unit variant (see system/README note).
+SUBSYSTEM=="net", ACTION=="add", KERNEL=="utun", TAG+="systemd", ENV{SYSTEMD_WANTS}="vpn-route-iface.service"

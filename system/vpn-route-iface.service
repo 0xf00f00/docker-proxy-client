@@ -1,0 +1,10 @@
+[Unit]
+Description=Wait for the clash TUN interface to come up, then (re)apply VPN routes
+After=docker.service
+# Rapid clash restarts can re-fire the udev rule repeatedly; never let the
+# start-rate limiter wedge this safety-critical unit.
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/vpn-route-wait.sh utun 30
