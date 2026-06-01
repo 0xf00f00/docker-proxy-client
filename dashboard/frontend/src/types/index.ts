@@ -91,6 +91,15 @@ export interface ConnectivityResult {
   error: string | null;
   tested_via: string;
   ip_info: IpInfo | null;
+  /** ISO-8601 UTC timestamp of when this result was produced; null if un-cached. */
+  tested_at: string | null;
+}
+
+/** Last-known results from the shared backend cache, plus whether anything is
+ *  stale/missing and warrants an auto-probe on load. */
+export interface ConnectivityResults {
+  results: ConnectivityResult[];
+  stale: boolean;
 }
 
 export type NetworkRegime = "normal" | "dpi_degraded" | "iran_only" | "total_outage" | "unknown";
@@ -104,40 +113,37 @@ export interface RegimeInfo {
 
 export type StabilityGrade = "good" | "degraded" | "bad" | "inconclusive";
 
-export type StabilityPhase = "regime" | "connecting" | "speed";
-
-/** Live progress emitted while a stability probe runs. */
+/** Live progress while the stability probe runs (mirrors backend emit phases). */
 export interface StabilityProgress {
-  phase: StabilityPhase;
-  done: number;
-  total: number;
-  ok: number;
-  resets: number;
-  timeouts: number;
-  downloaded?: number;
-  download_target?: number;
+  phase: "regime" | "idle" | "load" | "longlived";
+  /** Long-lived phase only: the fixed hold's length (s). Sent once; the client
+   *  runs the visible countdown locally (a streamed per-tick value can freeze if
+   *  SSE chunks buffer mid-stream). */
+  total_s?: number;
 }
 
 export interface StabilityResult {
   service: string;
-  grade: StabilityGrade;
+  bulk_grade: StabilityGrade;
+  call_grade: StabilityGrade;
   tested_via: string;
   regime: RegimeInfo;
-  attempts: number;
-  ok: number;
+  streams: number;
+  completed: number;
   resets: number;
-  timeouts: number;
-  other_errors: number;
-  failure_rate: number;
-  failure_rate_lower: number;
-  latency_p50_ms: number | null;
-  latency_p95_ms: number | null;
-  goodput_mbps: number | null;
-  goodput_peak_mbps: number | null;
-  goodput_completed: boolean;
-  stalled: boolean;
-  decayed: boolean;
-  direct_ratio: number | null;
+  stalls: number;
+  reset_rate: number;
+  stall_rate: number;
+  idle_p50_ms: number | null;
+  loaded_p50_ms: number | null;
+  loaded_max_ms: number | null;
+  loaded_jitter_ms: number | null;
+  loaded_loss_pct: number | null;
+  loaded_spike_pct: number | null;
+  latency_inflation: number | null;
+  longlived_held: number;
+  longlived_survived: number;
+  longlived_min_ttl_s: number | null;
   summary: string;
   reasons: string[];
   error: string | null;

@@ -1,18 +1,29 @@
-"""Active proxy-stability probe (see docs/proxy-stability-detection.md §3-§4).
+"""Proxy stability probe (see docs/realtime-stability-repro.md).
 
-Unlike the plain connectivity test (3 tries, pass if any, mean latency — tuned
-to *not* fail a flaky link), this samples the distribution and grades its shape,
-catching a "dirty" edge that resets/throttles while still looking fast. Grading
-is regime-gated: during an Iran-only blackout/outage a dead link is
-indistinguishable from a dirty edge, so the grade is "inconclusive".
+A plain connectivity test (one request, mean latency) reports "stable" on
+proxies that are visibly broken in real use, because it never creates the two
+conditions that actually break under DPI: connection *concurrency* (what a docker
+pull does) and *sustained load* (what makes a Google Meet call choppy). This
+creates both and grades them separately:
+
+  Bulk  — under many parallel streams, the reset/stall rate.
+  Call  — latency spikes/jitter *while the tunnel is saturated*, which is what
+          governs real-time media quality; average throughput does not.
+
+Quota: users pay for metered data, so this is kept light. The N streams that
+create the load are each byte-capped, and the latency probes ride *that same*
+load (no separate saturation phase) — so a run moves ~CONCURRENCY x
+STREAM_CAP_BYTES (DATA_BUDGET_MB), not the hundreds of MB a time-capped soak
+would; a DPI reset/stall shows early in a flow, so the cap doesn't hide it.
+
+WARNING: it briefly saturates the tunnel, degrading any live user for its
+duration — on-demand / quiet-window only, never an unattended loop.
 """
 
 import asyncio
-import math
-import random
+import statistics
 import time
 from collections.abc import Awaitable, Callable
-from itertools import pairwise
 
 import httpx
 
@@ -20,34 +31,46 @@ from app.models.schemas import ContainerInfo, RegimeInfo, StabilityResult
 from app.services.connectivity_tests import regime as regime_mod
 
 EventCb = Callable[[str, dict], Awaitable[None]]
-ProgressCb = Callable[[int, dict], Awaitable[None]]
-SampleCb = Callable[[int, int], Awaitable[None]]
 
-RELIABILITY_URL = "http://www.gstatic.com/generate_204"
-# Exact-byte download riding the same CF edges the proxies exit through.
-GOODPUT_BYTES = 3_000_000
-GOODPUT_URL = f"https://speed.cloudflare.com/__down?bytes={GOODPUT_BYTES}"
+LATENCY_URL = "http://www.gstatic.com/generate_204"
+STREAM_CAP_BYTES = 3_000_000
+LOAD_URL = f"https://speed.cloudflare.com/__down?bytes={STREAM_CAP_BYTES}"
 
-ATTEMPTS = 20
-WINDOW_S = 20.0  # spread attempts over time; DPI throttling is often rate-based
-MAX_CONCURRENCY = 2  # never burst a thin uplink (would self-inflict timeouts)
-ATTEMPT_TIMEOUT = 12.0
-GOODPUT_TIMEOUT = 25.0
-GOODPUT_SAMPLE_S = 0.5
-GOODPUT_STALL_S = 3.0  # no-bytes gap that counts as a stall
+CONCURRENCY = 10  # enough parallel streams to trip concurrency-triggered DPI
+STREAM_TIMEOUT = 45.0
+STALL_S = 5.0  # no bytes for this long = stalled
+MIN_BYTES = 2_000_000  # a stream must move this much to count as completed
+IDLE_PROBES = 10
+LATENCY_PROBE_TIMEOUT = 8.0
 
-# Calibrated so 5/20 failures (Wilson-low ≈ 0.12) grades "bad" while 1-2/20 noise
-# stays good/degraded. See docs §4 / §8.
-BAD_FAILURE_LOWER = 0.10
-DEGRADED_FAILURE_LOWER = 0.03
-# Resets trip "bad" at a lower threshold: a reset is the DPI actively tearing the
-# connection down, vs. a timeout the slow uplink could explain.
-BAD_RESET_LOWER = 0.06
-DIRECT_RATIO_BAD = 0.4  # P/gstatic below this (intl up) ⇒ throttled
-P95_JITTER_BAD_MS = 4000.0
+# Long-lived survival: small periodic requests over a held connection — trivial
+# data, models a call with talk gaps (DPI often resets long/idle sessions). The
+# hold still has to outlast typical idle-reset timers, but 45s does that while
+# halving the user's wait; the duration is sent once so the client counts down.
+LONGLIVED_COUNT = 2
+LONGLIVED_HOLD_S = 45.0
+LONGLIVED_TRICKLE_S = 15.0
+
+# Worst-case data a run moves (probes are ~0-byte 204s; trickle is negligible).
+DATA_BUDGET_MB = round(CONCURRENCY * STREAM_CAP_BYTES / 1_000_000)
+
+# Grading. Live-calibrated 2026-05-31: under load p50/p95 stayed ~200ms but max
+# hit 2-3s — calls freeze on those tail spikes, so we grade on max-inflation and
+# the fraction of probes over SPIKE_THRESHOLD, not p95.
+SPIKE_THRESHOLD_MS = 1000.0  # an RTT spike past this freezes a Meet call
+BULK_BAD_RATE = 0.10
+BULK_DEGRADED_RATE = 0.03
+CALL_BAD_INFLATION = 8.0
+CALL_DEGRADED_INFLATION = 4.0
+CALL_BAD_SPIKE_PCT = 3.0
+CALL_DEGRADED_SPIKE_PCT = 0.5
+CALL_BAD_JITTER_MS = 120.0
+CALL_DEGRADED_JITTER_MS = 50.0
+CALL_BAD_LOSS = 5.0
+CALL_DEGRADED_LOSS = 1.0
 
 
-def _build_proxy_url(protocol: str, address: str) -> str | None:
+def _proxy_url(protocol: str, address: str) -> str | None:
     proto = protocol.split("+")[0]
     if proto in ("socks5", "socks"):
         return f"socks5://{address}"
@@ -56,251 +79,195 @@ def _build_proxy_url(protocol: str, address: str) -> str | None:
     return None
 
 
-def _wilson_lower_bound(failures: int, n: int, z: float = 1.2816) -> float:
-    """Lower bound (z≈1.2816 ⇒ ~90%) of the failure rate — gating on it stops a
-    small noisy sample from over-triggering."""
-    if n == 0:
-        return 0.0
-    p = failures / n
-    z2 = z * z
-    denom = 1 + z2 / n
-    centre = p + z2 / (2 * n)
-    margin = z * math.sqrt((p * (1 - p) + z2 / (4 * n)) / n)
-    return max(0.0, (centre - margin) / denom)
-
-
-def _percentile(sorted_vals: list[float], pct: float) -> float | None:
-    if not sorted_vals:
+def _jitter(samples: list[float]) -> float | None:
+    """Mean absolute difference between consecutive samples — the packet-delay-
+    variation definition WebRTC cares about, not raw stdev."""
+    if len(samples) < 2:
         return None
-    if len(sorted_vals) == 1:
-        return sorted_vals[0]
-    rank = pct / 100 * (len(sorted_vals) - 1)
-    lo = math.floor(rank)
-    hi = math.ceil(rank)
-    if lo == hi:
-        return sorted_vals[lo]
-    frac = rank - lo
-    return sorted_vals[lo] * (1 - frac) + sorted_vals[hi] * frac
+    diffs = [abs(samples[i] - samples[i - 1]) for i in range(1, len(samples))]
+    return round(statistics.fmean(diffs), 1)
 
 
-def _classify_error(exc: Exception) -> str:
-    if isinstance(exc, httpx.ConnectTimeout | httpx.ReadTimeout | httpx.PoolTimeout | asyncio.TimeoutError):
-        return "timeout"
-    text = str(exc).lower()
-    if "reset" in text or "broken pipe" in text or "econnreset" in text:
-        return "reset"
-    if "timed out" in text or "timeout" in text:
-        return "timeout"
-    return "other"
+def _median(values: list[float]) -> float | None:
+    return round(statistics.median(values), 1) if values else None
 
 
-async def _one_attempt(proxy_url: str, delay: float) -> tuple[str, float | None]:
-    await asyncio.sleep(delay)
-    # Zero keepalive ⇒ a brand-new TCP+TLS setup each time, which is where the
-    # throttle bites; a reused connection would hide it.
-    limits = httpx.Limits(max_keepalive_connections=0, max_connections=1)
+async def _one_stream(proxy_url: str) -> str:
+    """Stream the byte-capped LOAD_URL, classifying: completed | reset | stalled."""
+    got = 0
     start = time.monotonic()
-    try:
-        async with httpx.AsyncClient(proxy=proxy_url, timeout=ATTEMPT_TIMEOUT, limits=limits) as client:
-            resp = await client.get(RELIABILITY_URL)
-            elapsed = (time.monotonic() - start) * 1000
-            if resp.status_code == 204:
-                return "ok", round(elapsed, 1)
-            return "other", round(elapsed, 1)
-    except Exception as exc:
-        return _classify_error(exc), None
-
-
-async def _reliability(
-    proxy_url: str,
-    on_attempt: ProgressCb | None = None,
-) -> tuple[dict[str, int], list[float]]:
-    sem = asyncio.Semaphore(MAX_CONCURRENCY)
-    step = WINDOW_S / max(1, ATTEMPTS)
-    counts = {"ok": 0, "reset": 0, "timeout": 0, "other": 0}
-    latencies: list[float] = []
-    lock = asyncio.Lock()
-    done = 0
-
-    async def run(i: int) -> None:
-        nonlocal done
-        async with sem:
-            jitter = random.uniform(0, step)
-            outcome, ms = await _one_attempt(proxy_url, i * step + jitter)
-        async with lock:
-            counts[outcome] = counts.get(outcome, 0) + 1
-            if outcome == "ok" and ms is not None:
-                latencies.append(ms)
-            done += 1
-            if on_attempt is not None:
-                await on_attempt(done, dict(counts))
-
-    await asyncio.gather(*(run(i) for i in range(ATTEMPTS)))
-    return counts, latencies
-
-
-async def _goodput(proxy_url: str, on_sample: SampleCb | None = None) -> dict:
-    """Sized download, sampled over time → mean/peak MB/s, stall, decay, and
-    completion (mid-stream survival)."""
-    out = {
-        "mbps": None,
-        "peak_mbps": None,
-        "completed": False,
-        "stalled": False,
-        "decayed": False,
-    }
-    samples: list[tuple[float, int]] = []
-    total = 0
-    start = time.monotonic()
-    last_byte_t = start
-    last_sample_t = start
+    last_byte = start
     try:
         async with (
-            httpx.AsyncClient(proxy=proxy_url, timeout=GOODPUT_TIMEOUT) as client,
-            client.stream("GET", GOODPUT_URL) as resp,
+            httpx.AsyncClient(proxy=proxy_url, timeout=httpx.Timeout(15.0, read=STALL_S + 2)) as client,
+            client.stream("GET", LOAD_URL) as resp,
         ):
             if resp.status_code != 200:
-                return out
+                return "reset"
             async for chunk in resp.aiter_bytes():
                 now = time.monotonic()
                 if chunk:
-                    total += len(chunk)
-                    last_byte_t = now
-                if now - last_sample_t >= GOODPUT_SAMPLE_S:
-                    samples.append((now - start, total))
-                    last_sample_t = now
-                    if on_sample is not None:
-                        await on_sample(total, GOODPUT_BYTES)
-                if now - last_byte_t >= GOODPUT_STALL_S:
-                    out["stalled"] = True
+                    got += len(chunk)
+                    last_byte = now
+                if now - last_byte >= STALL_S:
+                    return "stalled"
+                if now - start >= STREAM_TIMEOUT:
                     break
-                if total >= GOODPUT_BYTES:
-                    out["completed"] = True
-                    break
+        return "completed" if got >= MIN_BYTES else "stalled"
+    except (httpx.ReadTimeout, httpx.ReadError):
+        return "stalled" if (time.monotonic() - last_byte) >= STALL_S else "reset"
     except Exception:
-        # A mid-stream reset / timeout is a survival failure, not a hard error.
-        out["completed"] = False
-
-    elapsed = time.monotonic() - start
-    if elapsed > 0 and total > 0:
-        out["mbps"] = round((total / 1_000_000) / elapsed, 2)
-
-    samples.append((elapsed, total))
-    out["peak_mbps"] = _peak_rate(samples)
-    out["decayed"] = _is_decayed(samples)
-    return out
+        return "reset"
 
 
-def _peak_rate(samples: list[tuple[float, int]]) -> float | None:
-    peak = 0.0
-    for (t0, b0), (t1, b1) in pairwise(samples):
-        dt = t1 - t0
-        if dt > 0:
-            peak = max(peak, ((b1 - b0) / 1_000_000) / dt)
-    return round(peak, 2) if peak > 0 else None
+async def _latency_probe(proxy_url: str) -> float | None:
+    start = time.monotonic()
+    try:
+        limits = httpx.Limits(max_keepalive_connections=0, max_connections=1)
+        async with httpx.AsyncClient(proxy=proxy_url, timeout=LATENCY_PROBE_TIMEOUT, limits=limits) as client:
+            resp = await client.get(LATENCY_URL)
+            return (time.monotonic() - start) * 1000 if resp.status_code == 204 else None
+    except Exception:
+        return None
 
 
-def _is_decayed(samples: list[tuple[float, int]]) -> bool:
-    """Last-third throughput < half the first-third — the "throttle kicks in
-    after a few hundred KB" signature."""
-    if len(samples) < 6:
-        return False
-    third = len(samples) // 3
-    first = samples[: third + 1]
-    last = samples[-third - 1 :]
+async def _load_and_probe(proxy_url: str, emit: EventCb) -> dict:
+    """One saturation event serving both signals: CONCURRENCY byte-capped streams
+    are the load (→ reset/stall counts) while latency is probed *during* them (→
+    loaded spikes/jitter/loss). Combining them is what keeps data to DATA_BUDGET_MB
+    instead of running soak and a separate saturation phase back to back."""
+    await emit("progress", {"phase": "idle"})
+    idle = [ms for _ in range(IDLE_PROBES) if (ms := await _latency_probe(proxy_url)) is not None]
+    idle_p50 = _median(idle)
 
-    def rate(seg: list[tuple[float, int]]) -> float:
-        dt = seg[-1][0] - seg[0][0]
-        db = seg[-1][1] - seg[0][1]
-        return (db / dt) if dt > 0 else 0.0
+    await emit("progress", {"phase": "load"})
+    streams = [asyncio.create_task(_one_stream(proxy_url)) for _ in range(CONCURRENCY)]
 
-    r_first = rate(first)
-    r_last = rate(last)
-    return r_first > 0 and r_last < 0.5 * r_first
+    loaded: list[float] = []
+    loss = 0
+    deadline = time.monotonic() + STREAM_TIMEOUT
+    await asyncio.sleep(1.0)  # let the load ramp before the first loaded probe
+    while not all(t.done() for t in streams) and time.monotonic() < deadline:
+        ms = await _latency_probe(proxy_url)
+        if ms is None:
+            loss += 1
+        else:
+            loaded.append(ms)
+
+    counts = {"completed": 0, "reset": 0, "stalled": 0}
+    for o in await asyncio.gather(*streams):
+        counts[o] += 1
+
+    loaded_max = max(loaded) if loaded else None
+    probed = len(loaded) + loss
+    spike = sum(1 for v in loaded if v > SPIKE_THRESHOLD_MS)
+    return {
+        "streams": CONCURRENCY,
+        "completed": counts["completed"],
+        "resets": counts["reset"],
+        "stalls": counts["stalled"],
+        "reset_rate": round(counts["reset"] / CONCURRENCY, 3),
+        "stall_rate": round(counts["stalled"] / CONCURRENCY, 3),
+        "idle_p50_ms": idle_p50,
+        "loaded_p50_ms": _median(loaded),
+        "loaded_max_ms": round(loaded_max, 1) if loaded_max else None,
+        "loaded_jitter_ms": _jitter(loaded),
+        "loaded_loss_pct": round(100 * loss / probed, 1) if probed else None,
+        "loaded_spike_pct": round(100 * spike / len(loaded), 1) if loaded else None,
+        "latency_inflation": round(loaded_max / idle_p50, 1) if (loaded_max and idle_p50) else None,
+    }
 
 
-def _grade(
-    counts: dict[str, int],
-    failure_lower: float,
-    goodput: dict,
-    direct_ratio: float | None,
-    p95: float | None,
-    regime: RegimeInfo,
-) -> tuple[str, list[str]]:
+async def _hold_one(proxy_url: str) -> float:
+    """Hold a connection open with periodic small requests; return seconds it
+    survived (== HOLD if it never reset)."""
+    start = time.monotonic()
+    try:
+        async with httpx.AsyncClient(proxy=proxy_url, timeout=LATENCY_PROBE_TIMEOUT) as client:
+            while time.monotonic() - start < LONGLIVED_HOLD_S:
+                resp = await client.get(LATENCY_URL)
+                if resp.status_code != 204:
+                    break
+                await asyncio.sleep(LONGLIVED_TRICKLE_S)
+        return time.monotonic() - start
+    except Exception:
+        return time.monotonic() - start
+
+
+async def _longlived(proxy_url: str, emit: EventCb) -> dict:
+    """Hold LONGLIVED_COUNT connections open for the fixed window. We announce the
+    duration *once* and let the browser run the visible countdown locally —
+    streaming a per-second tick is unreliable (SSE chunks can buffer mid-stream
+    and freeze the number), and the duration is fixed so the client can derive it."""
+    await emit("progress", {"phase": "longlived", "total_s": int(LONGLIVED_HOLD_S)})
+    ttls = await asyncio.gather(*(_hold_one(proxy_url) for _ in range(LONGLIVED_COUNT)))
+    return {
+        "held": LONGLIVED_COUNT,
+        "survived": sum(1 for t in ttls if t >= LONGLIVED_HOLD_S - 1),
+        "min_ttl_s": round(min(ttls), 1) if ttls else None,
+    }
+
+
+def _grade_bulk(m: dict, longlived: dict) -> tuple[str, list[str]]:
     reasons: list[str] = []
-    bad = False
-    degraded = False
+    rr, sr = m["reset_rate"], m["stall_rate"]
+    ll_reset = longlived["survived"] < longlived["held"]
 
-    n = sum(counts.values())
-    if failure_lower > BAD_FAILURE_LOWER:
-        bad = True
-        failed = counts["reset"] + counts["timeout"] + counts["other"]
-        reasons.append(f"{failed}/{n} connections failed")
-    elif failure_lower > DEGRADED_FAILURE_LOWER:
-        degraded = True
-        reasons.append("some connections failed")
+    if m["resets"]:
+        reasons.append(f"{m['resets']}/{m['streams']} downloads dropped")
+    if m["stalls"]:
+        reasons.append(f"{m['stalls']}/{m['streams']} downloads stalled")
+    if ll_reset:
+        reasons.append(f"connection dropped after {longlived['min_ttl_s']}s")
 
-    if counts.get("reset", 0) > 0:
-        reset_lower = _wilson_lower_bound(counts["reset"], n)
-        if reset_lower > BAD_RESET_LOWER:
-            bad = True
-        reasons.append(f"{counts['reset']} reset by DPI")
-
-    if goodput.get("mbps") is not None and not goodput.get("completed"):
-        bad = True
-        reasons.append("download dropped mid-transfer")
-    if goodput.get("stalled"):
-        bad = True
-        reasons.append("transfer stalled")
-    if goodput.get("decayed"):
-        degraded = True
-        reasons.append("throughput decayed mid-transfer")
-
-    if direct_ratio is not None and direct_ratio < DIRECT_RATIO_BAD:
-        bad = True
-        reasons.append(f"only {int(direct_ratio * 100)}% of direct speed")
-
-    if p95 is not None and p95 > P95_JITTER_BAD_MS:
-        degraded = True
-        reasons.append(f"high latency tail (p95 {int(p95)}ms)")
-
-    if bad:
+    if rr > BULK_BAD_RATE or sr > BULK_BAD_RATE or ll_reset:
         return "bad", reasons
-    if degraded:
+    if rr > BULK_DEGRADED_RATE or sr > BULK_DEGRADED_RATE:
         return "degraded", reasons
     return "good", reasons
 
 
-def _summary(result_counts: dict[str, int], goodput: dict, p95: float | None, direct_ratio: float | None) -> str:
-    n = sum(result_counts.values())
-    parts = [f"{result_counts['ok']}/{n} OK"]
-    if result_counts.get("reset"):
-        parts.append(f"{result_counts['reset']} resets")
-    if goodput.get("mbps") is not None:
-        s = f"{goodput['mbps']} MB/s"
-        if direct_ratio is not None:
-            s += f" ({int(direct_ratio * 100)}% of direct)"
-        parts.append(s)
-    if p95 is not None:
-        parts.append(f"p95 {int(p95)}ms")
+def _grade_call(m: dict) -> tuple[str, list[str]]:
+    reasons: list[str] = []
+    infl, spike, jit, loss = (
+        m["latency_inflation"], m["loaded_spike_pct"], m["loaded_jitter_ms"], m["loaded_loss_pct"],
+    )
+
+    def over(value: float | None, threshold: float) -> bool:
+        return value is not None and value > threshold
+
+    if m.get("loaded_max_ms") and over(infl, CALL_DEGRADED_INFLATION):
+        reasons.append(f"freezes up to {int(m['loaded_max_ms'])}ms under load")
+    if over(spike, CALL_DEGRADED_SPIKE_PCT):
+        reasons.append(f"{spike}% of checks froze (>1s)")
+    if over(jit, CALL_DEGRADED_JITTER_MS):
+        reasons.append(f"{int(jit)}ms jitter under load")
+    if over(loss, CALL_DEGRADED_LOSS):
+        reasons.append(f"{loss}% loss under load")
+
+    if (over(infl, CALL_BAD_INFLATION) or over(spike, CALL_BAD_SPIKE_PCT)
+            or over(jit, CALL_BAD_JITTER_MS) or over(loss, CALL_BAD_LOSS)):
+        return "bad", reasons
+    if (over(infl, CALL_DEGRADED_INFLATION) or over(spike, CALL_DEGRADED_SPIKE_PCT)
+            or over(jit, CALL_DEGRADED_JITTER_MS) or over(loss, CALL_DEGRADED_LOSS)):
+        return "degraded", reasons
+    return "good", reasons
+
+
+def _summary(m: dict) -> str:
+    parts = [f"{m['completed']}/{m['streams']} downloads OK"]
+    if m.get("loaded_max_ms") is not None:
+        parts.append(f"up to {int(m['loaded_max_ms'])}ms under load")
+    if m.get("loaded_spike_pct"):
+        parts.append(f"{m['loaded_spike_pct']}% froze")
     return " · ".join(parts)
 
 
-def _inconclusive(service: str, proxy_url: str, regime: RegimeInfo) -> StabilityResult:
+def _inconclusive(service: str, tested_via: str, regime: RegimeInfo, detail: str,
+                  error: str | None = None) -> StabilityResult:
     return StabilityResult(
-        service=service,
-        grade="inconclusive",
-        tested_via=proxy_url,
-        regime=regime,
-        attempts=0,
-        ok=0,
-        resets=0,
-        timeouts=0,
-        other_errors=0,
-        failure_rate=0.0,
-        failure_rate_lower=0.0,
-        summary=regime.detail,
-        reasons=[regime.detail],
+        service=service, bulk_grade="inconclusive", call_grade="inconclusive",
+        tested_via=tested_via, regime=regime, summary=detail, reasons=[detail], error=error,
     )
 
 
@@ -309,87 +276,51 @@ async def test_stability(container: ContainerInfo, on_event: EventCb | None = No
         if on_event is not None:
             await on_event(name, data)
 
-    proxy_url = _build_proxy_url(container.dashboard.protocol, container.probe_address or "")
+    proxy_url = _proxy_url(container.dashboard.protocol, container.probe_address or "")
 
     await emit("phase", {"phase": "regime"})
     regime = await regime_mod.get_regime()
     await emit("regime", regime.model_dump(mode="json"))
 
     if proxy_url is None:
-        return StabilityResult(
-            service=container.name,
-            grade="inconclusive",
-            tested_via="n/a",
-            regime=regime,
-            attempts=0, ok=0, resets=0, timeouts=0, other_errors=0,
-            failure_rate=0.0, failure_rate_lower=0.0,
-            error=f"Unsupported protocol: {container.dashboard.protocol}",
-        )
-
-    # Blackout/outage: every edge fails for the same reason (the link), so a
-    # fault can't be attributed to this proxy.
+        detail = f"Unsupported protocol: {container.dashboard.protocol}"
+        return _inconclusive(container.name, "n/a", regime, detail, error=detail)
+    # Blackout/outage: every edge fails for the same reason (the link), so a fault
+    # can't be attributed to this proxy.
     if regime.regime in ("iran_only", "total_outage"):
-        return _inconclusive(container.name, proxy_url, regime)
+        return _inconclusive(container.name, proxy_url, regime, regime.detail)
 
-    async def on_attempt(done: int, counts: dict) -> None:
-        await emit("progress", {
-            "phase": "connecting", "done": done, "total": ATTEMPTS,
-            "ok": counts["ok"], "resets": counts["reset"], "timeouts": counts["timeout"],
-        })
+    await emit("phase", {"phase": "load"})
+    m = await _load_and_probe(proxy_url, emit)
 
-    await emit("phase", {"phase": "connecting"})
-    counts, latencies = await _reliability(proxy_url, on_attempt=on_attempt)
-    n = sum(counts.values())
-    failures = n - counts["ok"]
-    failure_rate = round(failures / n, 3) if n else 0.0
-    failure_lower = round(_wilson_lower_bound(failures, n), 3)
+    await emit("phase", {"phase": "longlived"})
+    longlived = await _longlived(proxy_url, emit)
 
-    latencies.sort()
-    p50 = _percentile(latencies, 50)
-    p95 = _percentile(latencies, 95)
-
-    # Skip goodput when no connection worked — it'd just waste the thin uplink.
-    goodput = {
-        "mbps": None, "peak_mbps": None, "completed": False, "stalled": False, "decayed": False,
-    }
-    if counts["ok"] > 0:
-        async def on_sample(downloaded: int, target: int) -> None:
-            await emit("progress", {
-                "phase": "speed", "done": ATTEMPTS, "total": ATTEMPTS,
-                "ok": counts["ok"], "resets": counts["reset"], "timeouts": counts["timeout"],
-                "downloaded": downloaded, "download_target": target,
-            })
-
-        await emit("phase", {"phase": "speed"})
-        goodput = await _goodput(proxy_url, on_sample=on_sample)
-
-    direct_ratio = None
-    if regime.intl_up and regime.direct_goodput_mbps and goodput.get("mbps"):
-        direct_ratio = round(goodput["mbps"] / regime.direct_goodput_mbps, 2)
-
-    grade, reasons = _grade(counts, failure_lower, goodput, direct_ratio, p95, regime)
-    summary = _summary(counts, goodput, p95, direct_ratio)
+    bulk_grade, bulk_reasons = _grade_bulk(m, longlived)
+    call_grade, call_reasons = _grade_call(m)
 
     return StabilityResult(
         service=container.name,
-        grade=grade,
+        bulk_grade=bulk_grade,
+        call_grade=call_grade,
         tested_via=proxy_url,
         regime=regime,
-        attempts=n,
-        ok=counts["ok"],
-        resets=counts["reset"],
-        timeouts=counts["timeout"],
-        other_errors=counts["other"],
-        failure_rate=failure_rate,
-        failure_rate_lower=failure_lower,
-        latency_p50_ms=round(p50, 1) if p50 is not None else None,
-        latency_p95_ms=round(p95, 1) if p95 is not None else None,
-        goodput_mbps=goodput["mbps"],
-        goodput_peak_mbps=goodput["peak_mbps"],
-        goodput_completed=goodput["completed"],
-        stalled=goodput["stalled"],
-        decayed=goodput["decayed"],
-        direct_ratio=direct_ratio,
-        summary=summary,
-        reasons=reasons,
+        streams=m["streams"],
+        completed=m["completed"],
+        resets=m["resets"],
+        stalls=m["stalls"],
+        reset_rate=m["reset_rate"],
+        stall_rate=m["stall_rate"],
+        idle_p50_ms=m["idle_p50_ms"],
+        loaded_p50_ms=m["loaded_p50_ms"],
+        loaded_max_ms=m["loaded_max_ms"],
+        loaded_jitter_ms=m["loaded_jitter_ms"],
+        loaded_loss_pct=m["loaded_loss_pct"],
+        loaded_spike_pct=m["loaded_spike_pct"],
+        latency_inflation=m["latency_inflation"],
+        longlived_held=longlived["held"],
+        longlived_survived=longlived["survived"],
+        longlived_min_ttl_s=longlived["min_ttl_s"],
+        summary=_summary(m),
+        reasons=bulk_reasons + call_reasons,
     )

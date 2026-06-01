@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { openConnectivityStream } from "@/api/client";
+import { fetchConnectivityResults, openConnectivityStream } from "@/api/client";
 import type { ConnectivityResult } from "@/types";
 
 export interface ConnectivityState {
@@ -11,12 +11,7 @@ export interface ConnectivityState {
 }
 
 /**
- * Runs connectivity tests when the consumer calls `start()`.
- *
- * If `initialDelayMs > 0`, fires once on mount after that delay so the user
- * gets a baseline result without clicking — but never on a recurring schedule,
- * since periodic probes add network load that can interfere with active speed
- * tests and produce false negatives on limited uplinks.
+ * Manages the dashboard's connectivity results
  */
 export function useConnectivityTests({ initialDelayMs = 0 }: { initialDelayMs?: number } = {}): ConnectivityState {
   const [results, setResults] = useState<Record<string, ConnectivityResult>>({});
@@ -28,41 +23,67 @@ export function useConnectivityTests({ initialDelayMs = 0 }: { initialDelayMs?: 
     setResults((prev) => ({ ...prev, [result.service]: result }));
   }, []);
 
-  const start = useCallback(() => {
+  // Open the streamed probe. `maxAgeS === 0` forces a full re-test; omitting it
+  // lets the backend probe only stale/missing proxies and replay the fresh ones.
+  const run = useCallback((maxAgeS?: number) => {
     sourceRef.current?.close();
     setRunning(true);
-    sourceRef.current = openConnectivityStream({
-      onServices: (services) => setTesting(new Set(services)),
-      onResult: (result) => {
-        setResults((prev) => ({ ...prev, [result.service]: result }));
-        setTesting((prev) => {
-          if (!prev.has(result.service)) return prev;
-          const next = new Set(prev);
-          next.delete(result.service);
-          return next;
-        });
+    sourceRef.current = openConnectivityStream(
+      {
+        onServices: (services) => setTesting(new Set(services)),
+        onResult: (result) => {
+          setResults((prev) => ({ ...prev, [result.service]: result }));
+          setTesting((prev) => {
+            if (!prev.has(result.service)) return prev;
+            const next = new Set(prev);
+            next.delete(result.service);
+            return next;
+          });
+        },
+        onDone: () => {
+          setTesting(new Set());
+          setRunning(false);
+        },
+        onError: () => {
+          sourceRef.current?.close();
+          sourceRef.current = null;
+          setTesting(new Set());
+          setRunning(false);
+        },
       },
-      onDone: () => {
-        setTesting(new Set());
-        setRunning(false);
-      },
-      onError: () => {
-        sourceRef.current?.close();
-        sourceRef.current = null;
-        setTesting(new Set());
-        setRunning(false);
-      },
-    });
+      { maxAgeS },
+    );
   }, []);
 
+  // Manual "Test All": force a fresh probe of every proxy regardless of age.
+  const start = useCallback(() => run(0), [run]);
+
   useEffect(() => {
-    const timer = initialDelayMs > 0 ? setTimeout(start, initialDelayMs) : null;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    fetchConnectivityResults()
+      .then(({ results: cached, stale }) => {
+        if (cancelled) return;
+        if (cached.length > 0) {
+          setResults((prev) => {
+            const next = { ...prev };
+            for (const r of cached) next[r.service] = r;
+            return next;
+          });
+        }
+        // Auto-probe only when something is actually stale/missing.
+        if (!stale) return;
+        if (initialDelayMs > 0) timer = setTimeout(() => run(), initialDelayMs);
+        else run();
+      })
+      .catch(() => {});
     return () => {
+      cancelled = true;
       if (timer) clearTimeout(timer);
       sourceRef.current?.close();
       sourceRef.current = null;
     };
-  }, [initialDelayMs, start]);
+  }, [initialDelayMs, run]);
 
   return { results, testing, running, start, recordResult };
 }

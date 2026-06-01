@@ -5,7 +5,7 @@ from collections.abc import AsyncGenerator
 
 from fastapi import APIRouter
 
-from app.models.schemas import ConnectivityResult, ContainerInfo, StabilityResult
+from app.models.schemas import ConnectivityResult, ConnectivityResultsResponse, ContainerInfo
 from app.services import connectivity_service, docker_service
 from app.services.connectivity_tests import stability
 from app.sse import comment, event, sse_response
@@ -18,6 +18,12 @@ router = APIRouter(prefix="/connectivity", tags=["connectivity"])
 MAX_CONCURRENT_PROBES = 2
 LAUNCH_DELAY_MIN_S = 0.15
 LAUNCH_DELAY_MAX_S = 0.5
+
+# How long a cached result counts as "fresh" for auto-probe decisions. Long by
+# design: results carry their age in the UI and a manual "Test All" is always one
+# tap away, so we don't re-probe a limited uplink on every refresh or device
+# switch — only when the data is genuinely old or missing.
+DEFAULT_FRESH_MAX_AGE_S = 6 * 60 * 60  # 6 hours
 
 
 async def _run_staggered(testable: list[ContainerInfo]) -> AsyncGenerator[ConnectivityResult]:
@@ -54,25 +60,52 @@ async def test_all():
     return results
 
 
+@router.get("/results", response_model=ConnectivityResultsResponse)
+async def cached_results(max_age: float = DEFAULT_FRESH_MAX_AGE_S):
+    """Return last-known results from the shared cache without probing anything.
+
+    `stale` is True when any currently-testable proxy is missing a cached result
+    or has one older than `max_age`, so the dashboard knows whether to auto-probe
+    on load. A plain refresh with everything fresh therefore costs no probes.
+    """
+    containers = await asyncio.to_thread(docker_service.list_dashboard_containers)
+    testable = docker_service.filter_testable(containers)
+    stale = any(not connectivity_service.is_fresh(c.name, max_age) for c in testable)
+    return ConnectivityResultsResponse(results=connectivity_service.cached_results(), stale=stale)
+
+
 @router.get("/test/stream")
-async def test_stream():
+async def test_stream(max_age: float = DEFAULT_FRESH_MAX_AGE_S):
     """Stream per-proxy connectivity results as they complete.
 
-    Emits one `services` event with the list of services about to be tested,
-    one `result` event per service in completion order, and a final `done` event.
+    With `max_age > 0` (the default) only proxies whose cached result is missing
+    or older than `max_age` are re-probed; fresh ones are replayed from the cache
+    instantly. Pass `max_age=0` to force a full re-test (the manual "Test All").
+
+    Emits one `services` event listing the services about to be *probed* (so fresh
+    cards never flash a spinner), one `result` event per service — replayed-fresh
+    first, then freshly-probed in completion order — and a final `done` event.
     Probes are launched with jittered delays and a concurrency cap so limited
     networks don't suffer cross-test interference.
     """
     containers = await asyncio.to_thread(docker_service.list_dashboard_containers)
     testable = docker_service.filter_testable(containers)
+    fresh_names = {c.name for c in testable if max_age > 0 and connectivity_service.is_fresh(c.name, max_age)}
+    stale = [c for c in testable if c.name not in fresh_names]
 
     async def gen() -> AsyncGenerator[str]:
-        yield event("services", {"services": [c.name for c in testable]})
-        if not testable:
+        yield event("services", {"services": [c.name for c in stale]})
+        # Replay cached results for the fresh ones so a fresh page hydrates fully.
+        for c in testable:
+            if c.name in fresh_names:
+                cached = connectivity_service.cached_result(c.name)
+                if cached is not None:
+                    yield event("result", cached.model_dump(mode="json"))
+        if not stale:
             yield event("done", {})
             return
 
-        async for result in _run_staggered(testable):
+        async for result in _run_staggered(stale):
             yield event("result", result.model_dump(mode="json"))
         yield event("done", {})
 
@@ -87,35 +120,23 @@ async def test_single(container_name: str):
     return await connectivity_service.test_proxy_connectivity(container)
 
 
-async def _stability_error(container_name: str, detail: str) -> StabilityResult:
-    regime = await stability.regime_mod.get_regime()
-    return StabilityResult(
-        service=container_name, grade="inconclusive", tested_via="n/a", regime=regime,
-        attempts=0, ok=0, resets=0, timeouts=0, other_errors=0,
-        failure_rate=0.0, failure_rate_lower=0.0, error=detail,
-    )
-
-
-@router.get("/stability/{container_name}/stream")
-async def test_stability_stream(container_name: str):
-    """Deep stability probe, streamed (see docs/proxy-stability-detection.md).
-
-    Emits live `phase`/`regime`/`progress` events, then a final `result` (or
-    `error`) and `done`. The probe runs as a background task feeding a queue, so
-    a client disconnect cancels it (tearing down in-flight httpx requests); a
-    heartbeat every 10s keeps intermediaries from dropping an idle stream.
+def _stream_probe(container_name: str, run):
+    """SSE wrapper shared by the stability probes. `run(container, on_event)` is
+    the probe coroutine; its events are forwarded live and its return value is
+    sent as a final `result`. The probe runs as a background task feeding a
+    queue, so a client disconnect cancels it (tearing down in-flight httpx
+    requests); a heartbeat every 10s keeps intermediaries from dropping an idle
+    stream.
     """
-    container = await asyncio.to_thread(docker_service.find_dashboard_container, container_name)
 
     async def gen() -> AsyncGenerator[str]:
+        container = await asyncio.to_thread(docker_service.find_dashboard_container, container_name)
         if not container:
-            result = await _stability_error(container_name, "Container not found")
-            yield event("result", result.model_dump(mode="json"))
+            yield event("error", {"detail": "Container not found"})
             yield event("done", {})
             return
         if not container.dashboard.testable or not container.probe_address:
-            result = await _stability_error(container_name, "Not testable or no probe address")
-            yield event("result", result.model_dump(mode="json"))
+            yield event("error", {"detail": "Not testable or no probe address"})
             yield event("done", {})
             return
 
@@ -126,14 +147,14 @@ async def test_stability_stream(container_name: str):
 
         async def runner() -> None:
             try:
-                result = await stability.test_stability(container, on_event=on_event)
+                result = await run(container, on_event)
                 await queue.put(("result", result.model_dump(mode="json")))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 await queue.put(("error", {"detail": str(exc)}))
             finally:
-                await queue.put(None)  # sentinel: runner finished
+                await queue.put(None)
 
         task = asyncio.create_task(runner())
         try:
@@ -154,3 +175,13 @@ async def test_stability_stream(container_name: str):
                 await task
 
     return sse_response(gen())
+
+
+@router.get("/stability/{container_name}/stream")
+async def test_stability_stream(container_name: str):
+    """Stability probe, streamed (see docs/realtime-stability-repro.md).
+
+    DISRUPTIVE: it briefly saturates the tunnel to reproduce download drops and
+    call degradation, so it hurts any live user for its duration. On-demand only.
+    """
+    return _stream_probe(container_name, stability.test_stability)

@@ -76,7 +76,7 @@ function modalLoadingTitle(kind: Exclude<ModalKind, null>, displayName: string):
   return `${displayName} — Logs`;
 }
 
-type ConfirmKind = "stop" | "restart" | null;
+type ConfirmKind = "stop" | "restart" | "stability" | null;
 
 // Settle delay after a started proxy reports healthy, before auto-probing it.
 const AUTO_TEST_AFTER_START_MS = 1500;
@@ -314,7 +314,7 @@ export default function ProxyCard({ container, connectivity, isTesting = false, 
               )}
               {showStability && (
                 <ActionButton
-                  onClick={() => stabilityCheck.start()}
+                  onClick={() => setConfirm("stability")}
                   disabled={isTransitioning || stabilityCheck.running}
                   icon={
                     stabilityCheck.running ? (
@@ -385,6 +385,19 @@ export default function ProxyCard({ container, connectivity, isTesting = false, 
             confirmLabel="Restart"
             busy={restartMutation.isPending}
             onConfirm={() => restartMutation.mutate()}
+          />
+        )}
+        {confirm === "stability" && (
+          <ConfirmDialog
+            open
+            onOpenChange={(o) => !o && setConfirm(null)}
+            title="Check this proxy's stability?"
+            message="This briefly pushes traffic through the proxy (about 30 MB of data) to reveal download drops and call-quality problems. While it runs, anyone using the proxies right now — calls, downloads — will be slower. Best run when no one is online."
+            confirmLabel="Run check"
+            onConfirm={() => {
+              setConfirm(null);
+              stabilityCheck.start();
+            }}
           />
         )}
       </Suspense>
@@ -552,72 +565,89 @@ function StatusText({
   if (state === "unhealthy") return <p className="text-xs text-red-300">Container reports unhealthy</p>;
   if (!canTest) return <p className="text-muted text-xs">Running</p>;
   if (!conn) return <p className="text-muted text-xs">Not tested yet</p>;
-  if (conn.success) return <p className="text-xs text-emerald-400">Connected · {conn.latency_ms}ms</p>;
-  return <p className="text-destructive truncate text-xs">Cannot connect{conn.error ? ` — ${conn.error}` : ""}</p>;
+  const age = formatAge(conn.tested_at);
+  if (conn.success)
+    return (
+      <p className="text-xs text-emerald-400">
+        Connected · {conn.latency_ms}ms{age && <span className="text-muted"> · {age}</span>}
+      </p>
+    );
+  return (
+    <p className="text-destructive truncate text-xs">
+      Cannot connect{conn.error ? ` — ${conn.error}` : ""}
+      {age && <span className="text-muted"> · {age}</span>}
+    </p>
+  );
 }
 
-const GRADE_META: Record<StabilityGrade, { label: string; chip: string; Icon: typeof ShieldCheck; blurb: string }> = {
-  good: {
-    label: "Stable",
-    chip: "bg-emerald-500/15 text-emerald-300",
-    Icon: ShieldCheck,
-    blurb: "Connections are reliable right now.",
-  },
-  degraded: {
-    label: "Shaky",
-    chip: "bg-amber-500/15 text-amber-300",
-    Icon: ShieldAlert,
-    blurb: "Working, but showing signs of trouble.",
-  },
-  bad: {
-    label: "Unstable",
-    chip: "bg-red-500/15 text-red-300",
-    Icon: ShieldX,
-    blurb: "Dropping or throttling connections — consider switching.",
-  },
-  inconclusive: {
-    label: "Can't tell",
-    chip: "bg-zinc-700/60 text-zinc-300",
-    Icon: HelpCircle,
-    blurb: "Couldn't judge this connection right now.",
-  },
+function formatAge(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return null;
+  const secs = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (secs < 45) return "just now";
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+const GRADE_META: Record<StabilityGrade, { label: string; chip: string; Icon: typeof ShieldCheck }> = {
+  good: { label: "Good", chip: "bg-emerald-500/15 text-emerald-300", Icon: ShieldCheck },
+  degraded: { label: "Shaky", chip: "bg-amber-500/15 text-amber-300", Icon: ShieldAlert },
+  bad: { label: "Poor", chip: "bg-red-500/15 text-red-300", Icon: ShieldX },
+  inconclusive: { label: "Can't tell", chip: "bg-zinc-700/60 text-zinc-300", Icon: HelpCircle },
 };
 
-// Plain-language explanation for the abnormal regimes, so a non-technical user
-// understands an "inconclusive" result is about the whole internet link, not
-// this specific proxy.
+const PROGRESS_TEXT: Record<StabilityProgress["phase"], string> = {
+  regime: "Checking your internet…",
+  idle: "Measuring normal speed…",
+  load: "Stress-testing downloads & calls…",
+  longlived: "Testing long connections…",
+};
+
+function useLonglivedCountdown(progress: StabilityProgress | null, running: boolean): number | null {
+  const [remaining, setRemaining] = useState<number | null>(null);
+  const total = progress?.phase === "longlived" ? (progress.total_s ?? null) : null;
+  useEffect(() => {
+    if (!running || total == null) {
+      setRemaining(null);
+      return;
+    }
+    setRemaining(total);
+    const id = setInterval(() => setRemaining((r) => (r == null ? r : Math.max(0, r - 1))), 1000);
+    return () => clearInterval(id);
+  }, [running, total]);
+  return remaining;
+}
+
+function progressText(progress: StabilityProgress | null, countdown: number | null): string {
+  const phase = progress?.phase ?? "regime";
+  if (phase === "longlived" && countdown != null) {
+    return `Testing long connections… ${countdown}s left`;
+  }
+  return PROGRESS_TEXT[phase];
+}
+
+// Abnormal regimes are about the whole internet link, not this proxy — say so in
+// plain language so a non-technical user doesn't blame the proxy.
 function regimeBanner(result: StabilityResult): string | null {
-  const r = result.regime.regime;
-  if (r === "iran_only")
+  if (result.regime.regime === "iran_only")
     return "Your internet is in Iran-only mode right now — international sites are blocked for everyone, so no proxy can be judged. This isn't a problem with this proxy.";
-  if (r === "total_outage")
+  if (result.regime.regime === "total_outage")
     return "Your internet appears to be down right now — nothing is reachable. Try again once it's back.";
   return null;
 }
 
-function progressText(p: StabilityProgress | null): string {
-  if (!p || p.phase === "regime") return "Checking your internet…";
-  if (p.phase === "connecting") return `Testing connections… ${p.done}/${p.total} (${p.ok} OK)`;
-  if (p.phase === "speed") {
-    if (p.downloaded && p.download_target) {
-      const pct = Math.min(100, Math.round((p.downloaded / p.download_target) * 100));
-      return `Measuring speed… ${pct}%`;
-    }
-    return "Measuring speed…";
-  }
-  return "Checking stability…";
-}
-
-function progressPercent(p: StabilityProgress | null): number {
-  if (!p) return 0;
-  // Two weighted phases: connections (0–70%) then download (70–100%).
-  if (p.phase === "regime") return 3;
-  if (p.phase === "connecting") return Math.round((p.done / Math.max(1, p.total)) * 70);
-  if (p.phase === "speed") {
-    const dl = p.downloaded && p.download_target ? p.downloaded / p.download_target : 0;
-    return 70 + Math.round(dl * 30);
-  }
-  return 0;
+function GradeChip({ label, grade }: { label: string; grade: StabilityGrade }) {
+  const meta = GRADE_META[grade];
+  return (
+    <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold", meta.chip)}>
+      <meta.Icon className="h-3.5 w-3.5" />
+      {label}: {meta.label}
+    </span>
+  );
 }
 
 function StabilityPanel({
@@ -631,76 +661,56 @@ function StabilityPanel({
   running: boolean;
   error: string | null;
 }) {
-  // Live, in-progress view — shown until a final result (or error) arrives.
+  const countdown = useLonglivedCountdown(progress, running);
+
   if (running && !result) {
     return (
-      <div className="border-border bg-muted/20 mb-3 rounded-lg border p-3">
-        <div className="flex items-center gap-2">
-          <Loader2 className="text-muted h-4 w-4 shrink-0 animate-spin" />
-          <p className="text-muted text-xs">{progressText(progress)}</p>
-        </div>
-        <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
-          <div
-            className="bg-primary h-full rounded-full transition-[width] duration-500 ease-out"
-            style={{ width: `${progressPercent(progress)}%` }}
-          />
-        </div>
-        {progress && progress.resets > 0 && (
-          <p className="mt-2 text-[11px] text-amber-300">{progress.resets} reset so far</p>
-        )}
+      <div className="border-border bg-muted/20 mb-3 flex items-center gap-2 rounded-lg border p-3">
+        <Loader2 className="text-muted h-4 w-4 shrink-0 animate-spin" />
+        <p className="text-muted text-xs">{progressText(progress, countdown)}</p>
       </div>
     );
   }
 
-  // Connection dropped / server error before a result — never leave a spinner.
   if (error && !result) {
     return (
       <div className="border-border bg-muted/20 mb-3 rounded-lg border p-3">
         <p className="text-destructive text-xs">{error}</p>
-        <p className="text-muted mt-1 text-[11px]">Tap “Check stability” to try again.</p>
+        <p className="text-muted mt-1 text-[11px]">Tap "Check stability" to try again.</p>
       </div>
     );
   }
 
   if (!result) return null;
 
-  const meta = GRADE_META[result.grade];
   const banner = regimeBanner(result);
 
   return (
     <div className="border-border bg-muted/20 mb-3 rounded-lg border p-3">
-      <div className="flex items-center gap-2">
-        <span
-          className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold", meta.chip)}
-        >
-          <meta.Icon className="h-3.5 w-3.5" />
-          {meta.label}
-        </span>
-        {running && <Loader2 className="text-muted h-3.5 w-3.5 animate-spin" />}
+      <div className="flex flex-wrap items-center gap-2">
+        <GradeChip label="Downloads" grade={result.bulk_grade} />
+        <GradeChip label="Calls" grade={result.call_grade} />
       </div>
 
-      <p className="text-muted mt-2 text-xs">{meta.blurb}</p>
-
       {banner && <p className="mt-2 rounded-md bg-zinc-800/60 p-2 text-xs text-zinc-300">{banner}</p>}
-
       {result.error && !banner && <p className="text-destructive mt-2 text-xs">{result.error}</p>}
 
-      {result.grade !== "inconclusive" && result.attempts > 0 && (
-        <>
-          {result.summary && <p className="text-foreground/80 mt-2 font-mono text-[11px]">{result.summary}</p>}
-          <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
-            <Metric label="Connected" value={`${result.ok}/${result.attempts}`} />
-            {result.resets > 0 && <Metric label="Reset by filter" value={String(result.resets)} warn />}
-            {result.timeouts > 0 && <Metric label="Timed out" value={String(result.timeouts)} warn />}
-            {result.goodput_mbps !== null && <Metric label="Speed" value={`${result.goodput_mbps} MB/s`} />}
-            {result.direct_ratio !== null && (
-              <Metric label="vs direct" value={`${Math.round(result.direct_ratio * 100)}%`} />
-            )}
-            {result.latency_p95_ms !== null && (
-              <Metric label="Latency (p95)" value={`${Math.round(result.latency_p95_ms)}ms`} />
-            )}
-          </div>
-        </>
+      {result.bulk_grade !== "inconclusive" && (
+        <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+          <Metric label="Downloads OK" value={`${result.completed}/${result.streams}`} />
+          {result.resets > 0 && <Metric label="Dropped" value={String(result.resets)} warn />}
+          {result.stalls > 0 && <Metric label="Stalled" value={String(result.stalls)} warn />}
+          {result.loaded_max_ms !== null && (
+            <Metric
+              label="Worst lag (loaded)"
+              value={`${Math.round(result.loaded_max_ms)}ms`}
+              warn={result.loaded_max_ms > 1000}
+            />
+          )}
+          {result.loaded_spike_pct !== null && result.loaded_spike_pct > 0 && (
+            <Metric label="Froze (>1s)" value={`${result.loaded_spike_pct}%`} warn={result.loaded_spike_pct > 0.5} />
+          )}
+        </div>
       )}
     </div>
   );

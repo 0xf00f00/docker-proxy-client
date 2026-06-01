@@ -3,7 +3,7 @@ import type {
   AuthStatus,
   ContainerListResponse,
   ConnectivityResult,
-  RegimeInfo,
+  ConnectivityResults,
   StabilityProgress,
   StabilityResult,
   ConfigFile,
@@ -92,6 +92,13 @@ export async function testEdge(ip: string): Promise<EdgeTestResponse> {
 
 export async function testConnectivity(name: string): Promise<ConnectivityResult> {
   const { data } = await api.get<ConnectivityResult>(`/connectivity/test/${name}`);
+  return data;
+}
+
+/** Last-known results from the shared backend cache (no probing), plus a `stale`
+ *  flag telling the dashboard whether an auto-probe on load is warranted. */
+export async function fetchConnectivityResults(): Promise<ConnectivityResults> {
+  const { data } = await api.get<ConnectivityResults>("/connectivity/results");
   return data;
 }
 
@@ -199,8 +206,15 @@ export interface ConnectivityStreamHandlers {
   onError: (err: Event) => void;
 }
 
-export function openConnectivityStream(handlers: ConnectivityStreamHandlers): EventSource {
-  const es = createEventSource("/api/v1/connectivity/test/stream", handlers.onError);
+/** Open the streamed "test all". With `maxAgeS` omitted the backend only probes
+ *  proxies whose cached result is stale/missing and replays the fresh ones;
+ *  `maxAgeS: 0` forces a full re-test. */
+export function openConnectivityStream(
+  handlers: ConnectivityStreamHandlers,
+  { maxAgeS }: { maxAgeS?: number } = {},
+): EventSource {
+  const query = maxAgeS === undefined ? "" : `?max_age=${maxAgeS}`;
+  const es = createEventSource(`/api/v1/connectivity/test/stream${query}`, handlers.onError);
   jsonEvent<{ services: string[] }>(es, "services", ({ services }) => handlers.onServices(services));
   jsonEvent<ConnectivityResult>(es, "result", handlers.onResult);
   es.addEventListener("done", () => {
@@ -211,8 +225,6 @@ export function openConnectivityStream(handlers: ConnectivityStreamHandlers): Ev
 }
 
 export interface StabilityStreamHandlers {
-  onPhase?: (phase: string) => void;
-  onRegime?: (regime: RegimeInfo) => void;
   onProgress?: (progress: StabilityProgress) => void;
   onResult: (result: StabilityResult) => void;
   /** Called once on any abnormal end (connection dropped, server error). */
@@ -220,14 +232,14 @@ export interface StabilityStreamHandlers {
   onDone?: () => void;
 }
 
-/** Open the streamed stability probe. Emits live phase/regime/progress events,
- *  then a final result. The probe is heavy (~1 min); streaming gives the UI
- *  real-time feedback and a definite end on success, error, or disconnect. */
+/** Open the streamed stability probe (see docs/realtime-stability-repro.md). It
+ *  briefly saturates the tunnel, so it's DISRUPTIVE and runs on demand only;
+ *  streaming gives live progress and a definite end on success/error/disconnect. */
 export function openStabilityStream(name: string, handlers: StabilityStreamHandlers): EventSource {
   const url = `/api/v1/connectivity/stability/${encodeURIComponent(name)}/stream`;
-  // Guard so the terminal callbacks (result/error/done) fire exactly once: a
-  // server-side close right after "done" can also surface as an onerror, and a
-  // mid-run drop must clear loading rather than silently reconnect.
+  // Guard so the terminal callbacks fire exactly once: a server-side close right
+  // after "done" can also surface as an onerror, and a mid-run drop must clear
+  // loading rather than silently reconnect.
   let finished = false;
   const finish = (cb: () => void) => {
     if (finished) return;
@@ -236,8 +248,6 @@ export function openStabilityStream(name: string, handlers: StabilityStreamHandl
     cb();
   };
   const es = createEventSource(url, () => finish(() => handlers.onError()));
-  jsonEvent<{ phase: string }>(es, "phase", ({ phase }) => handlers.onPhase?.(phase));
-  jsonEvent<RegimeInfo>(es, "regime", (r) => handlers.onRegime?.(r));
   jsonEvent<StabilityProgress>(es, "progress", (p) => handlers.onProgress?.(p));
   jsonEvent<StabilityResult>(es, "result", (r) => handlers.onResult(r));
   jsonEvent<{ detail?: string }>(es, "error", ({ detail }) => finish(() => handlers.onError(detail)));

@@ -11,13 +11,13 @@ export interface StabilityCheckState {
 }
 
 /**
- * Drives a streamed stability probe for one proxy.
+ * Drives the stability probe for one proxy.
  *
- * The probe is long-running (~1 min: many spread-out connections + a sized
- * download), so we stream it and surface live progress. Every terminal path —
- * success, server error, or a dropped connection — flips `running` back to
- * false, so the UI can never get stuck on a spinner. Unmounting closes the
- * stream (which cancels the server-side probe).
+ * The probe is heavy and DISRUPTS live users while it runs (it briefly saturates
+ * the tunnel), so it's only ever started by an explicit user action. Every
+ * terminal path — success, server error, or a dropped stream — clears `running`,
+ * so the UI can't get stuck on a spinner. Unmount closes the stream (which
+ * cancels the server-side probe).
  */
 export function useStabilityCheck(name: string): StabilityCheckState {
   const [result, setResult] = useState<StabilityResult | null>(null);

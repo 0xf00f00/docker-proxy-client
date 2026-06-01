@@ -62,6 +62,19 @@ class ConnectivityResult(BaseModel):
     error: str | None = None
     tested_via: str
     ip_info: IpInfo | None = None
+    # When this result was produced (UTC). Lets the dashboard show "tested N ago"
+    # and skip re-probing still-fresh results on page load. None for an un-cached
+    # / legacy result.
+    tested_at: datetime | None = None
+
+
+class ConnectivityResultsResponse(BaseModel):
+    """Last-known connectivity results from the shared backend cache (no probing),
+    plus a hint on whether any testable proxy is missing a result or stale enough
+    that an auto-probe on page load is warranted."""
+
+    results: list[ConnectivityResult]
+    stale: bool
 
 
 class RegimeInfo(BaseModel):
@@ -80,39 +93,44 @@ class RegimeInfo(BaseModel):
 
 
 class StabilityResult(BaseModel):
-    """Outcome of an active stability probe for one proxy (§3-§4).
+    """Outcome of the stability probe (see docs/realtime-stability-repro.md).
 
-    Unlike ConnectivityResult (one pass/fail + mean latency) this samples the
-    *distribution*: connection-establishment reliability, mid-stream survival,
-    goodput shape, and the latency tail — then grades it.
+    Grades two things users experience separately: bulk-transfer survival under
+    many parallel streams (downloads / docker pull) and real-time call quality
+    under load (loaded-latency spikes + jitter, what governs Google Meet).
+    Regime-gated: inconclusive during an Iran-only blackout.
     """
 
     service: str
     # good | degraded | bad | inconclusive
-    grade: str
+    bulk_grade: str
+    call_grade: str
     tested_via: str
     regime: RegimeInfo
-    # Signal 1 — connection-establishment reliability.
-    attempts: int
-    ok: int
-    resets: int
-    timeouts: int
-    other_errors: int
-    failure_rate: float
-    # Wilson lower bound on the failure rate (small samples can't over-trigger).
-    failure_rate_lower: float
-    # Signal 4 — latency tail (of successful connects), not the mean.
-    latency_p50_ms: float | None = None
-    latency_p95_ms: float | None = None
-    # Signal 3 — goodput shape (MB/s). `goodput_completed` doubles as Signal 2
-    # (mid-stream survival): a download that drops part-way is a survival failure.
-    goodput_mbps: float | None = None
-    goodput_peak_mbps: float | None = None
-    goodput_completed: bool = False
-    stalled: bool = False
-    decayed: bool = False
-    # P / gstatic, only when the direct international baseline was usable.
-    direct_ratio: float | None = None
+
+    # Bulk: parallel-stream survival.
+    streams: int = 0
+    completed: int = 0
+    resets: int = 0
+    stalls: int = 0
+    reset_rate: float = 0.0
+    stall_rate: float = 0.0
+
+    # Call: latency under load. Calls freeze on tail spikes (>1s) that sit above
+    # p95, so spike fraction + worst-case inflation are the signals, not p95.
+    idle_p50_ms: float | None = None
+    loaded_p50_ms: float | None = None
+    loaded_max_ms: float | None = None
+    loaded_jitter_ms: float | None = None
+    loaded_loss_pct: float | None = None
+    loaded_spike_pct: float | None = None
+    latency_inflation: float | None = None  # loaded_max / idle_p50
+
+    # Long-lived session survival (DPI often resets long/idle connections).
+    longlived_held: int = 0
+    longlived_survived: int = 0
+    longlived_min_ttl_s: float | None = None
+
     summary: str = ""
     reasons: list[str] = []
     error: str | None = None
