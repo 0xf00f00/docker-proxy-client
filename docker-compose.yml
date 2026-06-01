@@ -285,6 +285,12 @@ services:
     image: ghcr.io/xtls/xray-core:latest
     container_name: xray
     restart: *default-restart
+    # In-container sysctl: the host's net.ipv4.tcp_notsent_lowat does NOT cross
+    # into a bridge netns (only tcp_congestion_control inherits), so the tunnel's
+    # TCP send buffer stays unbounded and a saturated upload bloats real-time/call
+    # latency by seconds. Capping it here ~halves loaded latency (validated A/B).
+    sysctls:
+      - net.ipv4.tcp_notsent_lowat=16384
     labels:
       - dashboard.enable=true
       - dashboard.category=proxy
@@ -326,6 +332,8 @@ services:
     image: tazihad/byedpi:${BYEDPI_VERSION:-v0.17.3}
     container_name: byedpi
     restart: *default-restart
+    sysctls:  # cap tunnel send-buffer bloat (host sysctl doesn't cross bridge netns) — see xray
+      - net.ipv4.tcp_notsent_lowat=16384
     labels:
       - dashboard.enable=true
       - dashboard.category=proxy
@@ -409,6 +417,8 @@ services:
     image: ghcr.io/aleskxyz/sni-spoofing-go:${SNI_SPOOFING_VERSION:-0.5.1}
     container_name: sni-spoofing
     restart: *default-restart
+    sysctls:  # cap tunnel send-buffer bloat (host sysctl doesn't cross bridge netns) — see xray
+      - net.ipv4.tcp_notsent_lowat=16384
     labels:
       - dashboard.enable=true
       - dashboard.category=proxy
@@ -436,6 +446,8 @@ services:
     image: ghcr.io/aleskxyz/sni-spoofing-go:${SNI_SPOOFING_VERSION:-0.5.1}
     container_name: sni-spoofing-fallback
     restart: *default-restart
+    sysctls:  # cap tunnel send-buffer bloat (host sysctl doesn't cross bridge netns) — see xray
+      - net.ipv4.tcp_notsent_lowat=16384
     labels:
       - autoheal=true
       - dashboard.enable=true
@@ -464,6 +476,8 @@ services:
     image: ghcr.io/xtls/xray-core:latest
     container_name: xray-fallback
     restart: *default-restart
+    sysctls:  # cap tunnel send-buffer bloat (host sysctl doesn't cross bridge netns) — see xray
+      - net.ipv4.tcp_notsent_lowat=16384
     labels:
       - dashboard.enable=true
       - dashboard.category=proxy
