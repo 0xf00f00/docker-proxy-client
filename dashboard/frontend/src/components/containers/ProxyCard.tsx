@@ -33,19 +33,19 @@ import { isSocksCapable, telegramSocksLink } from "@/utils/telegram";
 const loadConfigModal = () => import("@/components/config/ConfigModal");
 const loadEnvModal = () => import("@/components/config/EnvModal");
 const loadLogsModal = () => import("@/components/common/LogsModal");
+const loadConfirmDialog = () => import("@/components/common/ConfirmDialog");
 
 const ConfigModal = lazy(loadConfigModal);
 const EnvModal = lazy(loadEnvModal);
 const LogsModal = lazy(loadLogsModal);
-const ConfirmDialog = lazy(() => import("@/components/common/ConfirmDialog"));
+const ConfirmDialog = lazy(loadConfirmDialog);
 
-// Kick off chunk downloads the moment the user expands a card. By the time
-// they reach for Settings/Config/Logs, the chunk is usually already cached —
-// so Suspense doesn't have to fall back to the loading shell at all.
+// Kick off chunk downloads the moment the user expands a card.
 function preloadModals() {
   void loadConfigModal();
   void loadEnvModal();
   void loadLogsModal();
+  void loadConfirmDialog();
 }
 
 interface Props {
@@ -352,6 +352,8 @@ export default function ProxyCard({ container, connectivity, isTesting = false, 
         fallback={
           openModal ? (
             <ModalLoadingShell title={modalLoadingTitle(openModal, container.dashboard.name)} onClose={closeModal} />
+          ) : confirm ? (
+            <ModalLoadingShell title={container.dashboard.name} onClose={() => setConfirm(null)} />
           ) : null
         }
       >
