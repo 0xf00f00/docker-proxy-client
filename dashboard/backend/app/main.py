@@ -2,9 +2,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
 
 from app.middleware import SecurityHeadersMiddleware
+from app.static_files import CachedStaticFiles
 from app.routers import auth as auth_router
 from app.routers import config_editor, connectivity, containers, env_editor, scanner, system, system_proxy, traffic
 from app.services import docker_service
@@ -26,7 +26,7 @@ for module in _routers:
 
 static_dir = Path(__file__).parent.parent / "static"
 if static_dir.exists():
-    app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
+    app.mount("/", CachedStaticFiles(directory=str(static_dir), html=True), name="static")
 
 if __name__ == "__main__":
     import uvicorn
