@@ -18,6 +18,7 @@ import type {
   ScannerStatus,
   EdgeTestResponse,
   TrafficSnapshot,
+  ConnectionsSnapshot,
 } from "@/types";
 
 const api = axios.create({ baseURL: "/api/v1" });
@@ -331,6 +332,18 @@ export interface TrafficStreamHandlers {
 export function openTrafficStream(handlers: TrafficStreamHandlers): EventSource {
   const es = createEventSource("/api/v1/traffic/stream", handlers.onError);
   jsonEvent<TrafficSnapshot>(es, "traffic", handlers.onSnapshot);
+  return es;
+}
+
+export interface ConnectionsStreamHandlers {
+  onSnapshot: (snapshot: ConnectionsSnapshot) => void;
+  onError?: (err: Event) => void;
+}
+
+export function openConnectionsStream(handlers: ConnectionsStreamHandlers): EventSource {
+  // Auth-gated like the logs stream (it exposes visited hosts): a 401 re-prompts login.
+  const es = createEventSource("/api/v1/connections/stream", handlers.onError, { probeAuth: true });
+  jsonEvent<ConnectionsSnapshot>(es, "connections", handlers.onSnapshot);
   return es;
 }
 

@@ -218,6 +218,47 @@ export interface TrafficSnapshot {
   proxies: Record<string, number>;
 }
 
+/** One open socket within a site group. Cumulative bytes; rates are bytes/second. */
+export interface ConnectionDetail {
+  id: string;
+  down: number;
+  up: number;
+  downRate: number;
+  upRate: number;
+  network: string;
+  dest: string;
+  port: string;
+  exit: string;
+  rule: string;
+  since: string;
+}
+
+/** All connections to one website, aggregated. */
+export interface ConnectionSite {
+  host: string;
+  count: number;
+  down: number;
+  up: number;
+  downRate: number;
+  upRate: number;
+  /** The proxy this site egresses through (most-used among its connections). */
+  exit: string;
+  /** ISO timestamp of the oldest connection in the group. */
+  since: string;
+  connections: ConnectionDetail[];
+}
+
+/** A live snapshot of all active connections, grouped by website. */
+export interface ConnectionsSnapshot {
+  ts: number;
+  /** Total open connections across all sites. */
+  count: number;
+  totals: { down: number; up: number; downRate: number; upRate: number };
+  sites: ConnectionSite[];
+  /** Number of sites dropped past the server-side cap (0 in normal use). */
+  truncated: number;
+}
+
 export interface SpeedTestProgress {
   phase: "init" | "server" | "download" | "upload" | "done" | "cancelled" | "error";
   download_mbps: number | null;

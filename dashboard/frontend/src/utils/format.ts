@@ -28,3 +28,25 @@ export function formatRateShort(bps: number): string {
   const { value, unit } = scale(bps, SHORT_UNITS);
   return `${value}${unit}`;
 }
+
+/** "1.2 MB" — a cumulative size, not a rate (no "/s" suffix). */
+export function formatBytes(bytes: number): string {
+  if (!bytes || bytes < 1) return "0 B";
+  const { value, unit } = scale(bytes, FULL_UNITS);
+  return `${value} ${unit}`;
+}
+
+/** Coarse "just now" / "4 min" / "2 h" / "3 d" from an ISO timestamp. */
+export function formatAgo(iso: string): string {
+  if (!iso) return "";
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return "";
+  const s = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (s < 5) return "just now";
+  if (s < 60) return `${s} sec`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} min`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} h`;
+  return `${Math.round(h / 24)} d`;
+}

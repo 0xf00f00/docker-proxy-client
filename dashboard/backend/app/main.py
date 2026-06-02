@@ -5,7 +5,17 @@ from fastapi import FastAPI
 
 from app.middleware import SecurityHeadersMiddleware
 from app.routers import auth as auth_router
-from app.routers import config_editor, connectivity, containers, env_editor, scanner, system, system_proxy, traffic
+from app.routers import (
+    config_editor,
+    connections,
+    connectivity,
+    containers,
+    env_editor,
+    scanner,
+    system,
+    system_proxy,
+    traffic,
+)
 from app.services import docker_service
 from app.static_files import CachedStaticFiles
 
@@ -20,7 +30,18 @@ app = FastAPI(title="Proxy Dashboard", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(SecurityHeadersMiddleware)
 
-_routers = (auth_router, containers, connectivity, config_editor, system_proxy, system, env_editor, scanner, traffic)
+_routers = (
+    auth_router,
+    containers,
+    connectivity,
+    config_editor,
+    system_proxy,
+    system,
+    env_editor,
+    scanner,
+    traffic,
+    connections,
+)
 for module in _routers:
     app.include_router(module.router, prefix="/api/v1")
 

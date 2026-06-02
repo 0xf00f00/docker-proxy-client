@@ -1,12 +1,16 @@
+import { lazy, Suspense, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Network, Globe, Wifi, Loader2, LogIn, LogOut, ArrowDown, ArrowUp } from "lucide-react";
+import { Network, Globe, Wifi, Loader2, LogIn, LogOut, ArrowDown, ArrowUp, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import { logout, fetchSystemHealth } from "@/api/client";
 import { AUTH_STATUS_KEY, useAuth } from "@/hooks/useAuth";
 import { useTraffic } from "@/hooks/useTraffic";
 import { formatRate, formatRateShort } from "@/utils/format";
 import Sparkline from "@/components/common/Sparkline";
+import { ModalLoadingShell } from "@/components/common/Modal";
 import { cn } from "@/utils/cn";
+
+const ConnectionsModal = lazy(() => import("@/components/connections/ConnectionsModal"));
 
 interface CheckResult {
   success: boolean;
@@ -20,6 +24,7 @@ interface CheckResult {
 const POLL_MS = 25_000;
 
 export default function Header({ pauseAutoRefresh = false }: { pauseAutoRefresh?: boolean }) {
+  const [showConnections, setShowConnections] = useState(false);
   const health = useQuery({
     queryKey: ["system-health"],
     queryFn: fetchSystemHealth,
@@ -33,11 +38,10 @@ export default function Header({ pauseAutoRefresh = false }: { pauseAutoRefresh?
     health.refetch();
   };
 
+  const openConnections = () => setShowConnections(true);
+
   return (
-    <header
-      className="border-border bg-card border-b"
-      style={{ paddingTop: "env(safe-area-inset-top)" }}
-    >
+    <header className="border-border bg-card border-b" style={{ paddingTop: "env(safe-area-inset-top)" }}>
       <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 px-3 py-2.5 sm:px-4 sm:py-3">
         <div className="flex min-w-0 items-center gap-2 sm:gap-3">
           <Network className="text-primary h-5 w-5 shrink-0" />
@@ -46,7 +50,7 @@ export default function Header({ pauseAutoRefresh = false }: { pauseAutoRefresh?
           <h1 className="hidden truncate text-base font-bold sm:block sm:text-lg">Proxy Dashboard</h1>
         </div>
         <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
-          <TrafficPill />
+          <TrafficPill onOpen={openConnections} />
           <StatusPill
             icon={<Globe className="h-3.5 w-3.5" />}
             label="DNS"
@@ -68,7 +72,13 @@ export default function Header({ pauseAutoRefresh = false }: { pauseAutoRefresh?
           <AuthButton />
         </div>
       </div>
-      <TrafficStrip />
+      <TrafficStrip onOpen={openConnections} />
+
+      {showConnections && (
+        <Suspense fallback={<ModalLoadingShell title="Connections" onClose={() => setShowConnections(false)} />}>
+          <ConnectionsModal onClose={() => setShowConnections(false)} />
+        </Suspense>
+      )}
     </header>
   );
 }
@@ -84,32 +94,49 @@ function SkeletonBar({ className }: { className?: string }) {
  * (with a flat line), and live numbers when active. Desktop only — the mobile
  * readout lives in TrafficStrip. Per-proxy detail lives on the cards.
  */
-function TrafficPill() {
+function TrafficPill({ onOpen }: { onOpen: () => void }) {
   const { system, systemHistory, status } = useTraffic();
   const loading = status === "connecting";
   const idle = !loading && system.down < 1 && system.up < 1;
 
   return (
-    <div
+    <button
+      type="button"
+      onClick={onOpen}
       className={cn(
-        "hidden min-h-9 items-center gap-1.5 rounded-full bg-zinc-800 px-2.5 sm:inline-flex",
+        "hidden min-h-9 items-center gap-1.5 rounded-full bg-zinc-800 px-2.5 hover:bg-zinc-700 sm:inline-flex",
         (loading || idle) && "opacity-80",
       )}
-      aria-label={loading ? "Network activity — connecting" : `Network activity — download ${formatRate(system.down)}, upload ${formatRate(system.up)}`}
-      title="Live network activity (system proxy)"
+      aria-label={
+        loading
+          ? "Network activity — connecting. Tap to view connections"
+          : `Network activity — download ${formatRate(system.down)}, upload ${formatRate(system.up)}. Tap to view connections`
+      }
+      title="View live connections"
     >
       <Sparkline down={systemHistory.map((s) => s.down)} up={systemHistory.map((s) => s.up)} />
       <div className="flex flex-col gap-0.5 text-[10px] leading-none font-medium tabular-nums">
         <span className={cn("inline-flex items-center gap-0.5", loading || idle ? "text-zinc-500" : "text-sky-400")}>
           <ArrowDown className="h-2.5 w-2.5 shrink-0" />
-          {loading ? <SkeletonBar className="h-2 w-7" /> : <span className="min-w-[2.25rem]">{idle ? "0" : formatRateShort(system.down)}</span>}
+          {loading ? (
+            <SkeletonBar className="h-2 w-7" />
+          ) : (
+            <span className="min-w-[2.25rem]">{idle ? "0" : formatRateShort(system.down)}</span>
+          )}
         </span>
-        <span className={cn("inline-flex items-center gap-0.5", loading || idle ? "text-zinc-500" : "text-emerald-400")}>
+        <span
+          className={cn("inline-flex items-center gap-0.5", loading || idle ? "text-zinc-500" : "text-emerald-400")}
+        >
           <ArrowUp className="h-2.5 w-2.5 shrink-0" />
-          {loading ? <SkeletonBar className="h-2 w-7" /> : <span className="min-w-[2.25rem]">{idle ? "0" : formatRateShort(system.up)}</span>}
+          {loading ? (
+            <SkeletonBar className="h-2 w-7" />
+          ) : (
+            <span className="min-w-[2.25rem]">{idle ? "0" : formatRateShort(system.up)}</span>
+          )}
         </span>
       </div>
-    </div>
+      <ChevronRight className="h-3.5 w-3.5 shrink-0 text-zinc-500" aria-hidden="true" />
+    </button>
   );
 }
 
@@ -119,15 +146,21 @@ function TrafficPill() {
  * across a dedicated line — so this gets a wider sparkline and full-precision
  * rates ("1.2 MB/s"), plus an explicit "0 B/s" idle state and a loading skeleton.
  */
-function TrafficStrip() {
+function TrafficStrip({ onOpen }: { onOpen: () => void }) {
   const { system, systemHistory, status } = useTraffic();
   const loading = status === "connecting";
   const idle = !loading && system.down < 1 && system.up < 1;
 
   return (
-    <div
-      className="border-border/60 mx-auto flex max-w-3xl items-center gap-3 border-t px-3 py-1.5 sm:hidden"
-      aria-label={loading ? "Network activity — connecting" : `Network activity — download ${formatRate(system.down)}, upload ${formatRate(system.up)}`}
+    <button
+      type="button"
+      onClick={onOpen}
+      className="border-border/60 mx-auto flex min-h-11 w-full max-w-3xl items-center gap-3 border-t px-3 py-1.5 text-left active:bg-zinc-800/50 sm:hidden"
+      aria-label={
+        loading
+          ? "Network activity — connecting. Tap to view connections"
+          : `Network activity — download ${formatRate(system.down)}, upload ${formatRate(system.up)}. Tap to view connections`
+      }
     >
       <span className="text-muted text-[10px] font-medium tracking-wide uppercase">Network</span>
       <Sparkline down={systemHistory.map((s) => s.down)} up={systemHistory.map((s) => s.up)} width={72} height={18} />
@@ -141,7 +174,8 @@ function TrafficStrip() {
           {loading ? <SkeletonBar className="h-3 w-16" /> : idle ? "0 B/s" : formatRate(system.up)}
         </span>
       </div>
-    </div>
+      <ChevronRight className="h-4 w-4 shrink-0 text-zinc-500" aria-hidden="true" />
+    </button>
   );
 }
 

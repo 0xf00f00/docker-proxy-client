@@ -46,3 +46,18 @@ class SupportsTrafficStream(Protocol):
         connection drops, then returns or raises so the caller can reconnect.
         """
         ...
+
+
+@runtime_checkable
+class SupportsConnectionsStream(Protocol):
+    """Optional capability: a controller that can report live per-connection state."""
+
+    def stream_connections(self) -> AsyncIterator[dict]:
+        """Return an async iterator of raw connection snapshots as they arrive.
+
+        Each yielded dict is one whole-state snapshot: cumulative session totals
+        plus the full list of currently-open connections. Implemented as an async
+        generator; long-lived until the source drops, then returns/raises so the
+        caller can reconnect.
+        """
+        ...

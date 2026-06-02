@@ -15,6 +15,7 @@ from pathlib import Path
 
 import httpx
 from ruamel.yaml import YAML
+from websockets.asyncio.client import connect as ws_connect
 
 from app.config import settings
 from app.models.schemas import (
@@ -132,6 +133,21 @@ class ClashController(SystemProxyController):
                 except ValueError:
                     continue
                 yield int(data.get("up", 0) or 0), int(data.get("down", 0) or 0)
+
+    async def stream_connections(self) -> AsyncIterator[dict]:
+        """Stream Clash's ``/connections`` WebSocket"""
+        scheme = "wss" if settings.clash_api_url.startswith("https") else "ws"
+        base = settings.clash_api_url.split("://", 1)[-1].rstrip("/")
+        uri = f"{scheme}://{base}/connections"
+        headers = {}
+        if settings.clash_api_secret:
+            headers["Authorization"] = f"Bearer {settings.clash_api_secret}"
+        async with ws_connect(uri, additional_headers=headers, open_timeout=10) as ws:
+            async for message in ws:
+                try:
+                    yield json.loads(message)
+                except ValueError:
+                    continue
 
     async def test_latencies(self) -> dict[str, int]:
         state = await self.get_state()

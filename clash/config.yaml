@@ -3,7 +3,8 @@ mixed-port: 7890
 allow-lan: true
 bind-address: '*'
 
-external-controller: 0.0.0.0:9697
+external-controller: 127.0.0.1:9697
+secret: REQUIRE_ENV_CLASH_API_SECRET
 
 hosts:
   naive: 127.0.0.1

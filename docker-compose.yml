@@ -161,7 +161,15 @@ services:
     image: metacubex/mihomo:latest
     container_name: clash
     restart: *default-restart
-    command: -d /root/.config/clash
+    # mihomo can't read from env/CLI, so render it from the placeholder at startup.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        sed 's|REQUIRE_ENV_CLASH_API_SECRET|'"$$CLASH_API_SECRET"'|' \
+          /root/.config/clash/config-template.yaml > /root/.config/clash/config.yaml &&
+        exec /mihomo -d /root/.config/clash
+    environment:
+      - CLASH_API_SECRET=${CLASH_API_SECRET:?set CLASH_API_SECRET in .env}
     labels:
       - dashboard.enable=true
       - dashboard.category=proxy
@@ -176,7 +184,7 @@ services:
       test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 7890 || exit 1"]
       <<: *proxy-healthcheck
     volumes:
-      - ./clash/config.yaml:/root/.config/clash/config.yaml:ro
+      - ./clash/config.yaml:/root/.config/clash/config-template.yaml:ro
       - ./clash/rules:/root/.config/clash/rules:ro
       - ./clash/geoip.metadb:/root/.config/clash/geoip.metadb
     dns: *default-dns
