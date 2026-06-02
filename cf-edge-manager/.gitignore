@@ -3,3 +3,5 @@
 vendor/
 out/*
 !out/.gitkeep
+state/*
+!state/.gitkeep
