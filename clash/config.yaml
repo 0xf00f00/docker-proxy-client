@@ -151,10 +151,10 @@ rules:
   - DOMAIN-SUFFIX,.sn.mynetname.net,direct_interface
 
   # container registries
-  - DOMAIN-SUFFIX,docker.io,bypass
-  - DOMAIN-SUFFIX,docker.com,bypass
-  - DOMAIN-SUFFIX,ghcr.io,bypass
-  - DOMAIN-SUFFIX,pkg-containers.githubusercontent.com,bypass
+  # - DOMAIN-SUFFIX,docker.io,bypass
+  # - DOMAIN-SUFFIX,docker.com,bypass
+  # - DOMAIN-SUFFIX,ghcr.io,bypass
+  # - DOMAIN-SUFFIX,pkg-containers.githubusercontent.com,bypass
 
   # Google Meet calls (Meet only — general Google stays on the tunnel).
   # reject Meet's UDP media so it falls back fast to TURN-over-TLS (uplink drops UDP)
