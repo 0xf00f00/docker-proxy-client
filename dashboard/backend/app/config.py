@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     port: int = 8080
     bind: str = "0.0.0.0"
     password: str = ""
+    state_dir: str = "/state"
 
     model_config = {"env_prefix": "DASHBOARD_", "env_file": ".env"}
 

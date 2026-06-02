@@ -665,6 +665,7 @@ services:
       - DASHBOARD_CLASH_API_SECRET=${CLASH_API_SECRET:-}
       - DASHBOARD_SCANNER_API_URL=http://10.20.0.12:8088
       - DASHBOARD_COMPOSE_PROJECT_PATH=/compose
+      - DASHBOARD_STATE_DIR=/state
       - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-}
       - DASHBOARD_DOCKER_HOST=tcp://127.0.0.1:2375
       - DOCKER_HOST=tcp://127.0.0.1:2375
@@ -679,8 +680,13 @@ services:
       - ./mdns/client_resolvers.txt:/configs/mdns/client_resolvers.txt
       # Mount the repo root so we can update .env and run `docker compose up -d <svc>`
       - .:/compose:rw
+      # Persistent state
+      - dashboard_state:/state
     depends_on:
       - docker-socket-proxy
+
+volumes:
+  dashboard_state:
 
 # Network definitions
 networks:

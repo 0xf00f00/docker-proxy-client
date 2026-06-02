@@ -3,7 +3,7 @@ import random
 from datetime import UTC, datetime
 
 from app.models.schemas import ConnectivityResult, ContainerInfo
-from app.services import connectivity_tests
+from app.services import connectivity_tests, store
 
 # Retry params chosen so a single bad attempt on a flaky/limited network can't
 # falsely fail a proxy: success is declared if any attempt succeeds, and the
@@ -12,12 +12,13 @@ RETRY_ATTEMPTS = 3
 RETRY_DELAY_MIN_S = 0.2
 RETRY_DELAY_MAX_S = 0.6
 
-# Shared in-memory cache of the most recent result per service. The dashboard
-# auto-probes on load, and a single uplink is shared by every viewer — so a
-# refresh, a back-and-forth, or a second device should reuse a recent result
-# instead of re-hammering a limited link. In-memory by design: a backend restart
-# simply forces fresh probes on the next load.
 _cache: dict[str, ConnectivityResult] = {}
+
+
+def load_cache() -> None:
+    """Repopulate the in-memory cache from SQLite at startup."""
+    for service, result_json, _ in store.load_connectivity():
+        _cache[service] = ConnectivityResult.model_validate_json(result_json)
 
 
 def _finalize(result: ConnectivityResult) -> ConnectivityResult:
@@ -26,6 +27,7 @@ def _finalize(result: ConnectivityResult) -> ConnectivityResult:
     the latest result per service."""
     result.tested_at = datetime.now(UTC)
     _cache[result.service] = result
+    store.upsert_connectivity(result.service, result.model_dump_json(), result.tested_at.isoformat())
     return result
 
 

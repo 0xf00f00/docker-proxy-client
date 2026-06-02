@@ -16,12 +16,14 @@ from app.routers import (
     system_proxy,
     traffic,
 )
-from app.services import docker_service
+from app.services import connectivity_service, docker_service, store
 from app.static_files import CachedStaticFiles
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    store.init()
+    connectivity_service.load_cache()
     yield
     docker_service.close_client()
 
