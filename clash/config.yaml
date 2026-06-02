@@ -149,10 +149,20 @@ rules:
   - DOMAIN,gateway.icloud.com,direct_interface
   - DOMAIN-SUFFIX,.sn.mynetname.net,direct_interface
 
-  # container registries (add Google Meet domains/IPs here later)
+  # container registries
   - DOMAIN-SUFFIX,docker.io,bypass
   - DOMAIN-SUFFIX,docker.com,bypass
   - DOMAIN-SUFFIX,ghcr.io,bypass
   - DOMAIN-SUFFIX,pkg-containers.githubusercontent.com,bypass
+
+  # Google Meet calls (Meet only — general Google stays on the tunnel).
+  # reject Meet's UDP media so it falls back fast to TURN-over-TLS (uplink drops UDP)
+  # - AND,((NETWORK,UDP),(DST-PORT,19302-19309),(GEOIP,google)),REJECT
+  # - AND,((NETWORK,UDP),(DST-PORT,3478),(GEOIP,google)),REJECT
+  # - DOMAIN-SUFFIX,meet.google.com,bypass
+  # - DOMAIN-SUFFIX,turns.goog,bypass
+  # - IP-CIDR,142.250.82.0/24,bypass
+  # - IP-CIDR,74.125.250.0/24,bypass
+  # - IP-CIDR,74.125.247.128/32,bypass
 
   - MATCH,auto
