@@ -176,7 +176,7 @@ async def _one_stream(proxy_url: str) -> str:
                 if now - start >= STREAM_TIMEOUT:
                     break
         return "completed" if got >= MIN_BYTES else "stalled"
-    except httpx.ReadTimeout, httpx.ReadError:
+    except (httpx.ReadTimeout, httpx.ReadError):
         return "stalled" if (time.monotonic() - last_byte) >= STALL_S else "reset"
     except Exception:
         return "reset"

@@ -33,18 +33,10 @@ func New(cfg config.Config, log *slog.Logger) *Manager {
 		CorednsHosts: cfg.CorednsHosts, SnispoofConf: cfg.SnispoofConf,
 		SnispoofName: cfg.SnispoofName, DockerSock: cfg.DockerSock,
 	}
-	prober := realpath.New(realpath.Config{
-		OriginHost: cfg.ProbeOriginHost, UUID: cfg.ProbeUUID, Path: cfg.ProbePath,
-		RealUTLS: cfg.ProbeRealUTLS, FakeSNI: cfg.ProbeFakeSNI, FakeUTLS: cfg.ProbeFakeUTLS,
-		Fragment: cfg.ProbeFragment, EdgePort: cfg.Port, ProbeURL: cfg.ProbeURL,
-		PreGate: cfg.ProbePreGate, DoHURL: cfg.ProbeDoHURL,
-		Count: cfg.ProbeCount, Concurrency: cfg.ProbeConcurrency, Spacing: 300 * time.Millisecond,
-		MinGap: cfg.ProbeMinGap, MaxGap: cfg.ProbeMaxGap, CacheTTL: cfg.ProbeCacheTTL,
-		ReadyWait: 15 * time.Second, XrayBin: cfg.XrayBin, SocksPort: 10808, SniPort: 40443,
-	}, log)
+	prober := realpath.New(ProberConfig(cfg), log)
 
 	loss := func(ip string) float64 { return probe.TCPLoss(ip, cfg.Port, cfg.LossPings, cfg.LossTimeout) }
-	survival := func(ip string) *bool { return prober.Probe(ip, false).Survived }
+	survival := func(ip string) *bool { return prober.Probe(context.Background(), ip, realpath.Options{}).Survived }
 	poolFn := func() []string { return pool.Read(filepath.Join(cfg.OutDir, "pool.txt")) }
 
 	sel := selector.New(selector.Config{
@@ -56,6 +48,27 @@ func New(cfg config.Config, log *slog.Logger) *Manager {
 	}, log, cfg.SelectState, loss, survival, poolFn, applier)
 
 	return &Manager{cfg: cfg, log: log, prober: prober, applier: applier, sel: sel}
+}
+
+// ProberConfig builds the probe config; the wire params MUST match the live xray
+// "proxy" outbound or the probe false-fails. Exported so an on-demand test can
+// reuse the selector's exact parameters.
+func ProberConfig(cfg config.Config) realpath.Config {
+	return realpath.Config{
+		OriginHost: cfg.ProbeOriginHost, UUID: cfg.ProbeUUID, Path: cfg.ProbePath,
+		RealUTLS: cfg.ProbeRealUTLS, FakeSNI: cfg.ProbeFakeSNI, FakeUTLS: cfg.ProbeFakeUTLS,
+		Fragment: cfg.ProbeFragment, EdgePort: cfg.Port, ProbeURL: cfg.ProbeURL,
+		PreGate: cfg.ProbePreGate, DoHURL: cfg.ProbeDoHURL,
+		Count: cfg.ProbeCount, Concurrency: cfg.ProbeConcurrency, Spacing: 300 * time.Millisecond,
+		MinGap: cfg.ProbeMinGap, MaxGap: cfg.ProbeMaxGap, CacheTTL: cfg.ProbeCacheTTL,
+		ReadyWait: 15 * time.Second, XrayBin: cfg.XrayBin, SocksPort: 10808, SniPort: 40443,
+	}
+}
+
+// ProbeSurvival runs an on-demand real-path probe on the manager's long-lived
+// prober (reusing its xray/NFQUEUE), single-flighted against the selector.
+func (m *Manager) ProbeSurvival(ctx context.Context, ip string) realpath.Result {
+	return m.prober.Probe(ctx, ip, realpath.Options{Force: true, Interactive: true})
 }
 
 // Start launches the long-lived xray subprocess and the select loop.

@@ -79,7 +79,7 @@ func TestSnapshotAndPersistence(t *testing.T) {
 
 	at := time.Now()
 	s.PutPool([]string{"104.16.0.1", "172.64.0.1"}, at)
-	s.PutTestResult("1.1.1.1", cfst.Stats{Sent: 10, Received: 10, Loss: 0, LatencyMS: 12.5}, at)
+	s.PutTestResult("1.1.1.1", cfst.Stats{Sent: 10, Received: 10, Loss: 0, LatencyMS: 12.5}, nil, at)
 
 	snap := s.Snapshot()
 	if len(snap.Pool) != 2 || snap.Pool[0] != "104.16.0.1" {
@@ -107,7 +107,7 @@ func TestTestResultEviction(t *testing.T) {
 
 	// Insert 4 distinct IPs oldest-first; the oldest must be evicted at the cap.
 	for i, ip := range []string{"1.1.1.1", "2.2.2.2", "3.3.3.3", "4.4.4.4"} {
-		s.PutTestResult(ip, cfst.Stats{Sent: 1, Received: 1}, base.Add(time.Duration(i)*time.Second))
+		s.PutTestResult(ip, cfst.Stats{Sent: 1, Received: 1}, nil, base.Add(time.Duration(i)*time.Second))
 	}
 
 	tests := s.Snapshot().Tests

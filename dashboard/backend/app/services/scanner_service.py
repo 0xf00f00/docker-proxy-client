@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.config import settings
-from app.models.schemas import EdgeTest, ScannerStatus
+from app.models.schemas import EdgeSurvival, EdgeTest, ScannerStatus
 from app.services import docker_service
 
 # The scanner's Go control API
@@ -79,7 +79,9 @@ def _api_get(path: str) -> dict | None:
 def _api_post(path: str, body: dict | None = None) -> dict | None:
     data = json.dumps(body).encode() if body is not None else b""
     req = urllib.request.Request(
-        f"{_API_BASE}{path}", data=data, method="POST",
+        f"{_API_BASE}{path}",
+        data=data,
+        method="POST",
         headers={"Content-Type": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=_API_TIMEOUT) as resp:
@@ -96,9 +98,7 @@ def iter_events():
     Used purely as a change signal -- the caller re-reads merged status via
     get_status(). Returns (or raises) on disconnect; the caller reconnects.
     """
-    req = urllib.request.Request(
-        f"{_API_BASE}/events", headers={"Accept": "text/event-stream"}
-    )
+    req = urllib.request.Request(f"{_API_BASE}/events", headers={"Accept": "text/event-stream"})
     with urllib.request.urlopen(req, timeout=_EVENT_READ_TIMEOUT) as resp:
         for raw in resp:
             if raw.startswith(b"data:"):
@@ -110,6 +110,24 @@ def _parse_dt(value: str | None) -> datetime | None:
         return None
     try:
         return datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def _survival_from_api(raw: object) -> EdgeSurvival | None:
+    if not isinstance(raw, dict):
+        return None
+    try:
+        survived = raw.get("survived")
+        return EdgeSurvival(
+            checked=bool(raw.get("checked", False)),
+            survived=bool(survived) if survived is not None else None,
+            fail_rate=float(raw.get("fail_rate", 0.0)),
+            fails=int(raw.get("fails", 0)),
+            probes=int(raw.get("probes", 0)),
+            skipped=raw.get("skipped") or None,
+            error=raw.get("error") or None,
+        )
     except (ValueError, TypeError):
         return None
 
@@ -127,6 +145,7 @@ def _tests_from_api(raw: dict) -> dict[str, EdgeTest]:
                 loss=float(r["loss"]),
                 latency_ms=float(r["latency_ms"]),
                 ts=ts,
+                survival=_survival_from_api(r.get("survival")),
             )
         except (KeyError, ValueError, TypeError):
             continue

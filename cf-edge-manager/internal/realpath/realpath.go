@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	snicfg "sni-spoofing-go/config"
@@ -77,6 +78,14 @@ type cacheEntry struct {
 	res Result
 }
 
+// Options tunes a Probe. Force bypasses the cache; Interactive (on-demand, e.g. a
+// dashboard test) skips the inter-probe backoff and leaves the selector's
+// cadence/cache untouched, while still single-flighting on the lock.
+type Options struct {
+	Force       bool
+	Interactive bool
+}
+
 // Prober owns the long-lived xray subprocess and serialises probes.
 type Prober struct {
 	cfg Config
@@ -109,6 +118,7 @@ func (p *Prober) Start() error {
 		return err
 	}
 	cmd := exec.Command(p.cfg.XrayBin, "run", "-c", path) //nolint:gosec // fixed bundled binary
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // own group: kill reaps descendants
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start xray: %w", err)
 	}
@@ -117,34 +127,48 @@ func (p *Prober) Start() error {
 	return nil
 }
 
-// Stop terminates the xray subprocess.
+// Stop kills the xray process group and reaps it (no zombies/orphans).
 func (p *Prober) Stop() {
-	if p.xray != nil && p.xray.Process != nil {
-		_ = p.xray.Process.Kill()
-		_, _ = p.xray.Process.Wait()
+	if p.xray == nil || p.xray.Process == nil {
+		return
 	}
+	// negative PID = whole group; fall back to the lone process if that fails
+	if err := syscall.Kill(-p.xray.Process.Pid, syscall.SIGKILL); err != nil {
+		_ = p.xray.Process.Kill()
+	}
+	_, _ = p.xray.Process.Wait()
+	p.xray = nil
 }
 
 // Probe returns the survival verdict for ip, serving a fresh cached result when
-// available. force bypasses the cache.
-func (p *Prober) Probe(ip string, force bool) Result {
-	if !force {
+// available. ctx bounds (and can cancel) the whole probe.
+func (p *Prober) Probe(ctx context.Context, ip string, opts Options) Result {
+	if !opts.Force {
 		if r, ok := p.cached(ip); ok {
 			return r
 		}
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if !force { // re-check under the lock (another caller may have just probed)
+	if !opts.Force { // re-check under the lock (another caller may have just probed)
 		if r, ok := p.cached(ip); ok {
 			return r
 		}
 	}
-	gap := min(time.Duration(float64(p.cfg.MinGap)*p.backoff), p.cfg.MaxGap)
-	if wait := gap - time.Since(p.last); wait > 0 {
-		time.Sleep(wait)
+	if !opts.Interactive { // honour the inter-probe cadence (interactive clicks don't wait)
+		gap := min(time.Duration(float64(p.cfg.MinGap)*p.backoff), p.cfg.MaxGap)
+		if wait := gap - time.Since(p.last); wait > 0 {
+			select {
+			case <-ctx.Done():
+				return Result{IP: ip, Err: "cancelled before probe: " + ctx.Err().Error()}
+			case <-time.After(wait):
+			}
+		}
 	}
-	res := p.run(ip)
+	res := p.run(ctx, ip)
+	if opts.Interactive { // don't perturb the selector's cadence/backoff/cache
+		return res
+	}
 	p.last = time.Now()
 	if res.Survived == nil { // struggling -> slow down
 		p.backoff = min(p.backoff*2, float64(p.cfg.MaxGap)/float64(p.cfg.MinGap))
@@ -168,9 +192,10 @@ func (p *Prober) cached(ip string) (Result, bool) {
 	return Result{}, false
 }
 
-// run stands up sni-spoofing for ip, probes, tears it down.
-func (p *Prober) run(ip string) Result {
-	ctx, cancel := context.WithCancel(context.Background())
+// run stands up sni-spoofing for ip, probes, tears it down. parent's
+// cancellation stops the sni proxy and aborts in-flight requests.
+func (p *Prober) run(parent context.Context, ip string) Result {
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel() // stops the embedded sni proxy (NFQUEUE teardown)
 
 	ready := make(chan sniproxy.Ready, 1)
@@ -184,6 +209,8 @@ func (p *Prober) run(ip string) Result {
 		}
 	case e := <-runErr:
 		return Result{IP: ip, Err: "sni exited: " + errStr(e)}
+	case <-ctx.Done():
+		return Result{IP: ip, Err: "cancelled waiting for sni: " + ctx.Err().Error()}
 	case <-time.After(p.cfg.ReadyWait):
 		return Result{IP: ip, Err: "sni ready timeout"}
 	}
@@ -197,14 +224,14 @@ func (p *Prober) run(ip string) Result {
 	// end-to-end. A clean reset/timeout here means this edge isn't usable — fail
 	// fast and skip the (Count-request) burst rather than spend it on a dead edge.
 	if p.cfg.PreGate {
-		if err := p.dohPreGate(); err != nil {
+		if err := p.dohPreGate(ctx); err != nil {
 			fail := true
 			p.log.Info("realpath: pre-gate failed; skipping burst", "ip", ip, "err", errStr(err))
 			return Result{IP: ip, Survived: &fail, Fails: p.cfg.Count, Probes: p.cfg.Count, FailRate: 1, Err: "pregate: " + errStr(err)}
 		}
 	}
 
-	fails := p.burst()
+	fails := p.burst(ctx)
 	survived := fails < p.cfg.Count
 	return Result{
 		IP: ip, Survived: &survived, Fails: fails, Probes: p.cfg.Count,
@@ -213,11 +240,14 @@ func (p *Prober) run(ip string) Result {
 }
 
 // burst sends Count requests through the tunnel, at most Concurrency at a time,
-// spaced. Returns the fail count.
-func (p *Prober) burst() int {
+// spaced. Returns the fail count; a cancelled ctx counts the remaining as failed.
+func (p *Prober) burst(ctx context.Context) int {
 	socks := net.JoinHostPort("127.0.0.1", strconv.Itoa(p.cfg.SocksPort))
 	fails, done := 0, 0
 	for done < p.cfg.Count {
+		if ctx.Err() != nil {
+			return p.cfg.Count - done + fails
+		}
 		batch := p.cfg.Concurrency
 		if rem := p.cfg.Count - done; rem < batch {
 			batch = rem
@@ -226,7 +256,7 @@ func (p *Prober) burst() int {
 		var wg sync.WaitGroup
 		for i := range batch {
 			wg.Add(1)
-			go func() { defer wg.Done(); results[i] = p.oneRequest(socks) }()
+			go func() { defer wg.Done(); results[i] = p.oneRequest(ctx, socks) }()
 		}
 		wg.Wait()
 		for _, ok := range results {
@@ -236,7 +266,10 @@ func (p *Prober) burst() int {
 		}
 		done += batch
 		if done < p.cfg.Count {
-			time.Sleep(p.cfg.Spacing)
+			select {
+			case <-ctx.Done():
+			case <-time.After(p.cfg.Spacing):
+			}
 		}
 	}
 	return fails
@@ -244,17 +277,19 @@ func (p *Prober) burst() int {
 
 // oneRequest dials a fresh connection through the socks proxy and fetches the
 // 0-byte probe URL, requiring a 2xx/204. Any error/reset is a failure.
-func (p *Prober) oneRequest(socksAddr string) bool {
+func (p *Prober) oneRequest(ctx context.Context, socksAddr string) bool {
 	dialer, err := xproxy.SOCKS5("tcp", socksAddr, nil, &net.Dialer{Timeout: 15 * time.Second})
 	if err != nil {
 		return false
 	}
 	host, path := splitURL(p.cfg.ProbeURL)
-	conn, err := dialer.Dial("tcp", host) // remote DNS via the proxy
+	conn, err := dialContext(ctx, dialer, host) // remote DNS via the proxy
 	if err != nil {
 		return false
 	}
 	defer func() { _ = conn.Close() }()
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() }) // ctx cancel closes the conn
+	defer stop()
 	_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
 	req := fmt.Sprintf("GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: curl\r\nConnection: close\r\n\r\n", path, hostOnly(host))
 	if _, err := conn.Write([]byte(req)); err != nil {
@@ -273,18 +308,20 @@ func (p *Prober) oneRequest(socksAddr string) bool {
 // the same shape as live traffic — and validates a parseable answer, so a CF
 // challenge page or truncated reply can't false-pass it. The cert IS verified
 // here (real hostname, system roots): we want to know real DoH works end-to-end.
-func (p *Prober) dohPreGate() error {
+func (p *Prober) dohPreGate(ctx context.Context) error {
 	socks := net.JoinHostPort("127.0.0.1", strconv.Itoa(p.cfg.SocksPort))
 	dialer, err := xproxy.SOCKS5("tcp", socks, nil, &net.Dialer{Timeout: 15 * time.Second})
 	if err != nil {
 		return err
 	}
 	host, path := dohTarget(p.cfg.DoHURL)
-	raw, err := dialer.Dial("tcp", host) // remote DNS via the proxy
+	raw, err := dialContext(ctx, dialer, host) // remote DNS via the proxy
 	if err != nil {
 		return err
 	}
 	defer func() { _ = raw.Close() }()
+	stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
+	defer stop()
 	_ = raw.SetDeadline(time.Now().Add(15 * time.Second))
 
 	conn := tls.Client(raw, &tls.Config{ServerName: hostOnly(host), MinVersion: tls.VersionTLS12})

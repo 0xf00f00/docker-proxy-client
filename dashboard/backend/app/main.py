@@ -4,10 +4,10 @@ from pathlib import Path
 from fastapi import FastAPI
 
 from app.middleware import SecurityHeadersMiddleware
-from app.static_files import CachedStaticFiles
 from app.routers import auth as auth_router
 from app.routers import config_editor, connectivity, containers, env_editor, scanner, system, system_proxy, traffic
 from app.services import docker_service
+from app.static_files import CachedStaticFiles
 
 
 @asynccontextmanager

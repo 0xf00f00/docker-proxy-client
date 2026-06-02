@@ -503,7 +503,6 @@ services:
     image: ghcr.io/0xf00f00/docker-proxy-client-cf-edge-manager:${CF_MANAGER_VERSION:-latest}
     container_name: cf-edge-manager
     restart: *default-restart
-    init: true
     cap_add:
       - NET_ADMIN
       - NET_RAW

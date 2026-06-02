@@ -91,9 +91,58 @@ func (s *Service) runTest(parent context.Context, id string) {
 		s.log.Error("test failed", "job", id, "ip", j.IP, "err", err)
 		return
 	}
-	s.store.PutTestResult(j.IP, stats, time.Now())
+	surv := s.runSurvival(ctx, j.IP, stats)
+	s.store.PutTestResult(j.IP, stats, surv, time.Now())
 	s.markDone(&j)
-	s.log.Info("test complete", "job", id, "ip", j.IP, "loss", stats.Loss, "latency_ms", stats.LatencyMS)
+	s.log.Info("test complete", "job", id, "ip", j.IP, "loss", stats.Loss, "latency_ms", stats.LatencyMS,
+		"survived", survivedStr(surv))
+}
+
+// runSurvival is the real-path tier of a test: only an edge cfst found reachable
+// enough (loss <= KeepMax) is worth the burst. Returns nil when the tier is off.
+func (s *Service) runSurvival(ctx context.Context, ip string, stats cfst.Stats) *Survival {
+	if s.survival == nil {
+		return nil // real-path tier not configured
+	}
+	if stats.Received == 0 {
+		return &Survival{Skipped: "unreachable"}
+	}
+	if stats.Loss > s.cfg.KeepMax {
+		return &Survival{Skipped: "high packet loss"}
+	}
+	select {
+	case s.survivalSem <- struct{}{}: // one real-path probe at a time
+		defer func() { <-s.survivalSem }()
+	case <-ctx.Done():
+		return &Survival{Skipped: "cancelled"}
+	case <-time.After(survivalAcquireBudget):
+		return &Survival{Skipped: "busy"}
+	}
+	s.log.Info("real-path probe started", "ip", ip)
+	r := s.survival(ctx, ip)
+	return &Survival{
+		Checked:  true,
+		Survived: r.Survived,
+		FailRate: r.FailRate,
+		Fails:    r.Fails,
+		Probes:   r.Probes,
+		Err:      r.Err,
+	}
+}
+
+func survivedStr(s *Survival) string {
+	switch {
+	case s == nil:
+		return "n/a"
+	case !s.Checked:
+		return "skipped:" + s.Skipped
+	case s.Survived == nil:
+		return "inconclusive"
+	case *s.Survived:
+		return "yes"
+	default:
+		return "no"
+	}
 }
 
 // tlsGate re-orders the TCP-ranked pool by fake-SNI connect-survival: each

@@ -14,13 +14,10 @@ import time
 import httpx
 
 from app.models.schemas import RegimeInfo
+from app.services import direct_net
 
 INTL_HOST = os.environ.get("STABILITY_INTL_ANCHOR", "www.google.com")
-IR_HOSTS = [
-    h.strip()
-    for h in os.environ.get("STABILITY_IR_ANCHORS", "digikala.com,snapp.ir").split(",")
-    if h.strip()
-]
+IR_HOSTS = [h.strip() for h in os.environ.get("STABILITY_IR_ANCHORS", "digikala.com,snapp.ir").split(",") if h.strip()]
 ANCHOR_PORT = 443
 ANCHOR_TIMEOUT = 5.0
 DIRECT_GOODPUT_URL = os.environ.get("STABILITY_DIRECT_GOODPUT_URL", "https://www.gstatic.com/generate_204")
@@ -38,7 +35,7 @@ _intl_lkg_ip: str | None = None
 
 def _resolve(host: str) -> str | None:
     try:
-        return socket.getaddrinfo(host, ANCHOR_PORT, proto=socket.IPPROTO_TCP)[0][4][0]
+        return str(socket.getaddrinfo(host, ANCHOR_PORT, proto=socket.IPPROTO_TCP)[0][4][0])
     except (socket.gaierror, OSError, IndexError):
         return None
 
@@ -47,15 +44,18 @@ def _tls_reachable(host: str, ip: str, timeout: float) -> bool:
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    direct_net.bind_to_uplink(sock)
+    sock.settimeout(timeout)
     try:
-        with (
-            socket.create_connection((ip, ANCHOR_PORT), timeout=timeout) as sock,
-            ctx.wrap_socket(sock, server_hostname=host) as ssock,
-        ):
+        sock.connect((ip, ANCHOR_PORT))
+        with ctx.wrap_socket(sock, server_hostname=host) as ssock:
             ssock.do_handshake()
         return True
     except (OSError, ssl.SSLError):
         return False
+    finally:
+        sock.close()
 
 
 def _probe_intl_sync() -> tuple[bool, bool]:
@@ -88,9 +88,10 @@ async def _measure_direct_goodput() -> float | None:
     when international is up."""
     start = time.monotonic()
     total = 0
+    transport = httpx.AsyncHTTPTransport(socket_options=direct_net.socket_options())
     try:
         async with (
-            httpx.AsyncClient(timeout=DIRECT_GOODPUT_TIMEOUT) as client,
+            httpx.AsyncClient(timeout=DIRECT_GOODPUT_TIMEOUT, transport=transport) as client,
             client.stream("GET", DIRECT_GOODPUT_URL) as resp,
         ):
             async for chunk in resp.aiter_bytes():

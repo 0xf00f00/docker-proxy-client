@@ -45,12 +45,23 @@ export interface ContainerListResponse {
   host_lan_ip: string;
 }
 
+export interface EdgeSurvival {
+  checked: boolean;
+  survived: boolean | null;
+  fail_rate: number;
+  fails: number;
+  probes: number;
+  skipped: string | null;
+  error: string | null;
+}
+
 export interface EdgeTest {
   sent: number;
   received: number;
   loss: number;
   latency_ms: number;
   ts: string;
+  survival?: EdgeSurvival | null;
 }
 
 export interface EdgeTestResponse {

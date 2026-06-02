@@ -28,7 +28,8 @@ const PHASE_LABEL: Record<TestPhase, string> = {
 
 const VARIANT: Record<Variant, string> = {
   default: "text-muted hover:text-foreground bg-zinc-800 active:bg-zinc-700",
-  positive: "text-emerald-300 hover:text-emerald-200 bg-emerald-500/15 hover:bg-emerald-500/25 active:bg-emerald-500/30",
+  positive:
+    "text-emerald-300 hover:text-emerald-200 bg-emerald-500/15 hover:bg-emerald-500/25 active:bg-emerald-500/30",
   destructive: "text-red-300 hover:text-red-200 bg-red-500/15 hover:bg-red-500/25 active:bg-red-500/30",
 };
 
@@ -172,8 +173,24 @@ export default function ScannerSection() {
         </div>
 
         <div className="border-border divide-border grid grid-cols-2 divide-x border-t">
-          <Pick label="Primary edge" ip={data?.byedpi_ip} tests={data?.tests} phaseFor={testPhase} busy={testBusy} running={running} onTest={onTest} />
-          <Pick label="Backup edge" ip={data?.snispoof_ip} tests={data?.tests} phaseFor={testPhase} busy={testBusy} running={running} onTest={onTest} />
+          <Pick
+            label="Primary edge"
+            ip={data?.byedpi_ip}
+            tests={data?.tests}
+            phaseFor={testPhase}
+            busy={testBusy}
+            running={running}
+            onTest={onTest}
+          />
+          <Pick
+            label="Backup edge"
+            ip={data?.snispoof_ip}
+            tests={data?.tests}
+            phaseFor={testPhase}
+            busy={testBusy}
+            running={running}
+            onTest={onTest}
+          />
         </div>
 
         {data && data.pool.length > 0 && (
@@ -192,12 +209,18 @@ export default function ScannerSection() {
                   const role = ip === data.byedpi_ip ? "primary" : ip === data.snispoof_ip ? "backup" : null;
                   return (
                     <li key={ip} className="flex items-center gap-2">
-                      <span className={cn("flex-1 truncate font-mono text-xs", role ? "text-emerald-400" : "text-zinc-400")}>
+                      <span
+                        className={cn("flex-1 truncate font-mono text-xs", role ? "text-emerald-400" : "text-zinc-400")}
+                      >
                         {ip}
                         {role && <span className="text-muted"> · {role}</span>}
                       </span>
                       <EdgeResult test={data.tests?.[ip]} phase={testPhase(ip)} />
-                      <TestButton onClick={() => onTest(ip)} disabled={testBusy || !running} busy={testPhase(ip) !== null} />
+                      <TestButton
+                        onClick={() => onTest(ip)}
+                        disabled={testBusy || !running}
+                        busy={testPhase(ip) !== null}
+                      />
                     </li>
                   );
                 })}
@@ -226,7 +249,12 @@ export default function ScannerSection() {
             </Btn>
           )}
           {!running && (
-            <Btn onClick={() => start.mutate()} disabled={busy} variant="positive" icon={start.isPending ? SPIN : <Power className="h-3.5 w-3.5" />}>
+            <Btn
+              onClick={() => start.mutate()}
+              disabled={busy}
+              variant="positive"
+              icon={start.isPending ? SPIN : <Power className="h-3.5 w-3.5" />}
+            >
               Start
             </Btn>
           )}
@@ -236,7 +264,9 @@ export default function ScannerSection() {
         </div>
       </div>
 
-      <Suspense fallback={logs ? <ModalLoadingShell title={`${logs.name} — Logs`} onClose={() => setLogs(null)} /> : null}>
+      <Suspense
+        fallback={logs ? <ModalLoadingShell title={`${logs.name} — Logs`} onClose={() => setLogs(null)} /> : null}
+      >
         {logs && <LogsModal containerName={logs.container} displayName={logs.name} onClose={() => setLogs(null)} />}
       </Suspense>
     </div>
@@ -275,13 +305,64 @@ function Pick({
 }
 
 function EdgeResult({ test, phase }: { test?: EdgeTest; phase: TestPhase | null }) {
-  if (phase) return <span className="text-muted inline-flex items-center gap-1 text-[10px]">{SPIN} {PHASE_LABEL[phase]}</span>;
+  if (phase)
+    return (
+      <span className="text-muted inline-flex items-center gap-1 text-[10px]">
+        {SPIN} {PHASE_LABEL[phase]}
+      </span>
+    );
   if (!test) return null;
+  const ms = Math.round(test.latency_ms);
+  const s = test.survival;
+
+  // Real-path verdict leads when it ran — a raw ping only proves reachability.
+  if (s?.checked) {
+    if (s.survived === true)
+      return (
+        <Result
+          cls="text-emerald-400"
+          label="stable"
+          detail={`${ms}ms`}
+          title={`survives the real connection · ${test.received}/${test.sent} reachable`}
+        />
+      );
+    if (s.survived === false)
+      return (
+        <Result
+          cls="text-red-400"
+          label="unstable"
+          detail={`${ms}ms`}
+          title={`dropped ${s.fails}/${s.probes} real-path probes`}
+        />
+      );
+    return (
+      <Result
+        cls="text-amber-400"
+        label="couldn't test"
+        detail={`${ms}ms`}
+        title={s.error || "probe didn't complete"}
+      />
+    );
+  }
+
+  // No real-path verdict: fall back to raw reachability.
   const loss = Math.round(test.loss * 100);
   const cls = loss === 0 ? "text-emerald-400" : loss <= 20 ? "text-amber-400" : "text-red-400";
+  const busy = s?.skipped === "busy";
   return (
-    <span className={cn("text-[10px] tabular-nums", cls)} title={`${test.received}/${test.sent} reachable`}>
-      {loss === 0 ? "stable" : `${loss}% loss`} · {Math.round(test.latency_ms)}ms
+    <Result
+      cls={cls}
+      label={loss === 0 ? "reachable" : `${loss}% loss`}
+      detail={busy ? `${ms}ms · retry` : `${ms}ms`}
+      title={busy ? "another probe was running — tap Test again" : `${test.received}/${test.sent} reachable`}
+    />
+  );
+}
+
+function Result({ cls, label, detail, title }: { cls: string; label: string; detail: string; title: string }) {
+  return (
+    <span className={cn("text-[10px] tabular-nums", cls)} title={title}>
+      {label} · {detail}
     </span>
   );
 }

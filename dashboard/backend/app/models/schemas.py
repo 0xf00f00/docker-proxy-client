@@ -198,12 +198,26 @@ class ContainerActionResponse(BaseModel):
     message: str
 
 
+class EdgeSurvival(BaseModel):
+    """Real-path (DPI-survival) verdict. `survived` is None when inconclusive;
+    `checked` is False when the probe didn't run (`skipped` says why)."""
+
+    checked: bool = False
+    survived: bool | None = None
+    fail_rate: float = 0.0
+    fails: int = 0
+    probes: int = 0
+    skipped: str | None = None
+    error: str | None = None
+
+
 class EdgeTest(BaseModel):
     sent: int
     received: int
     loss: float
     latency_ms: float
     ts: datetime
+    survival: EdgeSurvival | None = None
 
 
 class ScannerStatus(BaseModel):

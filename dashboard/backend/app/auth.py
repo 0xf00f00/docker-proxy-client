@@ -86,4 +86,5 @@ def verify_password(submitted: str) -> bool:
         return False
     return secrets.compare_digest(submitted.encode("utf-8"), expected.encode("utf-8"))
 
+
 RequireAuth = Depends(require_auth)

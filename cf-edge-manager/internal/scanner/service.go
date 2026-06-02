@@ -20,6 +20,24 @@ import (
 // scanBuffer is small: scans dedup to at most one active job.
 const scanBuffer = 4
 
+// survivalAcquireBudget bounds the wait for the single real-path slot; the probe
+// can't run concurrently (one NFQUEUE, fixed ports), so a contended test degrades
+// to cfst-only "busy" rather than blocking a worker.
+const survivalAcquireBudget = 4 * time.Second
+
+// SurvivalResult is the real-path verdict. Survived==nil = inconclusive (probe
+// stack didn't come up), not an edge failure.
+type SurvivalResult struct {
+	Survived *bool
+	FailRate float64
+	Fails    int
+	Probes   int
+	Err      string
+}
+
+// SurvivalFunc runs the real-path probe for ip; nil disables the tier (cfst-only).
+type SurvivalFunc func(ctx context.Context, ip string) SurvivalResult
+
 // Service owns the scan/test worker lanes, job store, and cfst client.
 type Service struct {
 	cfg   config.Config
@@ -30,6 +48,9 @@ type Service struct {
 	scanCh chan string
 	testCh chan string
 	hub    *hub
+
+	survival    SurvivalFunc
+	survivalSem chan struct{} // cap 1: serialises the real-path tier across all test workers
 
 	egress string
 	wg     sync.WaitGroup
@@ -64,11 +85,15 @@ func New(cfg config.Config, log *slog.Logger) (*Service, error) {
 			PoolSize:   cfg.PoolSize,
 			TestPings:  cfg.TestPings,
 		},
-		scanCh: make(chan string, scanBuffer),
-		testCh: make(chan string, cfg.TestQueueMax),
-		hub:    newHub(),
+		scanCh:      make(chan string, scanBuffer),
+		testCh:      make(chan string, cfg.TestQueueMax),
+		hub:         newHub(),
+		survivalSem: make(chan struct{}, 1),
 	}, nil
 }
+
+// SetSurvivalProbe installs the real-path probe hook; call once before serving.
+func (s *Service) SetSurvivalProbe(fn SurvivalFunc) { s.survival = fn }
 
 // Start launches the worker lanes and re-enqueues jobs left in flight by a
 // crash. ctx governs the whole service: cancelling it stops the lanes and

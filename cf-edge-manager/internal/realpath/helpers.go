@@ -1,9 +1,12 @@
 package realpath
 
 import (
+	"context"
 	"net"
 	"strings"
 	"time"
+
+	xproxy "golang.org/x/net/proxy"
 )
 
 func errStr(e error) string {
@@ -11,6 +14,14 @@ func errStr(e error) string {
 		return ""
 	}
 	return e.Error()
+}
+
+// dialContext dials through d, honouring ctx when d is a ContextDialer.
+func dialContext(ctx context.Context, d xproxy.Dialer, addr string) (net.Conn, error) {
+	if cd, ok := d.(xproxy.ContextDialer); ok {
+		return cd.DialContext(ctx, "tcp", addr)
+	}
+	return d.Dial("tcp", addr)
 }
 
 // waitDial polls until addr accepts a TCP connection or the deadline passes.

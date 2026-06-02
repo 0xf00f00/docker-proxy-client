@@ -6,8 +6,9 @@ import time
 import timeit
 from collections.abc import AsyncGenerator
 
-import httpx
 import speedtest
+
+from app.services import direct_net
 
 CONNECTIVITY_URL = "http://www.gstatic.com/generate_204"
 
@@ -26,7 +27,7 @@ async def test_dns(hostname: str = "google.com") -> dict:
 async def test_connectivity() -> dict:
     start = time.monotonic()
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with direct_net.async_client(timeout=15) as client:
             resp = await client.get(CONNECTIVITY_URL)
             elapsed = (time.monotonic() - start) * 1000
             return {

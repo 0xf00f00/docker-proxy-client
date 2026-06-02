@@ -14,10 +14,24 @@ import (
 
 // TestResult is the latest measurement for one IP. cfst.Stats is embedded so
 // its fields (sent/received/loss/latency_ms) promote into the JSON object the
-// dashboard renders.
+// dashboard renders. Survival is the real-path verdict, nil for cfst-only.
 type TestResult struct {
 	cfst.Stats
-	At time.Time `json:"ts"`
+	At       time.Time `json:"ts"`
+	Survival *Survival `json:"survival,omitempty"`
+}
+
+// Survival is the real-path verdict. Survived==nil = inconclusive (probe stack
+// didn't come up), not a failure. Checked==false means it didn't run; Skipped
+// says why (gate, busy, or not configured).
+type Survival struct {
+	Checked  bool    `json:"checked"`
+	Survived *bool   `json:"survived,omitempty"`
+	FailRate float64 `json:"fail_rate"`
+	Fails    int     `json:"fails"`
+	Probes   int     `json:"probes"`
+	Skipped  string  `json:"skipped,omitempty"`
+	Err      string  `json:"error,omitempty"`
 }
 
 // Snapshot is the live view served by GET /status.
@@ -43,7 +57,7 @@ type Store interface {
 	ReusableTest(ip string, cooldown time.Duration) (Job, bool)
 	PendingTests() int
 	PutPool(ips []string, at time.Time)
-	PutTestResult(ip string, s cfst.Stats, at time.Time)
+	PutTestResult(ip string, s cfst.Stats, surv *Survival, at time.Time)
 	Snapshot() Snapshot
 	// Reconcile repairs jobs left mid-flight by a crash and returns the jobs to
 	// re-enqueue (queued jobs, plus scans reset from running).
@@ -252,13 +266,13 @@ func (s *memStore) PutPool(ips []string, at time.Time) {
 	s.persist()
 }
 
-func (s *memStore) PutTestResult(ip string, st cfst.Stats, at time.Time) {
+func (s *memStore) PutTestResult(ip string, st cfst.Stats, surv *Survival, at time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, exists := s.tests[ip]; !exists && len(s.tests) >= s.maxTests {
 		s.evictOldestTest()
 	}
-	s.tests[ip] = TestResult{Stats: st, At: at}
+	s.tests[ip] = TestResult{Stats: st, At: at, Survival: surv}
 	s.persist()
 }
 
