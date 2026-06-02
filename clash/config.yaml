@@ -37,8 +37,8 @@ dns:
   # enhanced-mode: fake-ip
   # fake-ip-range: 198.18.0.1/16 # Fake IP addresses pool CIDR
   nameserver:
-    - https://1.1.1.1/dns-query#eth0
-    - https://8.8.8.8/dns-query#eth0
+    - https://1.1.1.1/dns-query#auto
+    - https://8.8.8.8/dns-query#auto
 
 sniffer:
   enable: true
