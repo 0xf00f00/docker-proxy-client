@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/0xf00f00/cf-edge-scanner/internal/cfst"
+	"github.com/0xf00f00/cf-edge-manager/internal/cfst"
 )
 
 // TestResult is the latest measurement for one IP. cfst.Stats is embedded so

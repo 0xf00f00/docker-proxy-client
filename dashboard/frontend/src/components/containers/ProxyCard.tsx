@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   RotateCw,
@@ -17,6 +17,10 @@ import {
   ShieldAlert,
   ShieldX,
   HelpCircle,
+  Download,
+  PhoneCall,
+  Link2,
+  Radio,
 } from "lucide-react";
 import { toast } from "sonner";
 import type { ContainerInfo, ConnectivityResult, StabilityResult, StabilityGrade, StabilityProgress } from "@/types";
@@ -607,6 +611,7 @@ const PROGRESS_TEXT: Record<StabilityProgress["phase"], string> = {
   idle: "Measuring normal speed…",
   load: "Stress-testing downloads & calls…",
   longlived: "Testing long connections…",
+  udp: "Checking if calls can use UDP…",
 };
 
 function useLonglivedCountdown(progress: StabilityProgress | null, running: boolean): number | null {
@@ -664,6 +669,8 @@ function StabilityPanel({
   error: string | null;
 }) {
   const countdown = useLonglivedCountdown(progress, running);
+  const [showWhat, setShowWhat] = useState(false);
+  const [showRaw, setShowRaw] = useState(false);
 
   if (running && !result) {
     return (
@@ -686,34 +693,259 @@ function StabilityPanel({
   if (!result) return null;
 
   const banner = regimeBanner(result);
+  const judged = result.bulk_grade !== "inconclusive";
+  const conn = connResultLine(result);
 
   return (
     <div className="border-border bg-muted/20 mb-3 rounded-lg border p-3">
+      {/* At-a-glance verdict — always visible (the "collapsed" state). */}
       <div className="flex flex-wrap items-center gap-2">
         <GradeChip label="Downloads" grade={result.bulk_grade} />
         <GradeChip label="Calls" grade={result.call_grade} />
       </div>
+      {judged && <p className="text-foreground/80 mt-2 text-xs leading-snug">{plainSummary(result)}</p>}
 
       {banner && <p className="mt-2 rounded-md bg-zinc-800/60 p-2 text-xs text-zinc-300">{banner}</p>}
       {result.error && !banner && <p className="text-destructive mt-2 text-xs">{result.error}</p>}
 
-      {result.bulk_grade !== "inconclusive" && (
-        <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
-          <Metric label="Downloads OK" value={`${result.completed}/${result.streams}`} />
-          {result.resets > 0 && <Metric label="Dropped" value={String(result.resets)} warn />}
-          {result.stalls > 0 && <Metric label="Stalled" value={String(result.stalls)} warn />}
-          {result.loaded_max_ms !== null && (
-            <Metric
-              label="Worst lag (loaded)"
-              value={`${Math.round(result.loaded_max_ms)}ms`}
-              warn={result.loaded_max_ms > 1000}
-            />
+      {judged && (
+        <>
+          <button
+            type="button"
+            onClick={() => setShowWhat((v) => !v)}
+            className="text-primary mt-2 flex min-h-9 items-center gap-1 text-xs font-medium"
+            aria-expanded={showWhat}
+          >
+            {showWhat ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            {showWhat ? "Hide what we tested" : "See what we tested"}
+          </button>
+
+          {showWhat && (
+            <div className="border-border/60 mt-1 divide-y divide-zinc-700/40 border-t">
+              <TestSection
+                Icon={Download}
+                name="Downloads & browsing"
+                what={`We opened ${result.streams} downloads at once — like loading apps, photos, and web pages.`}
+                result={downloadResultLine(result)}
+                meaning={DOWNLOAD_MEANING[result.bulk_grade]}
+                grade={result.bulk_grade}
+              />
+              <TestSection
+                Icon={PhoneCall}
+                name="Video & voice calls"
+                what="We flooded the upload the way a live call does, and watched how far your response lag jumped."
+                result={callResultLine(result)}
+                meaning={CALL_MEANING[result.call_grade]}
+                grade={result.call_grade}
+                extra={
+                  result.udp_detail ? (
+                    <p className="text-muted mt-1 flex items-start gap-1 text-[11px] leading-snug">
+                      <Radio
+                        className={cn(
+                          "mt-0.5 h-3 w-3 shrink-0",
+                          result.udp_supported === true
+                            ? "text-emerald-400"
+                            : result.udp_supported === false
+                              ? "text-amber-400"
+                              : "text-muted",
+                        )}
+                      />
+                      {result.udp_detail}
+                    </p>
+                  ) : null
+                }
+              />
+              {conn && (
+                <TestSection
+                  Icon={Link2}
+                  name="Staying connected"
+                  what="We held connections open like a call with quiet gaps, to see if they get cut off."
+                  result={conn}
+                  meaning={
+                    result.longlived_survived >= result.longlived_held
+                      ? "Long calls won't get dropped by the connection itself."
+                      : "Long calls may get cut off partway through."
+                  }
+                  grade={result.longlived_survived >= result.longlived_held ? "good" : "bad"}
+                />
+              )}
+
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowRaw((v) => !v)}
+                  className="text-muted flex min-h-9 items-center gap-1 text-[11px]"
+                  aria-expanded={showRaw}
+                >
+                  {showRaw ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                  {showRaw ? "Hide details" : "Details (raw numbers)"}
+                </button>
+                {showRaw && (
+                  <div className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+                    {rawMetrics(result).map((m) => (
+                      <Metric key={m.label} label={m.label} value={m.value} warn={m.warn} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
           )}
-          {result.loaded_spike_pct !== null && result.loaded_spike_pct > 0 && (
-            <Metric label="Froze (>1s)" value={`${result.loaded_spike_pct}%`} warn={result.loaded_spike_pct > 0.5} />
-          )}
-        </div>
+        </>
       )}
+    </div>
+  );
+}
+
+const DOWNLOAD_MEANING: Record<StabilityGrade, string> = {
+  good: "Browsing, media, and app updates should load reliably.",
+  degraded: "Most things load, but some pages or downloads may need retrying.",
+  bad: "Pages and downloads will often fail and need retrying.",
+  inconclusive: "",
+};
+
+const CALL_MEANING: Record<StabilityGrade, string> = {
+  good: "Video and voice calls should stay smooth.",
+  degraded: "Calls usually work but may stutter or lag at times.",
+  bad: "Calls will freeze, stutter, or drop — not reliable for video or voice right now.",
+  inconclusive: "Couldn't gather enough samples to judge calls — try again in a quiet moment.",
+};
+
+const CALL_CLAUSE: Record<StabilityGrade, string> = {
+  good: "calls stay smooth",
+  degraded: "calls may stutter",
+  bad: "calls freeze",
+  inconclusive: "calls couldn't be judged",
+};
+
+const BULK_CLAUSE: Record<StabilityGrade, string> = {
+  good: "downloads hold up",
+  degraded: "downloads sometimes stall",
+  bad: "downloads stall",
+  inconclusive: "downloads couldn't be judged",
+};
+
+function plainSummary(result: StabilityResult): string {
+  const s = `${CALL_CLAUSE[result.call_grade]}, ${BULK_CLAUSE[result.bulk_grade]}.`;
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function downloadResultLine(r: StabilityResult): string {
+  if (r.resets === 0 && r.stalls === 0 && r.completed === r.streams)
+    return `All ${r.streams} downloads finished cleanly.`;
+  const bad: string[] = [];
+  if (r.resets) bad.push(`${r.resets} dropped`);
+  if (r.stalls) bad.push(`${r.stalls} stalled`);
+  return `${r.completed} of ${r.streams} downloads finished${bad.length ? ` — ${bad.join(", ")}` : ""}.`;
+}
+
+function callResultLine(r: StabilityResult): string {
+  if (r.call_grade === "inconclusive")
+    return `Only ${r.loaded_samples} response checks landed under load — too few to judge call quality.`;
+  const max = r.loaded_max_ms;
+  if (max === null) return "Couldn't measure call lag this time.";
+  const idle = r.idle_p50_ms;
+  if (r.call_grade === "good")
+    return idle !== null
+      ? `Response lag stayed low (about ${Math.round(idle)}ms) even under call load.`
+      : "Response lag stayed low even under call load.";
+  // Honest pairing: typical lag (median) plus the worst spike — not max-vs-median,
+  // which would overstate. The p95 inflation that drove the grade is in Details.
+  const loadedTypical = r.loaded_p50_ms;
+  let s = idle !== null ? `Normally about ${Math.round(idle)}ms` : "Response lag";
+  s += loadedTypical !== null ? `; under call load it ran ${Math.round(loadedTypical)}ms` : "; under call load";
+  s += ` and spiked to ${Math.round(max)}ms`;
+  if (r.loaded_spike_pct !== null && r.loaded_spike_pct > 0) s += `, freezing ${r.loaded_spike_pct}% of the time`;
+  return s + ".";
+}
+
+function connResultLine(r: StabilityResult): string | null {
+  if (r.longlived_held <= 0) return null;
+  if (r.longlived_survived >= r.longlived_held)
+    return `${r.longlived_held === 2 ? "Both" : `All ${r.longlived_held}`} connections stayed open the whole time.`;
+  const dropped = r.longlived_held - r.longlived_survived;
+  return `${dropped} of ${r.longlived_held} connection${r.longlived_held > 1 ? "s" : ""} dropped early${
+    r.longlived_min_ttl_s !== null ? ` (after ${r.longlived_min_ttl_s}s)` : ""
+  }.`;
+}
+
+function rawMetrics(r: StabilityResult): { label: string; value: string; warn?: boolean }[] {
+  const out: { label: string; value: string; warn?: boolean }[] = [];
+  const ms = (v: number | null) => (v === null ? null : `${Math.round(v)}ms`);
+  const push = (label: string, value: string | null, warn = false) => {
+    if (value !== null) out.push({ label, value, warn });
+  };
+  push("Normal lag (median)", ms(r.idle_p50_ms));
+  push("Normal lag (p95)", ms(r.idle_p95_ms));
+  push("Lag under load (median)", ms(r.loaded_p50_ms));
+  push("Lag under load (p95)", ms(r.loaded_p95_ms), r.loaded_p95_ms !== null && r.loaded_p95_ms > 1000);
+  push("Worst lag under load", ms(r.loaded_max_ms), r.loaded_max_ms !== null && r.loaded_max_ms > 1000);
+  push(
+    "Lag increase (p95)",
+    r.latency_inflation !== null ? `${r.latency_inflation}×` : null,
+    (r.latency_inflation ?? 0) >= 2.5,
+  );
+  push("Jitter under load", ms(r.loaded_jitter_ms));
+  push("Dropped checks", r.loaded_loss_pct !== null ? `${r.loaded_loss_pct}%` : null, (r.loaded_loss_pct ?? 0) > 1);
+  push("Froze (>1s)", r.loaded_spike_pct !== null ? `${r.loaded_spike_pct}%` : null, (r.loaded_spike_pct ?? 0) > 0.5);
+  push("Call checks (under load)", String(r.loaded_samples), r.loaded_samples < 5);
+  push("Downloads finished", `${r.completed}/${r.streams}`, r.completed < r.streams);
+  if (r.resets) push("Downloads dropped", String(r.resets), true);
+  if (r.stalls) push("Downloads stalled", String(r.stalls), true);
+  if (r.longlived_held > 0)
+    push(
+      "Long connections held",
+      `${r.longlived_survived}/${r.longlived_held}`,
+      r.longlived_survived < r.longlived_held,
+    );
+  push("Shortest survival", r.longlived_min_ttl_s !== null ? `${r.longlived_min_ttl_s}s` : null);
+  return out;
+}
+
+function GradePill({ grade }: { grade: StabilityGrade }) {
+  const meta = GRADE_META[grade];
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold",
+        meta.chip,
+      )}
+    >
+      <meta.Icon className="h-3 w-3" />
+      {meta.label}
+    </span>
+  );
+}
+
+function TestSection({
+  Icon,
+  name,
+  what,
+  result,
+  meaning,
+  grade,
+  extra,
+}: {
+  Icon: typeof ShieldCheck;
+  name: string;
+  what: string;
+  result: string;
+  meaning: string;
+  grade: StabilityGrade;
+  extra?: ReactNode;
+}) {
+  return (
+    <div className="py-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5">
+          <Icon className="text-muted h-4 w-4 shrink-0" />
+          <span className="text-foreground/90 text-xs font-semibold">{name}</span>
+        </div>
+        <GradePill grade={grade} />
+      </div>
+      <p className="text-muted mt-1 text-[11px] leading-snug">{what}</p>
+      <p className="text-foreground/80 mt-1 text-xs leading-snug">→ {result}</p>
+      <p className="text-muted mt-0.5 text-[11px] leading-snug">{meaning}</p>
+      {extra}
     </div>
   );
 }

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/0xf00f00/cf-edge-scanner/internal/cfst"
+	"github.com/0xf00f00/cf-edge-manager/internal/cfst"
 )
 
 func testLogger() *slog.Logger {

@@ -7,12 +7,13 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/0xf00f00/cf-edge-scanner/internal/cfst"
-	"github.com/0xf00f00/cf-edge-scanner/internal/probe"
+	"github.com/0xf00f00/cf-edge-manager/internal/cfst"
+	"github.com/0xf00f00/cf-edge-manager/internal/probe"
 )
 
 func (s *Service) runScan(parent context.Context, id string) {
@@ -35,6 +36,7 @@ func (s *Service) runScan(parent context.Context, id string) {
 		s.log.Warn("preflight: no upstream reachable; skipping scan, keeping previous pool", "job", id)
 		return
 	}
+	s.checkEgress()
 
 	edges, err := s.cf.Scan(ctx)
 	if err != nil {
@@ -94,37 +96,85 @@ func (s *Service) runTest(parent context.Context, id string) {
 	s.log.Info("test complete", "job", id, "ip", j.IP, "loss", stats.Loss, "latency_ms", stats.LatencyMS)
 }
 
-// tlsGate filters the ranked pool to edges that carry a real TLS session past
-// DPI. Sequential and spaced (≈1 KB/candidate) so it never disturbs traffic.
-// If nothing survives, the TCP-ranked pool is kept as-is.
+// tlsGate re-orders the TCP-ranked pool by fake-SNI connect-survival: each
+// candidate gets a concurrent burst of TLSBurst sessions, candidates failing
+// more than TLSFailMax of the burst are dropped, and the survivors are returned
+// cleanest-first. A raw TCP ping (and a lone TLS handshake) both pass an edge
+// that resets 1-in-7 connections under concurrency; this gate is what tells a
+// 0%-loss edge from a 15%-loss one, so the picker — which takes the pool
+// best-first — inherits a pool ordered by what actually breaks in real use.
+//
+// One candidate at a time, spaced by TLSGap, so the burst never overlaps the
+// next candidate's and the whole gate stays a light, non-disruptive trickle. If
+// nothing survives the gate, the TCP-ranked pool is kept as-is rather than
+// emptied (a network-wide bad window must not wipe the pool).
 func (s *Service) tlsGate(ctx context.Context, pool []string) []string {
-	s.log.Info("tls-survival gate", "candidates", len(pool), "sni", s.cfg.TLSSNI)
-	var survivors []string
+	s.log.Info("connect-survival gate", "candidates", len(pool), "sni", s.cfg.TLSSNI,
+		"burst", s.cfg.TLSBurst, "fail_max", s.cfg.TLSFailMax)
+	type ranked struct {
+		ip       string
+		failRate float64
+	}
+	var survivors []ranked
+gate:
 	for _, ipStr := range pool {
 		ip, err := netip.ParseAddr(ipStr)
 		if err != nil {
 			continue
 		}
 		probeCtx, cancel := context.WithTimeout(ctx, s.cfg.TLSTimeout)
-		ok, err := probe.TLSSurvives(probeCtx, ip, s.cfg.Port, s.cfg.TLSSNI, s.cfg.TLSHold)
+		failRate, sample := probe.BurstSurvival(probeCtx, ip, s.cfg.Port, s.cfg.TLSSNI, s.cfg.TLSUTLS, s.cfg.TLSHold, s.cfg.TLSBurst)
 		cancel()
-		if ok {
-			survivors = append(survivors, ipStr)
-			s.log.Info("tls ok", "ip", ipStr)
+		if failRate <= s.cfg.TLSFailMax {
+			survivors = append(survivors, ranked{ipStr, failRate})
+			s.log.Info("survival ok", "ip", ipStr, "fail_rate", failRate)
 		} else {
-			s.log.Info("tls fail (dropped)", "ip", ipStr, "err", err)
+			s.log.Info("survival fail (dropped)", "ip", ipStr, "fail_rate", failRate, "err", sample)
 		}
 		select {
 		case <-ctx.Done():
-			return survivors
+			break gate // scan deadline hit; keep whatever survived so far
 		case <-time.After(s.cfg.TLSGap):
 		}
 	}
 	if len(survivors) == 0 {
-		s.log.Warn("no candidate survived tls gate; keeping tcp-ranked pool")
+		s.log.Warn("no candidate survived connect-survival gate; keeping tcp-ranked pool")
 		return pool
 	}
-	return survivors
+	// Stable sort by failure rate keeps the cfst latency order among ties, so the
+	// best-first pool is "cleanest first, then fastest".
+	sort.SliceStable(survivors, func(i, j int) bool { return survivors[i].failRate < survivors[j].failRate })
+	out := make([]string, len(survivors))
+	for i, r := range survivors {
+		out[i] = r.ip
+	}
+	return out
+}
+
+// checkEgress warns (non-fatally) if the scanner would dial out on an address
+// outside ExpectEgressPrefix — a guard that probes leave via the macvlan eth0 IP
+// and not the VPN default route, which would measure the wrong path. Disabled
+// when the prefix is unset; a malformed prefix or failed lookup is logged, not
+// fatal, since a wrong guard must never stop a scan.
+func (s *Service) checkEgress() {
+	if s.cfg.ExpectEgressPrefix == "" {
+		return
+	}
+	want, err := netip.ParsePrefix(s.cfg.ExpectEgressPrefix)
+	if err != nil {
+		s.log.Warn("egress check: bad SCAN_EGRESS_PREFIX, skipping", "prefix", s.cfg.ExpectEgressPrefix, "err", err)
+		return
+	}
+	src := probe.DefaultInterfaceIPv4("1.1.1.1")
+	addr, err := netip.ParseAddr(src)
+	if err != nil {
+		s.log.Warn("egress check: could not determine source IP, skipping", "got", src)
+		return
+	}
+	if !want.Contains(addr) {
+		s.log.Warn("egress NOT on expected interface; probes may be leaking onto the VPN route",
+			"egress_ip", src, "expected", s.cfg.ExpectEgressPrefix)
+	}
 }
 
 // preflightTargets are diverse, widely-reachable anycast addresses (two

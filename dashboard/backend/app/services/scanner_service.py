@@ -19,7 +19,7 @@ _API_TIMEOUT = 2.0
 _EVENT_READ_TIMEOUT = 30.0
 
 _BASE = Path(settings.compose_project_path)
-_POOL = _BASE / "cf-edge-scanner" / "out" / "pool.txt"
+_POOL = _BASE / "cf-edge-manager" / "out" / "pool.txt"
 _BYEDPI_HOSTS = _BASE / "coredns" / "fallback" / "edge.hosts"
 _SNISPOOF_CONF = _BASE / "sni-spoofing-fallback" / "config.ini"
 
@@ -154,10 +154,10 @@ def get_status() -> ScannerStatus:
         test_pending = False
 
     return ScannerStatus(
-        scanner_running=_running("cf-edge-scanner"),
+        scanner_running=_running("cf-edge-manager"),
         scanner_api_reachable=reachable,
         scanning=scanning,
-        picker_running=_running("cf-edge-picker"),
+        picker_running=_running("cf-edge-manager"),
         last_scan=last_scan,
         pool=pool,
         byedpi_ip=_first_token(_BYEDPI_HOSTS),

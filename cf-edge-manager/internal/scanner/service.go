@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/0xf00f00/cf-edge-scanner/internal/cfst"
-	"github.com/0xf00f00/cf-edge-scanner/internal/config"
+	"github.com/0xf00f00/cf-edge-manager/internal/cfst"
+	"github.com/0xf00f00/cf-edge-manager/internal/config"
 )
 
 // scanBuffer is small: scans dedup to at most one active job.
@@ -95,9 +95,6 @@ func (s *Service) Start(ctx context.Context) {
 
 // Wait blocks until all worker lanes have drained after ctx cancellation.
 func (s *Service) Wait() { s.wg.Wait() }
-
-// Egress reports the source IP the scanner egresses from (the macvlan address).
-func (s *Service) Egress() string { return s.egress }
 
 // CancelScan stops the active scan: an in-flight one via its context, a
 // still-queued one by marking it so the worker skips it. A no-op when idle.

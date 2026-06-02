@@ -78,8 +78,8 @@ export default function ScannerSection() {
     onError: (e) => toast.error(`Stop failed: ${getErrorMessage(e)}`),
   });
   const start = useMutation({
-    mutationFn: () => startContainer("cf-edge-scanner"),
-    onSuccess: () => toast.success("Scanner starting"),
+    mutationFn: () => startContainer("cf-edge-manager"),
+    onSuccess: () => toast.success("Manager starting"),
     onError: (e) => toast.error(`Start failed: ${getErrorMessage(e)}`),
   });
 
@@ -230,11 +230,8 @@ export default function ScannerSection() {
               Start
             </Btn>
           )}
-          <Btn onClick={() => setLogs({ container: "cf-edge-scanner", name: "Scanner" })} icon={LOG}>
-            Scanner logs
-          </Btn>
-          <Btn onClick={() => setLogs({ container: "cf-edge-picker", name: "Picker" })} icon={LOG}>
-            Picker logs
+          <Btn onClick={() => setLogs({ container: "cf-edge-manager", name: "Manager" })} icon={LOG}>
+            Manager logs
           </Btn>
         </div>
       </div>

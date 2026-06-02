@@ -115,7 +115,7 @@ export type StabilityGrade = "good" | "degraded" | "bad" | "inconclusive";
 
 /** Live progress while the stability probe runs (mirrors backend emit phases). */
 export interface StabilityProgress {
-  phase: "regime" | "idle" | "load" | "longlived";
+  phase: "regime" | "idle" | "load" | "longlived" | "udp";
   /** Long-lived phase only: the fixed hold's length (s). Sent once; the client
    *  runs the visible countdown locally (a streamed per-tick value can freeze if
    *  SSE chunks buffer mid-stream). */
@@ -135,15 +135,20 @@ export interface StabilityResult {
   reset_rate: number;
   stall_rate: number;
   idle_p50_ms: number | null;
+  idle_p95_ms: number | null;
   loaded_p50_ms: number | null;
+  loaded_p95_ms: number | null;
   loaded_max_ms: number | null;
   loaded_jitter_ms: number | null;
   loaded_loss_pct: number | null;
   loaded_spike_pct: number | null;
+  loaded_samples: number;
   latency_inflation: number | null;
   longlived_held: number;
   longlived_survived: number;
   longlived_min_ttl_s: number | null;
+  udp_supported: boolean | null;
+  udp_detail: string;
   summary: string;
   reasons: string[];
   error: string | null;

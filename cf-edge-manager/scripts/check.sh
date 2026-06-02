@@ -7,7 +7,7 @@ set -euo pipefail
 
 GOLANGCI_VERSION="v2.12.2"
 
-cd "$(dirname "$0")/.."  # cf-edge-scanner
+cd "$(dirname "$0")/.."  # cf-edge-manager
 
 # Build golangci-lint with the running toolchain. golangci-lint's own go.mod
 # pins an older toolchain, and a linter built with an older Go than the module

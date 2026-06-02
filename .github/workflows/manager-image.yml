@@ -1,21 +1,21 @@
-name: Build cf-edge-scanner image
+name: Build cf-edge-manager image
 
 on:
   push:
     branches:
       - main
     paths:
-      - cf-edge-scanner/**
-      - .github/workflows/scanner-image.yml
+      - cf-edge-manager/**
+      - .github/workflows/manager-image.yml
   workflow_dispatch:
 
 concurrency:
-  group: scanner-image-${{ github.ref }}
+  group: manager-image-${{ github.ref }}
   cancel-in-progress: true
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/docker-proxy-client-cf-edge-scanner
+  IMAGE_NAME: ${{ github.repository_owner }}/docker-proxy-client-cf-edge-manager
 
 permissions:
   contents: read
@@ -32,10 +32,10 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "1.26"
-          cache-dependency-path: cf-edge-scanner/go.mod
+          cache-dependency-path: cf-edge-manager/go.mod
 
       - name: gofmt
-        working-directory: cf-edge-scanner
+        working-directory: cf-edge-manager
         run: |
           unformatted=$(gofmt -l .)
           if [ -n "$unformatted" ]; then
@@ -43,18 +43,18 @@ jobs:
           fi
 
       - name: go vet
-        working-directory: cf-edge-scanner
+        working-directory: cf-edge-manager
         run: go vet ./...
 
       - name: go test
-        working-directory: cf-edge-scanner
+        working-directory: cf-edge-manager
         run: go test -race ./...
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
           version: v2.12.2
-          working-directory: cf-edge-scanner
+          working-directory: cf-edge-manager
 
   build:
     needs: lint
@@ -101,8 +101,8 @@ jobs:
         id: build
         uses: docker/build-push-action@v6
         with:
-          context: ./cf-edge-scanner
-          file: ./cf-edge-scanner/Dockerfile
+          context: ./cf-edge-manager
+          file: ./cf-edge-manager/Dockerfile
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true

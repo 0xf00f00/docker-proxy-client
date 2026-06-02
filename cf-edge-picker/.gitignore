@@ -1,4 +1,0 @@
-state/*
-!state/.gitkeep
-__pycache__/
-*.pyc

@@ -116,20 +116,29 @@ class StabilityResult(BaseModel):
     reset_rate: float = 0.0
     stall_rate: float = 0.0
 
-    # Call: latency under load. Calls freeze on tail spikes (>1s) that sit above
-    # p95, so spike fraction + worst-case inflation are the signals, not p95.
+    # Call: latency under load, measured on one warm connection (idle + loaded
+    # samples are like-for-like). Calls freeze on tail spikes (>1s), so the spike
+    # fraction and p95-inflation are the signals.
     idle_p50_ms: float | None = None
+    idle_p95_ms: float | None = None
     loaded_p50_ms: float | None = None
+    loaded_p95_ms: float | None = None
     loaded_max_ms: float | None = None
     loaded_jitter_ms: float | None = None
     loaded_loss_pct: float | None = None
     loaded_spike_pct: float | None = None
-    latency_inflation: float | None = None  # loaded_max / idle_p50
+    loaded_samples: int = 0  # pings collected under load (small → call inconclusive)
+    latency_inflation: float | None = None  # loaded_p95 / idle_p95
 
     # Long-lived session survival (DPI often resets long/idle connections).
     longlived_held: int = 0
     longlived_survived: int = 0
     longlived_min_ttl_s: float | None = None
+
+    # UDP/WebRTC reachability over the proxy. None = couldn't tell. False = calls
+    # fall back to a slower TCP relay (HTTP proxy, or UDP blocked on the path).
+    udp_supported: bool | None = None
+    udp_detail: str = ""
 
     summary: str = ""
     reasons: list[str] = []
@@ -222,6 +231,7 @@ class EdgeTestResponse(BaseModel):
     is actually running (the UI keeps its spinner until a new result streams in)
     and False when the scanner served a cached result within its cooldown -- that
     result is already in /scanner/status, so the UI must stop waiting."""
+
     success: bool
     message: str
     pending: bool
