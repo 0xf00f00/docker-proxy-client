@@ -527,13 +527,12 @@ services:
       - PROBE_FRAGMENT=${CF_PROBE_FRAGMENT:-false}
       # --- wiring constant (container the manager rewrites + restarts) ---
       - SNISPOOF_CONTAINER=sni-spoofing-fallback
-    ports:
-      - "127.0.0.1:${CF_API_PORT:-8088}:8088"
     networks:
       direct_internet:
         ipv4_address: 192.168.88.250
         gw_priority: 1000
-      default: {}
+      default:
+        ipv4_address: 10.20.0.12
     volumes:
       - ./cf-edge-manager/cf-ranges.txt:/cf-ranges.txt:ro
       - ./cf-edge-manager/out:/out
@@ -654,6 +653,7 @@ services:
       - DASHBOARD_BIND=${DASHBOARD_BIND:-0.0.0.0}
       - DASHBOARD_CLASH_API_URL=http://127.0.0.1:9697
       - DASHBOARD_CLASH_API_SECRET=${CLASH_API_SECRET:-}
+      - DASHBOARD_SCANNER_API_URL=http://10.20.0.12:8088
       - DASHBOARD_COMPOSE_PROJECT_PATH=/compose
       - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-}
       - DASHBOARD_DOCKER_HOST=tcp://127.0.0.1:2375
