@@ -40,3 +40,9 @@ __pycache__/
 xray-fallback/config.json
 sni-spoofing-fallback/config.ini
 coredns/fallback/edge.hosts
+
+clash/cache.db
+geoip.metadb
+clash/geoip.dat
+clash/geosite.dat
+clash/*.mmdb

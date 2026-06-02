@@ -158,13 +158,14 @@ services:
     entrypoint: ["/bin/sh", "/entrypoint.sh"]
 
   clash:
-    image: dreamacro/clash-premium:latest
+    image: metacubex/mihomo:latest
     container_name: clash
     restart: *default-restart
+    command: -d /root/.config/clash
     labels:
       - dashboard.enable=true
       - dashboard.category=proxy
-      - dashboard.name=Clash Premium
+      - dashboard.name=Clash
       - dashboard.protocol=mixed
       - dashboard.port=7890
       - dashboard.widget=system-proxy
@@ -177,6 +178,7 @@ services:
     volumes:
       - ./clash/config.yaml:/root/.config/clash/config.yaml:ro
       - ./clash/rules:/root/.config/clash/rules:ro
+      - ./clash/geoip.metadb:/root/.config/clash/geoip.metadb
     dns: *default-dns
     extra_hosts:
       - "naive:127.0.0.1"
@@ -185,10 +187,12 @@ services:
       - "frpc-proxy:10.20.0.15"
       - "xray:10.20.0.18"
       - "xray-fallback:10.20.0.24"
+      - "byedpi:10.20.0.20"
     depends_on:
       - naive
       - naive-uot
       - frpc-proxy
+      - byedpi
 
   singbox-sub:
     image: ghcr.io/sagernet/sing-box:latest

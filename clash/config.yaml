@@ -12,6 +12,7 @@ hosts:
   psiphon: 10.20.0.14
   xray: 10.20.0.18
   xray-fallback: 10.20.0.24
+  byedpi: 10.20.0.20
 
 # Clash router working mode
 # rule: rule-based packet routing
@@ -22,6 +23,10 @@ mode: rule
 # info / warning / error / debug / silent
 log-level: warning
 ipv6: false
+
+# use bundled geoip.metadb; no auto-download
+geodata-mode: false
+geo-auto-update: false
 
 dns:
   enable: true
@@ -35,8 +40,18 @@ dns:
     - https://1.1.1.1/dns-query
     - https://8.8.8.8/dns-query
 
+sniffer:
+  enable: true
+  override-destination: false
+  sniff:
+    TLS:
+      ports: [443]
+    HTTP:
+      ports: [80, 8080-8880]
+
 tun:
   enable: true
+  device: utun
   stack: system
   auto-route: false
   auto-redir: false
@@ -73,6 +88,14 @@ proxies:
     server: xray-fallback
     port: 10809
     udp: true
+  - name: "byedpi"
+    type: socks5
+    server: byedpi
+    port: 1080
+    udp: false
+  - name: "direct"
+    type: direct
+    interface-name: eth0
 
 proxy-groups:
   - name: auto
@@ -88,8 +111,13 @@ proxy-groups:
     lazy: true
   - name: direct_interface
     type: select
-    interface-name: eth0
-    proxies: ['DIRECT']
+    proxies: ['direct']
+  - name: bypass
+    type: fallback
+    proxies: [byedpi, auto]
+    url: 'http://www.gstatic.com/generate_204'
+    interval: 300
+    lazy: true
 
 # update from https://github.com/bootmortis/iran-hosted-domains/releases/
 rule-providers:
@@ -120,5 +148,11 @@ rules:
   - RULE-SET,ir,direct_interface
   - DOMAIN,gateway.icloud.com,direct_interface
   - DOMAIN-SUFFIX,.sn.mynetname.net,direct_interface
+
+  # container registries (add Google Meet domains/IPs here later)
+  - DOMAIN-SUFFIX,docker.io,bypass
+  - DOMAIN-SUFFIX,docker.com,bypass
+  - DOMAIN-SUFFIX,ghcr.io,bypass
+  - DOMAIN-SUFFIX,pkg-containers.githubusercontent.com,bypass
 
   - MATCH,auto
