@@ -10,12 +10,12 @@ import (
 	"net/http"
 	"net/netip"
 	"regexp"
+	"sni-spoofing-go/packet"
 	"strings"
 	"sync"
 	"time"
 
 	utls "github.com/refraction-networking/utls"
-	"sni-spoofing-go/packet"
 )
 
 // TLSSurvives opens a TLS session to ip:port with the given fronted SNI, holds
