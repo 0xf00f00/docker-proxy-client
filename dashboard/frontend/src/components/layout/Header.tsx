@@ -1,6 +1,7 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Network, Globe, Wifi, Loader2, LogIn, LogOut, ArrowDown, ArrowUp, ChevronRight } from "lucide-react";
+import ConfirmDialog from "@/components/common/ConfirmDialog";
 import { toast } from "sonner";
 import { logout, fetchSystemHealth } from "@/api/client";
 import { AUTH_STATUS_KEY, useAuth } from "@/hooks/useAuth";
@@ -17,11 +18,21 @@ interface CheckResult {
   latency_ms: number;
 }
 
-// "Is my uplink up?" — a periodic active measurement (one DNS lookup + one HEAD
-// to gstatic), now a single round trip. Polling pauses while a speed test or
-// "Test All" is in flight so we don't contend with the user's active
-// measurement.
+type PillState = "good" | "slow" | "down" | "unknown";
+
+// "Is my uplink up?"
 const POLL_MS = 25_000;
+
+const DNS_SLOW_MS = 250;
+const NET_SLOW_MS = 600;
+
+const DOWN_AFTER_FAILS = 2;
+
+function classifyCheck(r: CheckResult, slowMs: number, prevFails: number): { state: PillState; fails: number } {
+  if (r.success) return { state: r.latency_ms > slowMs ? "slow" : "good", fails: 0 };
+  const fails = prevFails + 1;
+  return { state: fails >= DOWN_AFTER_FAILS ? "down" : "slow", fails };
+}
 
 export default function Header({ pauseAutoRefresh = false }: { pauseAutoRefresh?: boolean }) {
   const [showConnections, setShowConnections] = useState(false);
@@ -32,8 +43,22 @@ export default function Header({ pauseAutoRefresh = false }: { pauseAutoRefresh?
     retry: 0,
   });
 
-  // One fetch backs both pills. On error, blank both so they fail together
-  // rather than showing stale halves; `isFetching`/`isPending` are shared.
+  const fails = useRef({ dns: 0, net: 0 });
+  const [pills, setPills] = useState<{ dns: PillState; net: PillState }>({ dns: "unknown", net: "unknown" });
+
+  useEffect(() => {
+    if (health.isError) {
+      setPills({ dns: "unknown", net: "unknown" });
+      return;
+    }
+    const data = health.data;
+    if (!data) return;
+    const dns = classifyCheck(data.dns, DNS_SLOW_MS, fails.current.dns);
+    const net = classifyCheck(data.connectivity, NET_SLOW_MS, fails.current.net);
+    fails.current = { dns: dns.fails, net: net.fails };
+    setPills({ dns: dns.state, net: net.state });
+  }, [health.data, health.isError]);
+
   const recheck = () => {
     health.refetch();
   };
@@ -54,22 +79,20 @@ export default function Header({ pauseAutoRefresh = false }: { pauseAutoRefresh?
           <StatusPill
             icon={<Globe className="h-3.5 w-3.5" />}
             label="DNS"
-            data={health.isError ? undefined : health.data?.dns}
-            isError={health.isError}
+            state={pills.dns}
+            latencyMs={health.data?.dns.latency_ms}
             isFetching={health.isFetching}
-            isPending={health.isPending}
             onClick={recheck}
           />
           <StatusPill
             icon={<Wifi className="h-3.5 w-3.5" />}
             label="Net"
-            data={health.isError ? undefined : health.data?.connectivity}
-            isError={health.isError}
+            state={pills.net}
+            latencyMs={health.data?.connectivity.latency_ms}
             isFetching={health.isFetching}
-            isPending={health.isPending}
             onClick={recheck}
           />
-          <AuthButton />
+          <AuthControl />
         </div>
       </div>
       <TrafficStrip onOpen={openConnections} />
@@ -97,6 +120,9 @@ function SkeletonBar({ className }: { className?: string }) {
 function TrafficPill({ onOpen }: { onOpen: () => void }) {
   const { system, systemHistory, status } = useTraffic();
   const loading = status === "connecting";
+  // Stream dropped after being live: keep the last numbers but dim them so they
+  // don't read as live. The connection strip carries the actual message.
+  const stale = status === "reconnecting";
   const idle = !loading && system.down < 1 && system.up < 1;
 
   return (
@@ -105,7 +131,7 @@ function TrafficPill({ onOpen }: { onOpen: () => void }) {
       onClick={onOpen}
       className={cn(
         "hidden min-h-9 items-center gap-1.5 rounded-full bg-zinc-800 px-2.5 hover:bg-zinc-700 sm:inline-flex",
-        (loading || idle) && "opacity-80",
+        (loading || idle || stale) && "opacity-80",
       )}
       aria-label={
         loading
@@ -149,13 +175,18 @@ function TrafficPill({ onOpen }: { onOpen: () => void }) {
 function TrafficStrip({ onOpen }: { onOpen: () => void }) {
   const { system, systemHistory, status } = useTraffic();
   const loading = status === "connecting";
+  // Reconnecting: keep the last numbers, dimmed — the strip up top says why.
+  const stale = status === "reconnecting";
   const idle = !loading && system.down < 1 && system.up < 1;
 
   return (
     <button
       type="button"
       onClick={onOpen}
-      className="border-border/60 mx-auto flex min-h-11 w-full max-w-3xl items-center gap-3 border-t px-3 py-1.5 text-left active:bg-zinc-800/50 sm:hidden"
+      className={cn(
+        "border-border/60 mx-auto flex min-h-11 w-full max-w-3xl items-center gap-3 border-t px-3 py-1.5 text-left active:bg-zinc-800/50 sm:hidden",
+        stale && "opacity-80",
+      )}
       aria-label={
         loading
           ? "Network activity — connecting. Tap to view connections"
@@ -179,31 +210,50 @@ function TrafficStrip({ onOpen }: { onOpen: () => void }) {
   );
 }
 
-function AuthButton() {
+function AuthControl() {
   const { enabled, authenticated, showLogin } = useAuth();
   const qc = useQueryClient();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   if (!enabled) return null;
 
   const handleLogout = async () => {
+    setBusy(true);
     try {
       await logout();
       toast.success("Signed out");
+      setConfirmOpen(false);
     } finally {
+      setBusy(false);
       qc.invalidateQueries({ queryKey: AUTH_STATUS_KEY });
     }
   };
 
   if (authenticated) {
     return (
-      <button
-        type="button"
-        onClick={handleLogout}
-        className="inline-flex min-h-9 items-center gap-1.5 rounded-full bg-zinc-800 px-2.5 text-xs font-medium text-zinc-300 hover:bg-zinc-700"
-      >
-        <LogOut className="h-3.5 w-3.5" />
-        <span>Sign out</span>
-      </button>
+      <>
+        <button
+          type="button"
+          onClick={() => setConfirmOpen(true)}
+          aria-haspopup="dialog"
+          aria-label="Sign out"
+          title="Sign out"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+        >
+          <LogOut className="h-4 w-4" />
+        </button>
+        <ConfirmDialog
+          open={confirmOpen}
+          onOpenChange={setConfirmOpen}
+          title="Sign out?"
+          message="You'll need to sign in again to make changes."
+          confirmLabel="Sign out"
+          variant="destructive"
+          busy={busy}
+          onConfirm={handleLogout}
+        />
+      </>
     );
   }
 
@@ -219,46 +269,43 @@ function AuthButton() {
   );
 }
 
+const STATE_WORD: Record<PillState, string> = {
+  good: "online",
+  slow: "slow",
+  down: "down",
+  unknown: "unknown",
+};
+
 function StatusPill({
   icon,
   label,
-  data,
-  isError,
+  state,
+  latencyMs,
   isFetching,
-  isPending,
   onClick,
 }: {
   icon: React.ReactNode;
   label: string;
-  data: CheckResult | undefined;
-  isError: boolean;
+  state: PillState;
+  latencyMs: number | undefined;
   isFetching: boolean;
-  isPending: boolean;
   onClick: () => void;
 }) {
-  // Treat the latest attempt as authoritative: if it errored, ignore stale `data`
-  // so the pill collapses to a clean failure state instead of mixing red + a
-  // ghost latency from the previous success.
-  const showError = isError;
-  const success = !showError && data?.success === true;
-  const failed = showError || (data != null && !data.success);
-
-  // Reserve a fixed slot for the latency text so the pill width stays stable
-  // through loading, success, and failure transitions.
-  const latencyText = showError ? "—" : data ? `${data.latency_ms}ms` : isPending ? "" : "—";
+  const latencyText = latencyMs != null ? `${latencyMs}ms` : "—";
 
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={isFetching}
-      aria-label={`${label} status — tap to recheck`}
+      aria-label={`${label} ${STATE_WORD[state]} — tap to recheck`}
       aria-busy={isFetching}
       className={cn(
         "relative inline-flex min-h-9 min-w-[5.25rem] items-center gap-1.5 rounded-full px-2.5 text-xs font-medium transition-colors duration-300",
-        success && "bg-emerald-500/10 text-emerald-400",
-        failed && "bg-red-500/10 text-red-400",
-        !success && !failed && "bg-zinc-800 text-zinc-400",
+        state === "good" && "bg-emerald-500/10 text-emerald-400",
+        state === "slow" && "bg-amber-500/10 text-amber-400",
+        state === "down" && "bg-red-500/10 text-red-400",
+        state === "unknown" && "bg-zinc-800 text-zinc-400",
         isFetching && "opacity-90",
       )}
     >
@@ -279,7 +326,14 @@ function StatusPill({
         />
       </span>
       <span>{label}</span>
-      <span className="ml-auto min-w-[2.5rem] text-right text-[10px] tabular-nums opacity-70">{latencyText}</span>
+      <span
+        className={cn(
+          "ml-auto min-w-[2.5rem] text-right text-[10px] tabular-nums",
+          state === "unknown" ? "opacity-40" : "opacity-70",
+        )}
+      >
+        {latencyText}
+      </span>
     </button>
   );
 }

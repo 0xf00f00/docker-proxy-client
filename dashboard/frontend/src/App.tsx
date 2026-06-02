@@ -1,6 +1,7 @@
 import { Suspense, useEffect, useRef, useState } from "react";
 import { AlertCircle, Loader2 } from "lucide-react";
 import Header from "@/components/layout/Header";
+import ConnectionBanner from "@/components/layout/ConnectionBanner";
 import SpeedTest from "@/components/system/SpeedTest";
 import ProxyGrid from "@/components/containers/ProxyGrid";
 import DnsSection from "@/components/containers/DnsSection";
@@ -36,6 +37,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-zinc-950 pb-[calc(env(safe-area-inset-bottom)+3rem)]">
+      <ConnectionBanner />
       <Header pauseAutoRefresh={connectivity.running || speedRunning} />
       <main className="mx-auto max-w-3xl px-3 py-4 sm:px-4 sm:py-6">
         <SpeedTest onRunningChange={setSpeedRunning} />
