@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Network, Globe, Wifi, Loader2, LogIn, LogOut, ArrowDown, ArrowUp, ChevronRight } from "lucide-react";
 import ConfirmDialog from "@/components/common/ConfirmDialog";
@@ -26,12 +26,12 @@ const POLL_MS = 25_000;
 const DNS_SLOW_MS = 250;
 const NET_SLOW_MS = 600;
 
-const DOWN_AFTER_FAILS = 2;
+const OFFLINE_AFTER_FAILS = 2;
 
-function classifyCheck(r: CheckResult, slowMs: number, prevFails: number): { state: PillState; fails: number } {
-  if (r.success) return { state: r.latency_ms > slowMs ? "slow" : "good", fails: 0 };
-  const fails = prevFails + 1;
-  return { state: fails >= DOWN_AFTER_FAILS ? "down" : "slow", fails };
+function probeState(check: CheckResult | undefined, slowMs: number, offline: boolean): PillState {
+  if (!check) return "unknown";
+  if (!check.success) return offline ? "down" : "slow";
+  return check.latency_ms > slowMs ? "slow" : "good";
 }
 
 export default function Header({ pauseAutoRefresh = false }: { pauseAutoRefresh?: boolean }) {
@@ -43,21 +43,21 @@ export default function Header({ pauseAutoRefresh = false }: { pauseAutoRefresh?
     retry: 0,
   });
 
-  const fails = useRef({ dns: 0, net: 0 });
-  const [pills, setPills] = useState<{ dns: PillState; net: PillState }>({ dns: "unknown", net: "unknown" });
+  const offlineFails = useRef(0);
+  const lastSeen = useRef(0);
+  if (health.data && health.dataUpdatedAt !== lastSeen.current) {
+    lastSeen.current = health.dataUpdatedAt;
+    const bothFailed = !health.data.dns.success && !health.data.connectivity.success;
+    offlineFails.current = bothFailed ? offlineFails.current + 1 : 0;
+  }
 
-  useEffect(() => {
-    if (health.isError) {
-      setPills({ dns: "unknown", net: "unknown" });
-      return;
-    }
-    const data = health.data;
-    if (!data) return;
-    const dns = classifyCheck(data.dns, DNS_SLOW_MS, fails.current.dns);
-    const net = classifyCheck(data.connectivity, NET_SLOW_MS, fails.current.net);
-    fails.current = { dns: dns.fails, net: net.fails };
-    setPills({ dns: dns.state, net: net.state });
-  }, [health.data, health.isError]);
+  const offline = !health.isError && offlineFails.current >= OFFLINE_AFTER_FAILS;
+  const pills: { dns: PillState; net: PillState } = health.isError
+    ? { dns: "unknown", net: "unknown" }
+    : {
+        dns: probeState(health.data?.dns, DNS_SLOW_MS, offline),
+        net: probeState(health.data?.connectivity, NET_SLOW_MS, offline),
+      };
 
   const recheck = () => {
     health.refetch();
