@@ -151,19 +151,18 @@ rules:
   - DOMAIN-SUFFIX,.sn.mynetname.net,direct_interface
 
   # container registries
-  # - DOMAIN-SUFFIX,docker.io,bypass
-  # - DOMAIN-SUFFIX,docker.com,bypass
-  # - DOMAIN-SUFFIX,ghcr.io,bypass
-  # - DOMAIN-SUFFIX,pkg-containers.githubusercontent.com,bypass
+  # - DOMAIN-SUFFIX,docker.io,byedpi
+  # - DOMAIN-SUFFIX,docker.com,byedpi
+  # - DOMAIN-SUFFIX,ghcr.io,byedpi
+  # - DOMAIN-SUFFIX,pkg-containers.githubusercontent.com,byedpi
 
   # Google Meet calls (Meet only — general Google stays on the tunnel).
-  # reject Meet's UDP media so it falls back fast to TURN-over-TLS (uplink drops UDP)
   # - AND,((NETWORK,UDP),(DST-PORT,19302-19309),(GEOIP,google)),REJECT
   # - AND,((NETWORK,UDP),(DST-PORT,3478),(GEOIP,google)),REJECT
-  # - DOMAIN-SUFFIX,meet.google.com,bypass
-  # - DOMAIN-SUFFIX,turns.goog,bypass
-  # - IP-CIDR,142.250.82.0/24,bypass
-  # - IP-CIDR,74.125.250.0/24,bypass
-  # - IP-CIDR,74.125.247.128/32,bypass
+  # - DOMAIN-SUFFIX,meet.google.com,byedpi
+  # - DOMAIN-SUFFIX,turns.goog,byedpi
+  # - IP-CIDR,142.250.82.0/24,byedpi
+  # - IP-CIDR,74.125.250.0/24,byedpi
+  # - IP-CIDR,74.125.247.128/32,byedpi
 
   - MATCH,auto
