@@ -6,7 +6,10 @@ conditions that actually break under DPI: connection *concurrency* (what a docke
 pull does) and *sustained load* (what makes a Google Meet call choppy). This
 creates both and grades them separately:
 
-  Bulk  — under many parallel DOWNLOAD streams, the reset/stall rate.
+  Bulk  — under a burst of many simultaneous NEW connections (what a docker pull
+          does), how many the DPI resets. A single long download survives, so a
+          sized download under-detects this; a 0-byte handshake burst is both more
+          sensitive and ~free on metered data.
   Call  — latency spikes/jitter while the UPLOAD is saturated. Calls break in the
           upload direction: the uplink is the scarce side and a single muxed
           tunnel head-of-line-blocks the call behind bulk bytes. The download
@@ -25,10 +28,10 @@ froze"). Idle and loaded samples now come from the same warm connection, so they
 are like-for-like and the inflation ratio compares matching percentiles (p95/p95),
 not loaded-max / idle-median.
 
-Quota: users pay for metered data, so this is kept light. The download streams
-are byte-capped (~CONCURRENCY x STREAM_CAP_BYTES). The upload phase saturates the
-scarce uplink for CALL_ROUNDS x UPLOAD_WINDOW_S and is then cancelled, so it moves
-only ~uplink-rate x window (a few MB), well under the download budget.
+Quota: users pay for metered data, so this is kept light. The Bulk detector is a
+burst of 0-byte handshakes (no payload). The only real data cost is the upload
+phase, which saturates the scarce uplink for CALL_ROUNDS x UPLOAD_WINDOW_S and is
+then cancelled, so it moves only ~uplink-rate x window (a few MB).
 
 WARNING: it briefly saturates the tunnel (both directions), degrading any live
 user for its duration — on-demand / quiet-window only, never an unattended loop.
@@ -51,8 +54,11 @@ from app.services.connectivity_tests import regime as regime_mod
 EventCb = Callable[[str, dict], Awaitable[None]]
 
 LATENCY_URL = "http://www.gstatic.com/generate_204"
-STREAM_CAP_BYTES = 3_000_000
-LOAD_URL = f"https://speed.cloudflare.com/__down?bytes={STREAM_CAP_BYTES}"
+
+BURST_URL = "https://speed.cloudflare.com/__down?bytes=0"
+BURST_N = 20
+BURST_CYCLES = 3
+BURST_TIMEOUT_S = 20.0
 
 # Upload-saturation (Call) phase. Calls break in the upload direction, so call
 # latency is probed while the uplink is saturated — not during the (healthy)
@@ -74,10 +80,7 @@ PING_INTERVAL_S = 0.075
 PING_TIMEOUT_S = 8.0
 MIN_CALL_SAMPLES = 5  # below this the loaded sample is too thin to grade
 
-CONCURRENCY = 10  # enough parallel streams to trip concurrency-triggered DPI
-STREAM_TIMEOUT = 45.0
-STALL_S = 5.0  # no bytes for this long = stalled
-MIN_BYTES = 2_000_000  # a stream must move this much to count as completed
+STREAM_TIMEOUT = 45.0  # upload-stream ceiling (the Call phase)
 IDLE_PROBES = 10
 
 # Long-lived survival: small periodic requests over a held connection — trivial
@@ -94,11 +97,8 @@ STUN_HOST = "stun.l.google.com"
 STUN_PORT = 19302
 UDP_PROBE_TIMEOUT_S = 4.0
 
-# Worst-case data ceiling (probes are ~0-byte 204s; trickle is negligible). The
-# upload phase is link-bounded in practice, so the real figure is well under this.
-DATA_BUDGET_MB = round(
-    (CONCURRENCY * STREAM_CAP_BYTES + CALL_ROUNDS * UPLOAD_CONCURRENCY * UPLOAD_STREAM_CAP_BYTES) / 1_000_000
-)
+# Worst-case data ceiling.
+DATA_BUDGET_MB = round((CALL_ROUNDS * UPLOAD_CONCURRENCY * UPLOAD_STREAM_CAP_BYTES) / 1_000_000)
 
 # Grading. Tail-spike based: p50 can look fine while the tail hits multiple seconds
 # — calls freeze on those spikes, so we grade on p95-inflation and the fraction of
@@ -154,32 +154,39 @@ def _pct(values: list[float], p: float) -> float | None:
     return round(v, 1)
 
 
-async def _one_stream(proxy_url: str) -> str:
-    """Stream the byte-capped LOAD_URL, classifying: completed | reset | stalled."""
-    got = 0
-    start = time.monotonic()
-    last_byte = start
+async def _one_handshake(proxy_url: str) -> bool:
+    """Open a brand-new connection through the proxy and make one tiny request.
+    True = it completed; False = the connection was reset/failed. No pooling: each
+    call is a fresh handshake, so a concurrent batch is a *burst of new handshakes*
+    (what the DPI drops a few of)."""
     try:
-        async with (
-            httpx.AsyncClient(proxy=proxy_url, timeout=httpx.Timeout(15.0, read=STALL_S + 2)) as client,
-            client.stream("GET", LOAD_URL) as resp,
-        ):
-            if resp.status_code != 200:
-                return "reset"
-            async for chunk in resp.aiter_bytes():
-                now = time.monotonic()
-                if chunk:
-                    got += len(chunk)
-                    last_byte = now
-                if now - last_byte >= STALL_S:
-                    return "stalled"
-                if now - start >= STREAM_TIMEOUT:
-                    break
-        return "completed" if got >= MIN_BYTES else "stalled"
-    except (httpx.ReadTimeout, httpx.ReadError):
-        return "stalled" if (time.monotonic() - last_byte) >= STALL_S else "reset"
+        async with httpx.AsyncClient(proxy=proxy_url, timeout=httpx.Timeout(BURST_TIMEOUT_S)) as client:
+            resp = await client.get(BURST_URL)
+            return resp.status_code < 500
     except Exception:
-        return "reset"
+        return False
+
+
+async def _handshake_burst(proxy_url: str, emit: EventCb) -> dict:
+    """Bulk grade: fire BURST_N brand-new connections at once, repeat BURST_CYCLES
+    times, count how many the DPI reset. Near-zero data, and more sensitive than a
+    sized download (it catches the connect-time RST a single long stream hides)."""
+    total = ok = 0
+    for _ in range(BURST_CYCLES):
+        await emit("progress", {"phase": "load"})
+        results = await asyncio.gather(*(_one_handshake(proxy_url) for _ in range(BURST_N)))
+        ok += sum(1 for r in results if r)
+        total += len(results)
+        await asyncio.sleep(1.0)
+    resets = total - ok
+    return {
+        "streams": total,
+        "completed": ok,
+        "resets": resets,
+        "stalls": 0,
+        "reset_rate": round(resets / total, 3) if total else 0.0,
+        "stall_rate": 0.0,
+    }
 
 
 async def _warm_ping_series(
@@ -238,12 +245,11 @@ async def _one_upload_stream(proxy_url: str) -> None:
 
 
 async def _load_and_probe(proxy_url: str, emit: EventCb) -> dict:
-    """Idle baseline + two load phases, all over ONE warm call-path connection.
-    DOWNLOAD concurrency feeds the Bulk grade (DPI reset/stall under many parallel
-    streams). UPLOAD saturation feeds the Call grade: calls break in the upload
-    direction (scarce uplink + a muxed tunnel that HOL-blocks the call behind
-    bulk), and the download direction has headroom, so probing call latency under
-    downloads would understate the lag."""
+    """Idle baseline + upload-saturation rounds, all over ONE warm call-path
+    connection — feeds the Call grade. Calls break in the upload direction (scarce
+    uplink + a muxed tunnel that HOL-blocks the call behind bulk), and the download
+    direction has headroom, so probing call latency under downloads would understate
+    the lag. The Bulk grade comes separately from _handshake_burst."""
     limits = httpx.Limits(max_keepalive_connections=1, max_connections=1)
     await emit("progress", {"phase": "idle"})
 
@@ -269,26 +275,12 @@ async def _load_and_probe(proxy_url: str, emit: EventCb) -> dict:
                 t.cancel()
             await asyncio.gather(*ul, return_exceptions=True)
 
-    # Bulk: parallel byte-capped downloads → reset/stall counts. Run after the call
-    # phase so the warm ping connection isn't left idling mid-test.
-    await emit("progress", {"phase": "load"})
-    dl = [asyncio.create_task(_one_stream(proxy_url)) for _ in range(CONCURRENCY)]
-    counts = {"completed": 0, "reset": 0, "stalled": 0}
-    for o in await asyncio.gather(*dl):
-        counts[o] += 1
-
     idle_p95 = _pct(idle, 95)
     loaded_p95 = _pct(loaded, 95)
     loaded_max = max(loaded) if loaded else None
     probed = len(loaded) + loss
     spike = sum(1 for v in loaded if v > SPIKE_THRESHOLD_MS)
     return {
-        "streams": CONCURRENCY,
-        "completed": counts["completed"],
-        "resets": counts["reset"],
-        "stalls": counts["stalled"],
-        "reset_rate": round(counts["reset"] / CONCURRENCY, 3),
-        "stall_rate": round(counts["stalled"] / CONCURRENCY, 3),
         "idle_p50_ms": _median(idle),
         "idle_p95_ms": idle_p95,
         "loaded_p50_ms": _median(loaded),
@@ -419,9 +411,7 @@ def _grade_bulk(m: dict, longlived: dict) -> tuple[str, list[str]]:
     ll_reset = longlived["survived"] < longlived["held"]
 
     if m["resets"]:
-        reasons.append(f"{m['resets']}/{m['streams']} downloads dropped")
-    if m["stalls"]:
-        reasons.append(f"{m['stalls']}/{m['streams']} downloads stalled")
+        reasons.append(f"{m['resets']}/{m['streams']} connections dropped")
     if ll_reset:
         reasons.append(f"connection dropped after {longlived['min_ttl_s']}s")
 
@@ -474,7 +464,7 @@ def _grade_call(m: dict) -> tuple[str, list[str]]:
 
 
 def _summary(m: dict) -> str:
-    parts = [f"{m['completed']}/{m['streams']} downloads OK"]
+    parts = [f"{m['completed']}/{m['streams']} connections OK"]
     if m.get("loaded_p95_ms") is not None:
         parts.append(f"{int(m['loaded_p95_ms'])}ms p95 under load")
     if m.get("loaded_spike_pct"):
@@ -517,7 +507,8 @@ async def test_stability(container: ContainerInfo, on_event: EventCb | None = No
         return _inconclusive(container.name, proxy_url, regime, regime.detail)
 
     await emit("phase", {"phase": "load"})
-    m = await _load_and_probe(proxy_url, emit)
+    burst = await _handshake_burst(proxy_url, emit)
+    m = {**burst, **await _load_and_probe(proxy_url, emit)}
 
     await emit("phase", {"phase": "longlived"})
     longlived = await _longlived(proxy_url, emit)
