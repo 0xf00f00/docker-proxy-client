@@ -2,6 +2,7 @@ import asyncio
 
 from fastapi import APIRouter
 
+from app.config import settings
 from app.services import system_service
 from app.sse import sse_response
 
@@ -14,7 +15,7 @@ async def health():
         system_service.test_dns(),
         system_service.test_connectivity(),
     )
-    return {"dns": dns, "connectivity": connectivity}
+    return {"dns": dns, "connectivity": connectivity, "connection_tracking": settings.connection_tracking}
 
 
 @router.get("/speed/stream")

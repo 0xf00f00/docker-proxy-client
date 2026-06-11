@@ -63,7 +63,8 @@ export default function Header({ pauseAutoRefresh = false }: { pauseAutoRefresh?
     health.refetch();
   };
 
-  const openConnections = () => setShowConnections(true);
+  const trackingEnabled = health.data?.connection_tracking ?? false;
+  const openConnections = trackingEnabled ? () => setShowConnections(true) : undefined;
 
   return (
     <header className="border-border bg-card border-b" style={{ paddingTop: "env(safe-area-inset-top)" }}>
@@ -117,29 +118,27 @@ function SkeletonBar({ className }: { className?: string }) {
  * (with a flat line), and live numbers when active. Desktop only — the mobile
  * readout lives in TrafficStrip. Per-proxy detail lives on the cards.
  */
-function TrafficPill({ onOpen }: { onOpen: () => void }) {
+function TrafficPill({ onOpen }: { onOpen?: () => void }) {
   const { system, systemHistory, status } = useTraffic();
   const loading = status === "connecting";
   // Stream dropped after being live: keep the last numbers but dim them so they
   // don't read as live. The connection strip carries the actual message.
   const stale = status === "reconnecting";
   const idle = !loading && system.down < 1 && system.up < 1;
+  const interactive = !!onOpen;
+  const tap = interactive ? ". Tap to view connections" : "";
 
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className={cn(
-        "hidden min-h-9 items-center gap-1.5 rounded-full bg-zinc-800 px-2.5 hover:bg-zinc-700 sm:inline-flex",
-        (loading || idle || stale) && "opacity-80",
-      )}
-      aria-label={
-        loading
-          ? "Network activity — connecting. Tap to view connections"
-          : `Network activity — download ${formatRate(system.down)}, upload ${formatRate(system.up)}. Tap to view connections`
-      }
-      title="View live connections"
-    >
+  const className = cn(
+    "hidden min-h-9 items-center gap-1.5 rounded-full bg-zinc-800 px-2.5 sm:inline-flex",
+    interactive && "hover:bg-zinc-700",
+    (loading || idle || stale) && "opacity-80",
+  );
+  const label = loading
+    ? `Network activity — connecting${tap}`
+    : `Network activity — download ${formatRate(system.down)}, upload ${formatRate(system.up)}${tap}`;
+
+  const inner = (
+    <>
       <Sparkline down={systemHistory.map((s) => s.down)} up={systemHistory.map((s) => s.up)} />
       <div className="flex flex-col gap-0.5 text-[10px] leading-none font-medium tabular-nums">
         <span className={cn("inline-flex items-center gap-0.5", loading || idle ? "text-zinc-500" : "text-sky-400")}>
@@ -161,7 +160,20 @@ function TrafficPill({ onOpen }: { onOpen: () => void }) {
           )}
         </span>
       </div>
-      <ChevronRight className="h-3.5 w-3.5 shrink-0 text-zinc-500" aria-hidden="true" />
+      {interactive && <ChevronRight className="h-3.5 w-3.5 shrink-0 text-zinc-500" aria-hidden="true" />}
+    </>
+  );
+
+  if (!interactive) {
+    return (
+      <div className={className} role="img" aria-label={label}>
+        {inner}
+      </div>
+    );
+  }
+  return (
+    <button type="button" onClick={onOpen} className={className} aria-label={label} title="View live connections">
+      {inner}
     </button>
   );
 }
@@ -172,27 +184,26 @@ function TrafficPill({ onOpen }: { onOpen: () => void }) {
  * across a dedicated line — so this gets a wider sparkline and full-precision
  * rates ("1.2 MB/s"), plus an explicit "0 B/s" idle state and a loading skeleton.
  */
-function TrafficStrip({ onOpen }: { onOpen: () => void }) {
+function TrafficStrip({ onOpen }: { onOpen?: () => void }) {
   const { system, systemHistory, status } = useTraffic();
   const loading = status === "connecting";
   // Reconnecting: keep the last numbers, dimmed — the strip up top says why.
   const stale = status === "reconnecting";
   const idle = !loading && system.down < 1 && system.up < 1;
+  const interactive = !!onOpen;
+  const tap = interactive ? ". Tap to view connections" : "";
 
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className={cn(
-        "border-border/60 mx-auto flex min-h-11 w-full max-w-3xl items-center gap-3 border-t px-3 py-1.5 text-left active:bg-zinc-800/50 sm:hidden",
-        stale && "opacity-80",
-      )}
-      aria-label={
-        loading
-          ? "Network activity — connecting. Tap to view connections"
-          : `Network activity — download ${formatRate(system.down)}, upload ${formatRate(system.up)}. Tap to view connections`
-      }
-    >
+  const className = cn(
+    "border-border/60 mx-auto flex min-h-11 w-full max-w-3xl items-center gap-3 border-t px-3 py-1.5 text-left sm:hidden",
+    interactive && "active:bg-zinc-800/50",
+    stale && "opacity-80",
+  );
+  const label = loading
+    ? `Network activity — connecting${tap}`
+    : `Network activity — download ${formatRate(system.down)}, upload ${formatRate(system.up)}${tap}`;
+
+  const inner = (
+    <>
       <span className="text-muted text-[10px] font-medium tracking-wide uppercase">Network</span>
       <Sparkline down={systemHistory.map((s) => s.down)} up={systemHistory.map((s) => s.up)} width={72} height={18} />
       <div className="ml-auto flex items-center gap-3 text-xs tabular-nums">
@@ -205,7 +216,20 @@ function TrafficStrip({ onOpen }: { onOpen: () => void }) {
           {loading ? <SkeletonBar className="h-3 w-16" /> : idle ? "0 B/s" : formatRate(system.up)}
         </span>
       </div>
-      <ChevronRight className="h-4 w-4 shrink-0 text-zinc-500" aria-hidden="true" />
+      {interactive && <ChevronRight className="h-4 w-4 shrink-0 text-zinc-500" aria-hidden="true" />}
+    </>
+  );
+
+  if (!interactive) {
+    return (
+      <div className={className} role="img" aria-label={label}>
+        {inner}
+      </div>
+    );
+  }
+  return (
+    <button type="button" onClick={onOpen} className={className} aria-label={label}>
+      {inner}
     </button>
   );
 }

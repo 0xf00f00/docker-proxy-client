@@ -3,9 +3,8 @@ import { openConnectionsStream } from "@/api/client";
 import type { ConnectionSite, ConnectionsSnapshot } from "@/types";
 
 const HISTORY_LEN = 60; // ~60s of samples for the summary sparkline.
-// How long a site keeps showing (dimmed, marked "Done") after its last
-// connection closes, so rows fade out on a beat instead of vanishing mid-glance.
-const LINGER_MS = 5000;
+// Ended sites stay in the list until the modal closes; cap how many we keep.
+const ENDED_CAP = 60;
 
 // "connecting"   = no snapshot yet (show a skeleton, not an empty state).
 // "live"         = receiving snapshots (an empty `sites` legitimately means idle).
@@ -14,8 +13,8 @@ export type ConnectionsStatus = "connecting" | "live" | "reconnecting";
 
 /** A site as rendered: the raw group plus where it is in its lifecycle. */
 export interface DisplaySite extends ConnectionSite {
-  // "live" = currently open; "closing" = recently gone, lingering before removal.
-  phase: "live" | "closing";
+  // "live" = currently open; "ended" = its last connection closed (kept, dimmed).
+  phase: "live" | "ended";
 }
 
 export interface ConnectionsState {
@@ -33,10 +32,10 @@ export interface ConnectionsState {
 
 interface Tracked {
   site: ConnectionSite;
-  phase: "live" | "closing";
+  phase: "live" | "ended";
   /** Arrival sequence — pins a row's position so it never jumps under live rates. */
   seq: number;
-  /** performance.now() when the site went "closing"; 0 while live. */
+  /** performance.now() when the site ended; 0 while live (used to evict oldest). */
   closedAt: number;
 }
 
@@ -69,30 +68,37 @@ export function useConnections(): ConnectionsState {
         map.set(site.host, { site, phase: "live", seq: ex?.seq ?? seqRef.current++, closedAt: 0 });
       }
 
-      // Anything no longer present: start (or finish) its linger.
+      // Anything no longer present: mark it ended and keep it (don't remove).
       for (const [host, t] of map) {
-        if (liveHosts.has(host)) continue;
-        if (t.phase === "live") {
-          map.set(host, {
-            ...t,
-            phase: "closing",
-            closedAt: now,
-            // Keep cumulative bytes (what it transferred) but zero live rates.
-            site: {
-              ...t.site,
-              downRate: 0,
-              upRate: 0,
-              connections: t.site.connections.map((c) => ({ ...c, downRate: 0, upRate: 0 })),
-            },
-          });
-        } else if (now - t.closedAt >= LINGER_MS) {
-          map.delete(host);
-        }
+        if (liveHosts.has(host) || t.phase === "ended") continue;
+        map.set(host, {
+          ...t,
+          phase: "ended",
+          closedAt: now,
+          // Keep cumulative bytes (what it transferred) but zero live rates.
+          site: {
+            ...t.site,
+            downRate: 0,
+            upRate: 0,
+            connections: t.site.connections.map((c) => ({ ...c, downRate: 0, upRate: 0 })),
+          },
+        });
+      }
+
+      const ended = [...map.entries()].filter(([, t]) => t.phase === "ended");
+      if (ended.length > ENDED_CAP) {
+        ended
+          .sort((a, b) => a[1].closedAt - b[1].closedAt)
+          .slice(0, ended.length - ENDED_CAP)
+          .forEach(([host]) => map.delete(host));
       }
 
       const sites: DisplaySite[] = [...map.values()]
-        // Newest arrivals at the top; a row never reorders under live rates once placed.
-        .sort((a, b) => b.seq - a.seq)
+        // Live on top (newest first), ended below (most-recently-ended first).
+        .sort((a, b) => {
+          if ((a.phase === "ended") !== (b.phase === "ended")) return a.phase === "ended" ? 1 : -1;
+          return a.phase === "ended" ? b.closedAt - a.closedAt : b.seq - a.seq;
+        })
         .map((t) => ({ ...t.site, phase: t.phase }));
 
       setState((prev) => ({

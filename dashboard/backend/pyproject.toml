@@ -14,6 +14,7 @@ dependencies = [
     "speedtest-cli>=2.1",
     "ruamel-yaml>=0.19.1",
     "websockets>=14",
+    "tldextract>=5.1",
 ]
 
 [dependency-groups]

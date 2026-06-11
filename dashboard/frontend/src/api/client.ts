@@ -20,6 +20,8 @@ import type {
   EdgeTestResponse,
   TrafficSnapshot,
   ConnectionsSnapshot,
+  UsagePeriod,
+  UsageReport,
 } from "@/types";
 
 const api = axios.create({ baseURL: "/api/v1" });
@@ -183,6 +185,17 @@ export async function fetchSystemHealth(): Promise<SystemHealthResult> {
 
 export async function cancelSpeedTest(): Promise<void> {
   await api.post("/system/speed/cancel");
+}
+
+// ---------- Data usage (auth-gated; present only when connection_tracking is on) ----------
+
+export async function fetchUsageTop(period: UsagePeriod, limit = 20): Promise<UsageReport> {
+  const { data } = await api.get<UsageReport>("/usage/top", { params: { period, limit } });
+  return data;
+}
+
+export async function clearUsage(): Promise<void> {
+  await api.delete("/usage");
 }
 
 // ---------- SSE streams ----------

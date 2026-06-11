@@ -5,6 +5,8 @@ import contextlib
 import logging
 import time
 
+from app.services import usage_service
+
 logger = logging.getLogger(__name__)
 
 # Per-connection rate smoothing — matches the traffic collector so the two
@@ -49,21 +51,32 @@ class ConnectionsCollector:
         q: asyncio.Queue[dict] = asyncio.Queue(maxsize=QUEUE_MAXSIZE)
         async with self._lock:
             self._subscribers.add(q)
-            if self._task is None or self._task.done():
-                self._task = asyncio.create_task(self._run())
         return q
 
     async def unsubscribe(self, q: asyncio.Queue[dict]) -> None:
         async with self._lock:
             self._subscribers.discard(q)
             if not self._subscribers:
-                if self._task is not None:
-                    self._task.cancel()
-                self._task = None
-                # Drop stale baselines so a future viewer starts clean.
+                # No one's watching: drop the live-rate baselines and last snapshot
+                # so the next viewer starts clean (usage accounting keeps its own).
                 self._prev.clear()
                 self._rate.clear()
                 self._latest = None
+
+    def start(self) -> None:
+        """Start the always-on pump (lifespan-managed; only when tracking is on)."""
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._run())
+
+    async def stop(self) -> None:
+        if self._task is not None:
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+            self._task = None
+        self._prev.clear()
+        self._rate.clear()
+        self._latest = None
 
     def latest(self) -> dict | None:
         return self._latest
@@ -197,6 +210,13 @@ class ConnectionsCollector:
             "truncated": dropped,
         }
 
+    def _consume(self, raw: dict) -> None:
+        # Usage accrues whether or not the modal is open; the grouped snapshot is
+        # only built when someone's watching.
+        usage_service.recorder.ingest(raw)
+        if self._subscribers:
+            self._fan_out(self._build_snapshot(raw, time.monotonic()))
+
     async def _run(self) -> None:
         # Imported here to avoid a module-load cycle (registry -> docker_service).
         from app.services.system_proxy import registry
@@ -212,7 +232,7 @@ class ConnectionsCollector:
                     await asyncio.sleep(5.0)
                     continue
                 async for raw in controller.stream_connections():
-                    self._fan_out(self._build_snapshot(raw, time.monotonic()))
+                    self._consume(raw)
             except asyncio.CancelledError:
                 raise
             except Exception:

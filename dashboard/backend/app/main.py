@@ -3,6 +3,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
+from app.config import settings
 from app.middleware import SecurityHeadersMiddleware
 from app.routers import auth as auth_router
 from app.routers import (
@@ -16,8 +17,9 @@ from app.routers import (
     system,
     system_proxy,
     traffic,
+    usage,
 )
-from app.services import connectivity_service, docker_service, store
+from app.services import connections_service, connectivity_service, docker_service, store, usage_service
 from app.static_files import CachedStaticFiles
 
 
@@ -25,7 +27,16 @@ from app.static_files import CachedStaticFiles
 async def lifespan(app: FastAPI):
     store.init()
     connectivity_service.load_cache()
+    # Opt-in; when off, erase any history from a prior opt-in.
+    if settings.connection_tracking:
+        usage_service.recorder.start()
+        connections_service.collector.start()
+    else:
+        store.wipe_usage()
     yield
+    if settings.connection_tracking:
+        await connections_service.collector.stop()
+        await usage_service.recorder.flush_and_stop()
     docker_service.close_client()
 
 
@@ -45,6 +56,7 @@ _routers = (
     dns_scanner,
     traffic,
     connections,
+    usage,
 )
 for module in _routers:
     app.include_router(module.router, prefix="/api/v1")
@@ -55,7 +67,5 @@ if static_dir.exists():
 
 if __name__ == "__main__":
     import uvicorn
-
-    from app.config import settings
 
     uvicorn.run("app.main:app", host=settings.bind, port=settings.port)

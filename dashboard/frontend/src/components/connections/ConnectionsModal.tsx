@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Activity, ArrowDown, ArrowUp, ChevronDown, Globe, Loader2 } from "lucide-react";
 import Modal from "@/components/common/Modal";
 import Sparkline from "@/components/common/Sparkline";
+import UsageView from "@/components/connections/UsageView";
 import { useConnections, type DisplaySite } from "@/hooks/useConnections";
 import type { ConnectionDetail } from "@/types";
 import { cn } from "@/utils/cn";
@@ -26,8 +27,59 @@ function hostInitial(host: string): string {
   return m ? m[0].toUpperCase() : "•";
 }
 
+type Tab = "live" | "usage";
+
 export default function ConnectionsModal({ onClose }: { onClose: () => void }) {
-  const { status, snapshot, sites, rateHistory } = useConnections();
+  const [tab, setTab] = useState<Tab>("live");
+  // Mounted across tab switches so the stream and ended-list survive a tab change.
+  const live = useConnections();
+
+  return (
+    <Modal
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title="Connections"
+      subtitle="Live activity and where your data goes"
+      size="full"
+    >
+      <div className="flex h-full flex-col">
+        <TabBar tab={tab} onChange={setTab} />
+        <div className={cn("flex min-h-0 flex-1 flex-col", tab !== "live" && "hidden")}>
+          <LiveTab {...live} />
+        </div>
+        {tab === "usage" && <UsageView />}
+      </div>
+    </Modal>
+  );
+}
+
+function TabBar({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
+  const tabs: { id: Tab; label: string }[] = [
+    { id: "live", label: "Live" },
+    { id: "usage", label: "Usage" },
+  ];
+  return (
+    <div className="border-border flex shrink-0 border-b px-2">
+      {tabs.map((t) => (
+        <button
+          key={t.id}
+          type="button"
+          onClick={() => onChange(t.id)}
+          aria-current={tab === t.id}
+          className={cn(
+            "relative min-h-11 px-4 text-sm font-medium transition-colors",
+            tab === t.id ? "text-foreground" : "text-muted hover:text-foreground",
+          )}
+        >
+          {t.label}
+          {tab === t.id && <span className="bg-primary absolute inset-x-2 -bottom-px h-0.5 rounded-full" />}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function LiveTab({ status, snapshot, sites, rateHistory }: ReturnType<typeof useConnections>) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   const toggle = (host: string) =>
@@ -39,54 +91,48 @@ export default function ConnectionsModal({ onClose }: { onClose: () => void }) {
     });
 
   const loading = status === "connecting" && snapshot === null;
+  const firstEnded = sites.findIndex((s) => s.phase === "ended");
 
   return (
-    <Modal
-      open
-      onOpenChange={(o) => !o && onClose()}
-      title="Connections"
-      subtitle="What's connected through the proxy, live"
-      size="full"
-    >
-      <div className="flex h-full flex-col">
-        <SummaryBar
-          count={snapshot?.count ?? 0}
-          downRate={snapshot?.totals.downRate ?? 0}
-          upRate={snapshot?.totals.upRate ?? 0}
-          totalDown={snapshot?.totals.down ?? 0}
-          totalUp={snapshot?.totals.up ?? 0}
-          history={rateHistory}
-          status={status}
-        />
+    <>
+      <SummaryBar
+        count={snapshot?.count ?? 0}
+        downRate={snapshot?.totals.downRate ?? 0}
+        upRate={snapshot?.totals.upRate ?? 0}
+        totalDown={snapshot?.totals.down ?? 0}
+        totalUp={snapshot?.totals.up ?? 0}
+        history={rateHistory}
+        status={status}
+      />
 
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          {loading ? (
-            <div className="flex items-center justify-center gap-2 py-16">
-              <Loader2 className="text-muted h-5 w-5 animate-spin" />
-              <span className="text-muted text-sm">Loading connections…</span>
-            </div>
-          ) : sites.length === 0 ? (
-            <EmptyState />
-          ) : (
-            <ul className="divide-border/60 divide-y">
-              {sites.map((site) => (
-                <SiteRow
-                  key={site.host}
-                  site={site}
-                  expanded={expanded.has(site.host)}
-                  onToggle={() => toggle(site.host)}
-                />
-              ))}
-              {snapshot && snapshot.truncated > 0 && (
-                <li className="text-muted px-4 py-3 text-center text-xs">
-                  +{snapshot.truncated} more {snapshot.truncated === 1 ? "site" : "sites"} not shown
-                </li>
-              )}
-            </ul>
-          )}
-        </div>
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        {loading ? (
+          <div className="flex items-center justify-center gap-2 py-16">
+            <Loader2 className="text-muted h-5 w-5 animate-spin" />
+            <span className="text-muted text-sm">Loading connections…</span>
+          </div>
+        ) : sites.length === 0 ? (
+          <EmptyState />
+        ) : (
+          <ul className="divide-border/60 divide-y">
+            {sites.map((site, i) => (
+              <SiteRow
+                key={site.host}
+                site={site}
+                showEndedDivider={i === firstEnded}
+                expanded={expanded.has(site.host)}
+                onToggle={() => toggle(site.host)}
+              />
+            ))}
+            {snapshot && snapshot.truncated > 0 && (
+              <li className="text-muted px-4 py-3 text-center text-xs">
+                +{snapshot.truncated} more {snapshot.truncated === 1 ? "site" : "sites"} not shown
+              </li>
+            )}
+          </ul>
+        )}
       </div>
-    </Modal>
+    </>
   );
 }
 
@@ -111,7 +157,12 @@ function SummaryBar({
     <div className="border-border bg-card sticky top-0 z-10 border-b px-4 py-3">
       <div className="flex items-center gap-3">
         <div className="flex min-w-0 flex-col">
-          <span className="text-xl font-semibold tabular-nums">{count}</span>
+          <span className="inline-flex items-center gap-1.5 text-xl font-semibold tabular-nums">
+            {count > 0 && status === "live" && (
+              <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-emerald-400" aria-hidden="true" />
+            )}
+            {count}
+          </span>
           <span className="text-muted text-xs">active {count === 1 ? "connection" : "connections"}</span>
         </div>
 
@@ -145,68 +196,97 @@ function SummaryBar({
   );
 }
 
-function SiteRow({ site, expanded, onToggle }: { site: DisplaySite; expanded: boolean; onToggle: () => void }) {
+function SiteRow({
+  site,
+  expanded,
+  onToggle,
+  showEndedDivider,
+}: {
+  site: DisplaySite;
+  expanded: boolean;
+  onToggle: () => void;
+  showEndedDivider: boolean;
+}) {
   const exit = exitLabel(site.exit);
   const hue = hostHue(site.host);
-  const closing = site.phase === "closing";
-  const active = !closing && site.downRate + site.upRate >= 1;
+  const ended = site.phase === "ended";
+  const active = !ended && site.downRate + site.upRate >= 1;
 
   return (
-    <li
-      className={cn(
-        // Fade in on arrival (@starting-style) and dim out once finished.
-        "transition-opacity duration-500 ease-out starting:opacity-0",
-        closing && "opacity-45",
+    <>
+      {showEndedDivider && (
+        <li className="text-muted bg-zinc-950/40 px-4 py-1.5 text-[10px] font-medium tracking-wide uppercase">
+          Recently ended
+        </li>
       )}
-    >
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={expanded}
-        className="flex min-h-[3.25rem] w-full items-center gap-3 px-4 py-2.5 text-left active:bg-zinc-800/50"
+      <li
+        className={cn(
+          // Fade in on arrival (@starting-style); ended rows stay dimmed.
+          "transition-opacity duration-500 ease-out starting:opacity-0",
+          ended && "opacity-50",
+        )}
       >
-        <span
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-semibold"
-          style={{ backgroundColor: `hsl(${hue} 45% 20%)`, color: `hsl(${hue} 70% 72%)` }}
-          aria-hidden="true"
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={expanded}
+          className="flex min-h-[3.25rem] w-full items-center gap-3 px-4 py-2.5 text-left active:bg-zinc-800/50"
         >
-          {hostInitial(site.host)}
-        </span>
+          <span
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-semibold"
+            style={
+              ended
+                ? { backgroundColor: "hsl(240 4% 22%)", color: "hsl(240 5% 65%)" }
+                : { backgroundColor: `hsl(${hue} 45% 20%)`, color: `hsl(${hue} 70% 72%)` }
+            }
+            aria-hidden="true"
+          >
+            {hostInitial(site.host)}
+          </span>
 
-        <span className="flex min-w-0 flex-1 flex-col">
-          <span className="flex items-center gap-1.5">
-            <span className="truncate text-sm font-medium">{site.host}</span>
-            {closing && (
-              <span className="shrink-0 rounded-full bg-zinc-700/60 px-1.5 py-px text-[10px] font-medium text-zinc-300">
-                Done
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="flex items-center gap-1.5">
+              <span className="truncate text-sm font-medium">{site.host}</span>
+              {ended && (
+                <span className="shrink-0 rounded-full bg-zinc-700/60 px-1.5 py-px text-[10px] font-medium text-zinc-300">
+                  Ended
+                </span>
+              )}
+            </span>
+            <span className="text-muted truncate text-xs">
+              {ended ? (
+                <>
+                  used ↓ {formatBytes(site.down)} · ↑ {formatBytes(site.up)}
+                </>
+              ) : (
+                `${site.count} ${site.count === 1 ? "connection" : "connections"}`
+              )}
+              {exit && <>{` · via ${exit}`}</>}
+            </span>
+          </span>
+
+          {!ended && (
+            <span className="flex shrink-0 flex-col items-end gap-0.5 text-[11px] tabular-nums">
+              <span className={cn("inline-flex items-center gap-0.5", active ? "text-sky-400" : "text-zinc-500")}>
+                <ArrowDown className="h-2.5 w-2.5 shrink-0" />
+                <span className="min-w-[2.5rem] text-right">{formatRateShort(site.downRate)}/s</span>
               </span>
-            )}
-          </span>
-          <span className="text-muted truncate text-xs">
-            {closing ? "Finished" : `${site.count} ${site.count === 1 ? "connection" : "connections"}`}
-            {exit && <>{` · via ${exit}`}</>}
-          </span>
-        </span>
+              <span className={cn("inline-flex items-center gap-0.5", active ? "text-emerald-400" : "text-zinc-500")}>
+                <ArrowUp className="h-2.5 w-2.5 shrink-0" />
+                <span className="min-w-[2.5rem] text-right">{formatRateShort(site.upRate)}/s</span>
+              </span>
+            </span>
+          )}
 
-        <span className="flex shrink-0 flex-col items-end gap-0.5 text-[11px] tabular-nums">
-          <span className={cn("inline-flex items-center gap-0.5", active ? "text-sky-400" : "text-zinc-500")}>
-            <ArrowDown className="h-2.5 w-2.5 shrink-0" />
-            <span className="min-w-[2.5rem] text-right">{formatRateShort(site.downRate)}/s</span>
-          </span>
-          <span className={cn("inline-flex items-center gap-0.5", active ? "text-emerald-400" : "text-zinc-500")}>
-            <ArrowUp className="h-2.5 w-2.5 shrink-0" />
-            <span className="min-w-[2.5rem] text-right">{formatRateShort(site.upRate)}/s</span>
-          </span>
-        </span>
+          <ChevronDown
+            className={cn("text-muted h-4 w-4 shrink-0 transition-transform", expanded && "rotate-180")}
+            aria-hidden="true"
+          />
+        </button>
 
-        <ChevronDown
-          className={cn("text-muted h-4 w-4 shrink-0 transition-transform", expanded && "rotate-180")}
-          aria-hidden="true"
-        />
-      </button>
-
-      {expanded && <SiteDetails site={site} exit={exit} />}
-    </li>
+        {expanded && <SiteDetails site={site} exit={exit} />}
+      </li>
+    </>
   );
 }
 

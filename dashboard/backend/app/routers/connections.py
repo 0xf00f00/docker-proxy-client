@@ -9,9 +9,10 @@ endpoints.
 import asyncio
 from collections.abc import AsyncGenerator
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from app.auth import RequireAuth
+from app.config import settings
 from app.services.connections_service import collector
 from app.sse import comment, event, sse_response
 
@@ -24,6 +25,9 @@ HEARTBEAT_SEC = 10.0
 
 @router.get("/stream", dependencies=[RequireAuth])
 async def stream_connections():
+    if not settings.connection_tracking:
+        raise HTTPException(status_code=404)
+
     async def gen() -> AsyncGenerator[str]:
         q = await collector.subscribe()
         try:

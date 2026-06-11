@@ -239,6 +239,36 @@ export interface SystemConnectivityResult {
 export interface SystemHealthResult {
   dns: SystemDnsResult;
   connectivity: SystemConnectivityResult;
+  /** Whether per-host connection tracking (live + usage) is enabled (env opt-in). */
+  connection_tracking: boolean;
+}
+
+export type UsagePeriod = "today" | "week" | "month" | "all";
+
+/** One domain's data usage over a period. Bytes are cumulative; share is 0..1. */
+export interface UsageSite {
+  domain: string;
+  down: number;
+  up: number;
+  share: number;
+}
+
+/** One bar of the usage trend chart: bucket start (unix) and combined bytes. */
+export interface UsageBucket {
+  ts: number;
+  value: number;
+}
+
+/** Top data consumers for a period, with the period grand total and trend. */
+export interface UsageReport {
+  period: UsagePeriod;
+  since: number;
+  until: number;
+  updatedAt: number;
+  totalDown: number;
+  totalUp: number;
+  sites: UsageSite[];
+  series: UsageBucket[];
 }
 
 /** A live throughput snapshot. All rates are bytes/second. */
