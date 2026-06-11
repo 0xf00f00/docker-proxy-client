@@ -119,7 +119,7 @@ func Reload(url string) error {
 	if err != nil {
 		return fmt.Errorf("reload %q: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return fmt.Errorf("reload %q: %s: %s", url, resp.Status, strings.TrimSpace(string(body)))
@@ -188,9 +188,9 @@ func atomicWrite(path string, data []byte) error {
 		return err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer func() { _ = os.Remove(tmpName) }()
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {

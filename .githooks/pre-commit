@@ -2,13 +2,21 @@
 # Versioned pre-commit hook. Enable in a fresh clone with:
 #   git config core.hooksPath .githooks
 #
-# Runs the cf-edge-scanner CI checks only when staged changes touch that module,
+# Runs each Go module's CI checks only when staged changes touch that module,
 # so commits elsewhere in the repo are unaffected. Bypass with `git commit -n`.
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
+staged="$(git diff --cached --name-only --diff-filter=ACMR)"
 
-if git diff --cached --name-only --diff-filter=ACMR | grep -q '^cf-edge-scanner/.*\.go$\|^cf-edge-scanner/go\.\(mod\|sum\)$'; then
-  echo "cf-edge-scanner changed -- running CI checks"
-  "${repo_root}/cf-edge-scanner/scripts/check.sh"
-fi
+# Run a module's check script when staged .go / go.mod / go.sum under it change.
+check_module() {
+  local module="$1"
+  if grep -qE "^${module}/.*\.go\$|^${module}/go\.(mod|sum)\$" <<<"$staged"; then
+    echo "${module} changed -- running CI checks"
+    "${repo_root}/${module}/scripts/check.sh"
+  fi
+}
+
+check_module cf-edge-manager
+check_module dns-scanner

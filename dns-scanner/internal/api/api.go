@@ -410,10 +410,14 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		case <-ctx.Done():
 			return
 		case b := <-ch:
-			fmt.Fprintf(w, "event: snapshot\ndata: %s\n\n", b)
+			if _, err := fmt.Fprintf(w, "event: snapshot\ndata: %s\n\n", b); err != nil {
+				return
+			}
 			flusher.Flush()
 		case <-ticker.C:
-			io.WriteString(w, ": keepalive\n\n")
+			if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
+				return
+			}
 			flusher.Flush()
 		}
 	}

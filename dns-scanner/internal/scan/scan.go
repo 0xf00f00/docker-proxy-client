@@ -116,7 +116,7 @@ func runResolver(ctx context.Context, d Deps, certSem chan struct{}, ip string) 
 	if err != nil {
 		return r
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	rtt, ok := stages.Alive(s, "example.com")
 	if !ok {
@@ -140,7 +140,7 @@ func runResolver(ctx context.Context, d Deps, certSem chan struct{}, ip string) 
 	}
 	r.LossFrac, r.Jitter = stages.Loss(s, "example.com", d.LossSamples)
 
-	if d.Prober == nil || !(r.GatesPassed() || d.CertifyAnyway) {
+	if d.Prober == nil || (!r.GatesPassed() && !d.CertifyAnyway) {
 		return r
 	}
 
@@ -180,7 +180,7 @@ func Anchors(ctx context.Context, d Deps, ips []string, domain string) bool {
 		}
 		_, alive := stages.Alive(s, "example.com")
 		forwards := alive && stages.Forwarding(s, domain)
-		s.Close()
+		_ = s.Close()
 		if forwards {
 			return true
 		}

@@ -60,7 +60,7 @@ func TestWriteManagedNoChangeIsIdempotent(t *testing.T) {
 func TestWriteManagedEmptyIsNoop(t *testing.T) {
 	dir := t.TempDir()
 	p := writeFile(t, dir, "")
-	WriteManaged(p, []string{"1.1.1.1"})
+	_, _ = WriteManaged(p, []string{"1.1.1.1"})
 
 	changed, err := WriteManaged(p, nil)
 	if err != nil || changed {

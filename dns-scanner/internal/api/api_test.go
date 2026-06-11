@@ -46,7 +46,7 @@ func do(t *testing.T, ts *httptest.Server, method, path, body string, withSecret
 func TestHealthzIsUnauthenticated(t *testing.T) {
 	ts := newTestServer(t)
 	resp := do(t, ts, http.MethodGet, "/healthz", "", false)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("healthz = %d, want 200", resp.StatusCode)
 	}
@@ -55,12 +55,12 @@ func TestHealthzIsUnauthenticated(t *testing.T) {
 func TestAuthRequiredOnScan(t *testing.T) {
 	ts := newTestServer(t)
 	resp := do(t, ts, http.MethodGet, "/scan", "", false)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("GET /scan without secret = %d, want 401", resp.StatusCode)
 	}
 	ok := do(t, ts, http.MethodGet, "/scan", "", true)
-	defer ok.Body.Close()
+	defer func() { _ = ok.Body.Close() }()
 	if ok.StatusCode != http.StatusOK {
 		t.Fatalf("GET /scan with secret = %d, want 200", ok.StatusCode)
 	}
@@ -163,17 +163,17 @@ func TestSetTarget(t *testing.T) {
 func TestActionEndpoints(t *testing.T) {
 	ts := newTestServer(t)
 	if resp := do(t, ts, http.MethodPost, "/scan/start", "", false); resp.StatusCode != http.StatusUnauthorized {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		t.Fatalf("start without secret = %d, want 401", resp.StatusCode)
 	}
 	resp := do(t, ts, http.MethodPost, "/scan/start", "", true)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("start = %d, want 202", resp.StatusCode)
 	}
 	// Wrong verb on an action path is a 405 from the mux.
 	bad := do(t, ts, http.MethodGet, "/scan/start", "", true)
-	defer bad.Body.Close()
+	defer func() { _ = bad.Body.Close() }()
 	if bad.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("GET /scan/start = %d, want 405", bad.StatusCode)
 	}
@@ -238,7 +238,7 @@ func TestSSEStreamsSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if ct := resp.Header.Get("Content-Type"); ct != "text/event-stream" {
 		t.Fatalf("content-type = %q, want text/event-stream", ct)
 	}
