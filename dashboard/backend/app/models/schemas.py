@@ -236,6 +236,48 @@ class ScannerStatus(BaseModel):
     test_pending: bool = False
 
 
+class DnsResolver(BaseModel):
+    """A working MasterDnsVPN resolver the scanner certified. MTU/EDNS fields are
+    internal detail — the dashboard surfaces `ip` and grades health off `loss_pct`."""
+
+    ip: str
+    up_mtu: int = 0
+    down_mtu: int = 0
+    edns_max: int = 0
+    loss_pct: int = 0
+
+
+class DnsScannerStatus(BaseModel):
+    """Merged view of the dns-scanner service: its Go control-API snapshot plus the
+    container's running state. Unix timestamps are converted to UTC datetimes."""
+
+    scanner_running: bool
+    # False when the scanner's control API is unreachable (status then degrades to
+    # whatever the on-disk resolver file reveals). Distinct from scanner_running.
+    api_reachable: bool = True
+    # idle | scanning | paused | stopping
+    state: str = "idle"
+    scanning: bool = False
+    paused: bool = False
+    working_count: int = 0
+    working: list[DnsResolver] = []
+    # Live progress during a run: `accepted` resolvers found of `target_n`, with
+    # `probed` of `candidates` IPs checked so far since `run_started`. `phase` is
+    # which leg is running ("verify" = re-checking known resolvers, "sweep" = new).
+    run_started: datetime | None = None
+    phase: str = ""
+    candidates: int = 0
+    probed: int = 0
+    accepted: int = 0
+    target_n: int = 0
+    last_run: datetime | None = None
+    last_run_duration_sec: int = 0
+    last_outcome: str = ""
+    next_scan: datetime | None = None
+    interval_days: int = 0
+    history_count: int = 0
+
+
 class EdgeTestRequest(BaseModel):
     ip: str
 

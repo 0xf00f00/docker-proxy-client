@@ -1,0 +1,6 @@
+/scanner
+scanner-state.json
+.resolvers-*.tmp
+*.tmp
+state/*.json
+state/*.tmp

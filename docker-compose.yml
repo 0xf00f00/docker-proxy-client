@@ -603,6 +603,57 @@ services:
       default:
         ipv4_address: 10.20.0.16
 
+  # Autonomous resolver scanner for mdns. Probes Iran-first DNS ranges, certifies
+  # survivors with the mdns engine's own MTU probe, and keeps client_resolvers.txt
+  # fresh. Egresses via direct_internet (eth0). Reloads mdns through the socket
+  # proxy (no raw docker socket). Status/manual-trigger API on :8088.
+  dns-scanner:
+    image: ghcr.io/0xf00f00/docker-proxy-client-dns-scanner:${DNS_SCANNER_VERSION:-latest}
+    container_name: dns-scanner
+    restart: *default-restart
+    depends_on:
+      - mdns
+      - docker-socket-proxy
+    labels:
+      - dashboard.enable=true
+      - dashboard.category=tools
+      - dashboard.name=DNS Scanner
+    environment:
+      - MDNS_DOMAIN=${MDNS_DOMAIN}
+      - MDNS_ENCRYPTION_KEY=${MDNS_ENCRYPTION_KEY}
+      - MDNS_DATA_ENCRYPTION_METHOD=${MDNS_DATA_ENCRYPTION_METHOD:-1}
+      - MDNS_MIN_UPLOAD_MTU=${MDNS_MIN_UPLOAD_MTU:-38}
+      - MDNS_MAX_UPLOAD_MTU=${MDNS_MAX_UPLOAD_MTU:-150}
+      - MDNS_MIN_DOWNLOAD_MTU=${MDNS_MIN_DOWNLOAD_MTU:-200}
+      - MDNS_MAX_DOWNLOAD_MTU=${MDNS_MAX_DOWNLOAD_MTU:-4000}
+      - SCANNER_DAEMON=1
+      - SCANNER_RESOLVERS_PATH=/hostmdns/client_resolvers.txt
+      - SCANNER_STATE_FILE=/state/scanner-state.json
+      - SCANNER_BIND_IP=192.168.88.252
+      - SCANNER_API_ADDR=10.20.0.25:8088
+      - SCANNER_API_SECRET=${SCANNER_API_SECRET}
+      - SCANNER_RELOAD_URL=http://docker-socket-proxy:2375/containers/mdns/restart
+      - SCANNER_TARGET_N=${SCANNER_TARGET_N:-15}
+      - SCANNER_WATERMARK=${SCANNER_WATERMARK:-8}
+      - SCANNER_FLUSH_COOLDOWN_S=${SCANNER_FLUSH_COOLDOWN_S:-180}
+      - SCANNER_QPS=${SCANNER_QPS:-30}
+      - SCANNER_BASE_INTERVAL_DAYS=${SCANNER_BASE_INTERVAL_DAYS:-1}
+      - SCANNER_MAX_INTERVAL_DAYS=${SCANNER_MAX_INTERVAL_DAYS:-7}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://10.20.0.25:8088/healthz"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+    volumes:
+      - ./mdns:/hostmdns:rw
+      - ./dns-scanner/state:/state
+    networks:
+      direct_internet:
+        ipv4_address: 192.168.88.252
+        gw_priority: 900
+      default:
+        ipv4_address: 10.20.0.25
+
   docker-socket-proxy:
     image: tecnativa/docker-socket-proxy:v0.4.2
     container_name: docker-socket-proxy
@@ -664,6 +715,8 @@ services:
       - DASHBOARD_CLASH_API_URL=http://127.0.0.1:9697
       - DASHBOARD_CLASH_API_SECRET=${CLASH_API_SECRET:-}
       - DASHBOARD_SCANNER_API_URL=http://10.20.0.12:8088
+      - DASHBOARD_DNS_SCANNER_API_URL=http://10.20.0.25:8088
+      - DASHBOARD_DNS_SCANNER_SECRET=${SCANNER_API_SECRET}
       - DASHBOARD_COMPOSE_PROJECT_PATH=/compose
       - DASHBOARD_STATE_DIR=/state
       - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-}

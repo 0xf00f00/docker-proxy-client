@@ -1,0 +1,16 @@
+# build/runtime artifacts
+scanner
+scanner-state.json
+state/
+*.tmp
+
+# legacy ZMap scanner — not part of the Go build (superseded by this service)
+scan.sh
+cidrs.txt
+out/
+
+# not needed in the image
+docker-compose*.yml
+.env
+.env.example
+PLAN.md

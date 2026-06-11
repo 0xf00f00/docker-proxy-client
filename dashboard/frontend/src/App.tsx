@@ -6,6 +6,7 @@ import SpeedTest from "@/components/system/SpeedTest";
 import ProxyGrid from "@/components/containers/ProxyGrid";
 import DnsSection from "@/components/containers/DnsSection";
 import ScannerSection from "@/components/scanner/ScannerSection";
+import DnsScannerSection from "@/components/scanner/DnsScannerSection";
 import { getWidget } from "@/components/widgets/registry";
 import { useContainerStream } from "@/hooks/useContainerStream";
 import { useConnectivityTests } from "@/hooks/useConnectivityTests";
@@ -100,6 +101,10 @@ export default function App() {
 
         <section className="mt-6 sm:mt-8">
           <ScannerSection />
+        </section>
+
+        <section className="mt-6 sm:mt-8">
+          <DnsScannerSection />
         </section>
       </main>
     </div>

@@ -84,6 +84,36 @@ export interface ScannerStatus {
   test_pending: boolean;
 }
 
+export interface DnsResolver {
+  ip: string;
+  up_mtu: number;
+  down_mtu: number;
+  edns_max: number;
+  loss_pct: number;
+}
+
+export interface DnsScannerStatus {
+  scanner_running: boolean;
+  api_reachable: boolean;
+  state: string;
+  scanning: boolean;
+  paused: boolean;
+  working_count: number;
+  working: DnsResolver[];
+  run_started: string | null;
+  phase: string;
+  candidates: number;
+  probed: number;
+  accepted: number;
+  target_n: number;
+  last_run: string | null;
+  last_run_duration_sec: number;
+  last_outcome: string;
+  next_scan: string | null;
+  interval_days: number;
+  history_count: number;
+}
+
 export interface IpInfo {
   ip: string;
   country_code: string | null;

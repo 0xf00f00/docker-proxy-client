@@ -50,3 +50,28 @@ export function formatAgo(iso: string): string {
   if (h < 24) return `${h} h`;
   return `${Math.round(h / 24)} d`;
 }
+
+/** Compact elapsed/remaining clock: "45s", "2m 03s", "1h 04m" (seconds resolution
+ *  under an hour so a live counter visibly ticks). */
+export function formatDuration(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${String(s % 60).padStart(2, "0")}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${String(m % 60).padStart(2, "0")}m`;
+}
+
+/** Coarse "soon" / "in 4 min" / "in 2 h" / "in 3 d" from a future ISO timestamp. */
+export function formatUntil(iso: string): string {
+  if (!iso) return "";
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return "";
+  const s = Math.round((then - Date.now()) / 1000);
+  if (s < 60) return "soon";
+  const m = Math.round(s / 60);
+  if (m < 60) return `in ${m} min`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `in ${h} h`;
+  return `in ${Math.round(h / 24)} d`;
+}

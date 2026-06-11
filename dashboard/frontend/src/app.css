@@ -13,6 +13,7 @@
   --color-destructive: var(--color-red-500);
   --color-success: var(--color-emerald-500);
   --color-warning: var(--color-amber-500);
+  --animate-indeterminate: shimmer 1.2s ease-in-out infinite;
 }
 
 @keyframes shimmer {

@@ -10,6 +10,7 @@ from app.routers import (
     connections,
     connectivity,
     containers,
+    dns_scanner,
     env_editor,
     scanner,
     system,
@@ -41,6 +42,7 @@ _routers = (
     system,
     env_editor,
     scanner,
+    dns_scanner,
     traffic,
     connections,
 )

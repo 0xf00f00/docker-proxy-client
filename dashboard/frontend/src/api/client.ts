@@ -16,6 +16,7 @@ import type {
   ServiceEnv,
   ServiceUpdateResult,
   ScannerStatus,
+  DnsScannerStatus,
   EdgeTestResponse,
   TrafficSnapshot,
   ConnectionsSnapshot,
@@ -87,6 +88,24 @@ export async function cancelScan(): Promise<void> {
 export async function testEdge(ip: string): Promise<EdgeTestResponse> {
   const { data } = await api.post<EdgeTestResponse>("/scanner/test", { ip });
   return data;
+}
+
+// ---------- DNS resolver scanner ----------
+
+export async function runDnsScan(): Promise<void> {
+  await api.post("/dns-scanner/scan");
+}
+
+export async function pauseDnsScan(): Promise<void> {
+  await api.post("/dns-scanner/pause");
+}
+
+export async function resumeDnsScan(): Promise<void> {
+  await api.post("/dns-scanner/resume");
+}
+
+export async function stopDnsScan(): Promise<void> {
+  await api.post("/dns-scanner/stop");
 }
 
 // ---------- Connectivity ----------
@@ -304,6 +323,20 @@ export interface ScannerStreamHandlers {
 export function openScannerStream(handlers: ScannerStreamHandlers): EventSource {
   const es = createEventSource("/api/v1/scanner/stream");
   jsonEvent<ScannerStatus>(es, "status", handlers.onStatus);
+  if (handlers.onError) {
+    jsonEvent<{ detail?: string }>(es, "stream-error", ({ detail }) => handlers.onError!(detail ?? "Stream error"));
+  }
+  return es;
+}
+
+export interface DnsScannerStreamHandlers {
+  onStatus: (status: DnsScannerStatus) => void;
+  onError?: (detail: string) => void;
+}
+
+export function openDnsScannerStream(handlers: DnsScannerStreamHandlers): EventSource {
+  const es = createEventSource("/api/v1/dns-scanner/stream");
+  jsonEvent<DnsScannerStatus>(es, "status", handlers.onStatus);
   if (handlers.onError) {
     jsonEvent<{ detail?: string }>(es, "stream-error", ({ detail }) => handlers.onError!(detail ?? "Stream error"));
   }

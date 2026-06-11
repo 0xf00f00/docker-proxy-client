@@ -1,21 +1,18 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Loader2, Power, RotateCw, Square } from "lucide-react";
+import { Power, RotateCw, Square } from "lucide-react";
 import { toast } from "sonner";
 import type { EdgeTest, ScannerStatus } from "@/types";
 import { cancelScan, openScannerStream, runScan, startContainer, testEdge } from "@/api/client";
 import { getErrorMessage } from "@/utils/errors";
 import { cn } from "@/utils/cn";
 import { ModalLoadingShell } from "@/components/common/Modal";
+import { Btn, LOG, SPIN } from "@/components/scanner/ControlButton";
 
 const loadLogsModal = () => import("@/components/common/LogsModal");
 const LogsModal = lazy(loadLogsModal);
 
-const SPIN = <Loader2 className="h-3.5 w-3.5 animate-spin" />;
-const LOG = <span className="font-mono text-[10px]">LOG</span>;
-
 type LogTarget = { container: string; name: string } | null;
-type Variant = "default" | "positive" | "destructive";
 
 // In-progress phases of a per-IP test, in the order they occur.
 type TestPhase = "testing" | "queued-scan" | "queued" | "starting";
@@ -24,13 +21,6 @@ const PHASE_LABEL: Record<TestPhase, string> = {
   "queued-scan": "queued · scan running",
   queued: "queued…",
   starting: "starting…",
-};
-
-const VARIANT: Record<Variant, string> = {
-  default: "text-muted hover:text-foreground bg-zinc-800 active:bg-zinc-700",
-  positive:
-    "text-emerald-300 hover:text-emerald-200 bg-emerald-500/15 hover:bg-emerald-500/25 active:bg-emerald-500/30",
-  destructive: "text-red-300 hover:text-red-200 bg-red-500/15 hover:bg-red-500/25 active:bg-red-500/30",
 };
 
 export default function ScannerSection() {
@@ -376,35 +366,6 @@ function TestButton({ onClick, disabled, busy }: { onClick: () => void; disabled
       className="text-muted hover:text-foreground ml-auto shrink-0 rounded bg-zinc-800 px-2.5 py-1.5 text-[10px] font-medium active:bg-zinc-700 disabled:opacity-50"
     >
       {busy ? "…" : "Test"}
-    </button>
-  );
-}
-
-function Btn({
-  onClick,
-  disabled,
-  icon,
-  variant = "default",
-  children,
-}: {
-  onClick: () => void;
-  disabled?: boolean;
-  icon: React.ReactNode;
-  variant?: Variant;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={cn(
-        "flex min-h-10 items-center gap-1.5 rounded-lg px-3.5 text-xs font-medium disabled:opacity-50",
-        VARIANT[variant],
-      )}
-    >
-      {icon}
-      {children}
     </button>
   );
 }
