@@ -1,26 +1,30 @@
 #!/bin/bash
 # Script to check and add default route for a VPN interface
 # and add direct routes for specified domains via a specified default interface's gateway.
+# Site config comes from the environment (/etc/default/vpn-route via the systemd
+# unit); CLI flags override env.
 
 # Function to display usage information
 usage() {
-    echo "Usage: $0 --vpn-interface <vpn_interface> --default-interface <default_interface> [--direct-domains <domain1,domain2,...>] [--dhcp]"
+    echo "Usage: $0 [--vpn-interface <vpn_interface>] [--default-interface <default_interface>] [--direct-domains <domain1,domain2,...>] [--dhcp]"
     echo
-    echo "Options:"
-    echo "  --vpn-interface       Name of the VPN interface (required)"
-    echo "  --default-interface   Name of the default network interface to fetch the gateway from (required)"
-    echo "  --direct-domains      Comma-separated list of domains for which to add direct routes (optional)"
-    echo "  --dhcp                Use DHCP to obtain IP and gateway for the VPN interface if not set (optional)"
+    echo "Options (each falls back to the same-named env var, then to a default):"
+    echo "  --vpn-interface       Name of the VPN interface (env VPN_INTERFACE, default utun)"
+    echo "  --default-interface   Interface to fetch the direct gateway from (env DEFAULT_INTERFACE, default eth0)"
+    echo "  --direct-domains      Comma-separated domains to route direct (env DIRECT_DOMAINS)"
+    echo "  --dhcp                Use DHCP to obtain IP and gateway for the VPN interface if not set"
     echo "  -h, --help            Display this help message"
+    echo
+    echo "CAKE shaping (env only): CAKE_UL_BANDWIDTH/CAKE_UL_OPTIONS (upload),"
+    echo "CAKE_DL_BANDWIDTH/CAKE_DL_OPTIONS (download via IFB)."
     exit 1
 }
 
-# Function to parse command-line arguments
+# Function to parse command-line arguments (flags override env, env overrides defaults)
 parse_arguments() {
-    # Initialize variables
-    VPN_INTERFACE=""
-    DEFAULT_INTERFACE=""
-    DIRECT_DOMAINS=()
+    VPN_INTERFACE="${VPN_INTERFACE:-utun}"
+    DEFAULT_INTERFACE="${DEFAULT_INTERFACE:-eth0}"
+    local domains_csv="${DIRECT_DOMAINS:-}"
     USE_DHCP=false
 
     # Parse arguments
@@ -35,7 +39,7 @@ parse_arguments() {
                 shift 2
                 ;;
             --direct-domains)
-                IFS=',' read -ra DIRECT_DOMAINS <<< "$2"
+                domains_csv="$2"
                 shift 2
                 ;;
             --dhcp)
@@ -52,7 +56,11 @@ parse_arguments() {
         esac
     done
 
-    # Check required arguments
+    DIRECT_DOMAINS=()
+    if [ -n "$domains_csv" ]; then
+        IFS=',' read -ra DIRECT_DOMAINS <<< "$domains_csv"
+    fi
+
     if [ -z "$VPN_INTERFACE" ] || [ -z "$DEFAULT_INTERFACE" ]; then
         echo "Error: --vpn-interface and --default-interface are required."
         usage
@@ -127,6 +135,74 @@ add_vpn_route() {
     fi
 }
 
+# tc silently accepts unit-less rates as bytes/sec ("12" = 8bit/s = outage),
+# so require an explicit K/M/G unit.
+is_valid_rate() {
+    [[ "$1" =~ ^[0-9]+(\.[0-9]+)?[KkMmGg](bit|bps)$ ]]
+}
+
+have_tc() {
+    command -v tc > /dev/null 2>&1 && return 0
+    echo "tc not found (install iproute2); skipping CAKE qdisc." >&2
+    return 1
+}
+
+# Function to apply a CAKE qdisc on the VPN interface egress (upload direction).
+# "nat" is required for per-client fairness: POSTROUTING masquerades onto the
+# tunnel, so without the conntrack lookup all clients hash to one host.
+apply_cake_qdisc() {
+    if [ -z "${CAKE_UL_BANDWIDTH:-}" ]; then
+        if have_tc && tc qdisc show dev "$VPN_INTERFACE" 2>/dev/null | grep -q '^qdisc cake'; then
+            tc qdisc del dev "$VPN_INTERFACE" root
+            echo "CAKE upload shaping removed (CAKE_UL_BANDWIDTH unset)."
+        fi
+        return 0
+    fi
+    have_tc || return 0
+    if ! is_valid_rate "$CAKE_UL_BANDWIDTH"; then
+        echo "CAKE_UL_BANDWIDTH '$CAKE_UL_BANDWIDTH' rejected: unit suffix required (e.g. 11Mbit); not applying." >&2
+        return 0
+    fi
+    if tc qdisc replace dev "$VPN_INTERFACE" root cake bandwidth "$CAKE_UL_BANDWIDTH" ${CAKE_UL_OPTIONS:-besteffort nat}; then
+        echo "CAKE upload on $VPN_INTERFACE: bandwidth $CAKE_UL_BANDWIDTH ${CAKE_UL_OPTIONS:-besteffort nat}"
+    else
+        echo "Failed to apply CAKE qdisc on $VPN_INTERFACE." >&2
+    fi
+}
+
+# Function to shape the download direction: decrypted tunnel traffic arrives as
+# VPN-interface ingress, which a root qdisc can't touch, so redirect it through
+# an IFB device and put CAKE there. "nat" again: at ingress the dst is still the
+# masqueraded tunnel address (PREROUTING hasn't run yet).
+apply_cake_ingress() {
+    local ifb="ifb-$VPN_INTERFACE"
+    if [ -z "${CAKE_DL_BANDWIDTH:-}" ]; then
+        if ip link show "$ifb" > /dev/null 2>&1; then
+            tc qdisc del dev "$VPN_INTERFACE" ingress 2>/dev/null
+            ip link del "$ifb"
+            echo "CAKE download shaping removed (CAKE_DL_BANDWIDTH unset)."
+        fi
+        return 0
+    fi
+    have_tc || return 0
+    if ! is_valid_rate "$CAKE_DL_BANDWIDTH"; then
+        echo "CAKE_DL_BANDWIDTH '$CAKE_DL_BANDWIDTH' rejected: unit suffix required (e.g. 28Mbit); not applying." >&2
+        return 0
+    fi
+    modprobe ifb numifbs=0 2>/dev/null
+    ip link show "$ifb" > /dev/null 2>&1 || ip link add "$ifb" type ifb
+    ip link set "$ifb" mtu "$(cat /sys/class/net/"$VPN_INTERFACE"/mtu)" up
+    tc qdisc replace dev "$VPN_INTERFACE" handle ffff: ingress
+    tc filter show dev "$VPN_INTERFACE" parent ffff: 2>/dev/null | grep -q "$ifb" \
+        || tc filter add dev "$VPN_INTERFACE" parent ffff: protocol all prio 1 matchall \
+               action mirred egress redirect dev "$ifb"
+    if tc qdisc replace dev "$ifb" root cake bandwidth "$CAKE_DL_BANDWIDTH" ${CAKE_DL_OPTIONS:-besteffort nat ingress}; then
+        echo "CAKE download on $ifb: bandwidth $CAKE_DL_BANDWIDTH ${CAKE_DL_OPTIONS:-besteffort nat ingress}"
+    else
+        echo "Failed to apply CAKE qdisc on $ifb." >&2
+    fi
+}
+
 # Function to add direct routes for all domains in DIRECT_DOMAINS
 add_direct_routes() {
     local gateway=$1
@@ -162,6 +238,11 @@ main() {
 
     # Add default route via VPN interface
     add_vpn_route
+
+    # Per-flow fairness inside the tunnel; each is a no-op unless its
+    # CAKE*_BANDWIDTH is set, and cleans up after itself when unset.
+    apply_cake_qdisc
+    apply_cake_ingress
 
     # Get the default gateway for DEFAULT_INTERFACE
     GATEWAY=$(get_gateway "$DEFAULT_INTERFACE")

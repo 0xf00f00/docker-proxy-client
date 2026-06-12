@@ -31,9 +31,8 @@ The fix is event-driven, triggered off the TUN device appearing:
 3. [`vpn-route-iface.service`](vpn-route-iface.service) runs
    [`vpn-route-wait.sh`](vpn-route-wait.sh), which polls until `utun` is
    carrier-ready, then `exec systemctl start vpn-route.service`.
-4. [`vpn-route.service`](vpn-route.service) (unchanged) applies the default
-   route + direct-domain excludes. Keeping the arguments in this one unit means
-   there's a single source of truth.
+4. [`vpn-route.service`](vpn-route.service) applies the default route +
+   direct-domain excludes.
 
 Because **every** restart path ends in a fresh `utun` `add` event, this single
 mechanism covers manual restarts, `compose restart`, dashboard-driven restarts,
@@ -64,12 +63,46 @@ eth0 gateway, which networkd's declarative stanzas can't express. Splitting the
 default route (networkd) from the excludes (script) would be worse than one
 imperative script triggered on device appearance.
 
+## Per-flow fairness inside the tunnel (CAKE)
+
+- **Upload** (`CAKE_UL_BANDWIDTH`): root CAKE qdisc on `utun` egress (client→internet).
+- **Download** (`CAKE_DL_BANDWIDTH`): root qdiscs are egress-only and decrypted
+  download enters `utun` as *ingress* (proxy writes to the TUN), so it's redirected through an `ifb-utun` device carrying its own CAKE qdisc.
+
+Default options are `besteffort nat` (download adds `ingress`). The `nat` flag is load-bearing.
+
+Rates require a unit suffix (`11Mbit`).
+
+### Picking the rates
+
+The queue must form **on TUN**, not at the router: set each rate to ~85–90%
+of the *measured* WAN rate in that direction (`curl --interface eth0` to
+measure raw)
+
+### Enable / change / disable
+
+```bash
+sudo nano /etc/default/vpn-route           # set CAKE_UL_BANDWIDTH / CAKE_DL_BANDWIDTH
+sudo systemctl start vpn-route.service   # applies live; no clash restart, no outage
+
+tc -s qdisc show dev utun                # -> qdisc cake ... bandwidth 11Mbit ... nat
+tc -s qdisc show dev ifb-utun            # -> qdisc cake ... bandwidth 28Mbit ... ingress
+```
+
+To disable: clear the variables and `systemctl start vpn-route.service` again; the script removes the qdisc and IFB itself.
+
 ## Install (on the host / Pi)
 
 ```bash
+sudo install -m 0755 system/vpn-route.sh            /usr/local/bin/vpn-route.sh
+sudo install -m 0644 system/vpn-route.service       /etc/systemd/system/vpn-route.service
 sudo install -m 0755 system/vpn-route-wait.sh       /usr/local/bin/vpn-route-wait.sh
 sudo install -m 0644 system/vpn-route-iface.service /etc/systemd/system/vpn-route-iface.service
 sudo install -m 0644 system/99-vpn-route.rules      /etc/udev/rules.d/99-vpn-route.rules
+
+# site config
+[ -e /etc/default/vpn-route ] || \
+  sudo install -m 0600 system/vpn-route.default /etc/default/vpn-route
 
 sudo systemctl daemon-reload
 sudo udevadm control --reload
@@ -77,10 +110,6 @@ sudo udevadm control --reload
 
 No `systemctl enable` is needed: `vpn-route-iface.service` is pulled in on
 demand by the udev `SYSTEMD_WANTS` tag, not at boot.
-
-`vpn-route.sh`, `vpn-route.service`, and `vpn-route.timer` are the pre-existing
-units and are installed/enabled separately (the timer stays on as a backstop —
-see below).
 
 ## Verify
 
@@ -95,7 +124,8 @@ ip route show default
 ## Before installing — confirm assumptions
 
 - **Device name is literally `utun`:** `ip link show`. The udev rule matches
-  `KERNEL=="utun"` and `vpn-route.service` hardcodes `--vpn-interface utun`. If
+  `KERNEL=="utun"` and `vpn-route.sh` defaults to `utun` (override with
+  `VPN_INTERFACE` in `/etc/default/vpn-route`). If
   Clash ever names it with a suffix (`utun0`, …), switch the rule to
   `KERNEL=="utun*"`, rename the unit to `vpn-route-iface@.service`, set
   `ENV{SYSTEMD_WANTS}="vpn-route-iface@$name.service"`, and change `ExecStart`

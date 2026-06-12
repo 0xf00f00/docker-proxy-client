@@ -1,0 +1,34 @@
+# Site config for vpn-route.sh, read by vpn-route.service.
+# Install as /etc/default/vpn-route, mode 0600.
+# CLI flags on the unit's ExecStart (if any) override these.
+
+#VPN_INTERFACE=utun
+#DEFAULT_INTERFACE=eth0
+
+# Comma-separated domains routed direct (via DEFAULT_INTERFACE's gateway),
+# bypassing the tunnel. Replace with this site's real list.
+DIRECT_DOMAINS=time.google.com,time.cloudflare.com,time.apple.com,time.windows.com,0.pool.ntp.org,0.debian.pool.ntp.org,1.debian.pool.ntp.org,2.debian.pool.ntp.org,3.debian.pool.ntp.org,region1.v2.argotunnel.com,region2.v2.argotunnel.com
+
+# ---- CAKE: per-client/per-flow fairness inside the tunnel ----
+# Queues only form at the bottleneck: each value must sit BELOW the matching
+# WAN rate (and below any upstream-router shaper) or the queue forms at the
+# router and CAKE here does nothing. Measure first (curl --interface eth0),
+# then set ~85-90%: tunnel crypto overhead plus direct/frp traffic share the
+# same WAN link. A unit suffix (Kbit/Mbit/Gbit) is REQUIRED; unit-less values
+# are rejected (tc would read them as bytes/sec and throttle to nothing).
+# Empty/unset = disabled; the next service run also removes the qdisc.
+
+# UPLOAD (egress into the tunnel device).
+#CAKE_UL_BANDWIDTH=11Mbit
+
+# Options appended after "bandwidth <X>" (unquoted, space-separated).
+# Default "besteffort nat": nat = per-client fairness despite the masquerade
+# onto the tunnel; besteffort = client DSCP is untrusted.
+#CAKE_UL_OPTIONS=besteffort nat
+
+# DOWNLOAD (decrypted tunnel traffic, shaped on ifb-<VPN_INTERFACE>).
+# Costs ~15% of downstream so the queue forms here instead of upstream.
+#CAKE_DL_BANDWIDTH=30Mbit
+
+# Default adds "ingress" (packets already crossed the bottleneck).
+#CAKE_DL_OPTIONS=besteffort nat ingress
