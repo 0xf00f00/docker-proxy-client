@@ -137,7 +137,7 @@ export interface ConnectivityResult {
 }
 
 /** Last-known results from the shared backend cache, plus whether anything is
- *  stale/missing and warrants an auto-probe on load. */
+ *  stale/missing. */
 export interface ConnectivityResults {
   results: ConnectivityResult[];
   stale: boolean;

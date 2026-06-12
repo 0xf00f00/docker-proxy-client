@@ -18,9 +18,7 @@ const SYSTEM_PROXY_GRACE_MS = 15_000;
 export default function App() {
   const state = useContainerStream();
   const containers = state.kind === "ready" ? state.data.containers : [];
-  // Delay the first auto-probe a few seconds after mount so DNS/Net pills can
-  // settle and the user has time to start a speed test before we add load.
-  const connectivity = useConnectivityTests({ initialDelayMs: 4_000 });
+  const connectivity = useConnectivityTests();
   const [speedRunning, setSpeedRunning] = useState(false);
 
   const proxies = containers.filter((c) => c.dashboard.category === "proxy");

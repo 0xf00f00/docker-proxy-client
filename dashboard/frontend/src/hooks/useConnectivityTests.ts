@@ -13,7 +13,7 @@ export interface ConnectivityState {
 /**
  * Manages the dashboard's connectivity results
  */
-export function useConnectivityTests({ initialDelayMs = 0 }: { initialDelayMs?: number } = {}): ConnectivityState {
+export function useConnectivityTests(): ConnectivityState {
   const [results, setResults] = useState<Record<string, ConnectivityResult>>({});
   const [testing, setTesting] = useState<Set<string>>(new Set());
   const [running, setRunning] = useState(false);
@@ -60,30 +60,22 @@ export function useConnectivityTests({ initialDelayMs = 0 }: { initialDelayMs?: 
 
   useEffect(() => {
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
     fetchConnectivityResults()
-      .then(({ results: cached, stale }) => {
-        if (cancelled) return;
-        if (cached.length > 0) {
-          setResults((prev) => {
-            const next = { ...prev };
-            for (const r of cached) next[r.service] = r;
-            return next;
-          });
-        }
-        // Auto-probe only when something is actually stale/missing.
-        if (!stale) return;
-        if (initialDelayMs > 0) timer = setTimeout(() => run(), initialDelayMs);
-        else run();
+      .then(({ results: cached }) => {
+        if (cancelled || cached.length === 0) return;
+        setResults((prev) => {
+          const next = { ...prev };
+          for (const r of cached) next[r.service] = r;
+          return next;
+        });
       })
       .catch(() => {});
     return () => {
       cancelled = true;
-      if (timer) clearTimeout(timer);
       sourceRef.current?.close();
       sourceRef.current = null;
     };
-  }, [initialDelayMs, run]);
+  }, []);
 
   return { results, testing, running, start, recordResult };
 }

@@ -62,16 +62,12 @@ async def test_all():
 
 @router.get("/results", response_model=ConnectivityResultsResponse)
 async def cached_results(max_age: float = DEFAULT_FRESH_MAX_AGE_S):
-    """Return last-known results from the shared cache without probing anything.
-
-    `stale` is True when any currently-testable proxy is missing a cached result
-    or has one older than `max_age`, so the dashboard knows whether to auto-probe
-    on load. A plain refresh with everything fresh therefore costs no probes.
-    """
+    """Return last-known *fresh* results from the shared cache without probing."""
     containers = await asyncio.to_thread(docker_service.list_dashboard_containers)
     testable = docker_service.filter_testable(containers)
     stale = any(not connectivity_service.is_fresh(c.name, max_age) for c in testable)
-    return ConnectivityResultsResponse(results=connectivity_service.cached_results(), stale=stale)
+    fresh = [r for r in connectivity_service.cached_results() if connectivity_service.is_fresh(r.service, max_age)]
+    return ConnectivityResultsResponse(results=fresh, stale=stale)
 
 
 @router.get("/test/stream")
