@@ -39,27 +39,11 @@ class ConnectionsCollector:
         q: asyncio.Queue[dict] = asyncio.Queue(maxsize=QUEUE_MAXSIZE)
         async with self._lock:
             self._subscribers.add(q)
-            # Lazy pump: the upstream WebSocket lives exactly as long as someone's
-            # watching, so nothing about who's connected is held while the modal's
-            # closed. A fresh connect also makes Clash replay a snapshot at once,
-            # so the first viewer paints immediately.
-            if self._task is None or self._task.done():
-                self._task = asyncio.create_task(self._run())
         return q
 
     async def unsubscribe(self, q: asyncio.Queue[dict]) -> None:
         async with self._lock:
             self._subscribers.discard(q)
-            if self._subscribers:
-                return
-            # Last viewer gone: stop the pump (closing the upstream WebSocket) and
-            # drop every trace of the snapshot. Usage accounting keeps its own feed.
-            if self._task is not None:
-                self._task.cancel()
-                self._task = None
-            self._prev.clear()
-            self._rate.clear()
-            self._latest = None
 
     def latest(self) -> dict | None:
         return self._latest
@@ -192,18 +176,53 @@ class ConnectionsCollector:
             "truncated": dropped,
         }
 
-    def _reset_rates(self) -> None:
+    def observe(self, snap: ConnectionSnapshot) -> None:
+        """Fold one upstream frame into the warm rate state and notify viewers."""
+        self._fan_out(self._build_snapshot(snap, time.monotonic()))
+
+    def reset_rates(self) -> None:
         """Drop rate baselines after a feed gap so deltas don't span the outage."""
         self._prev.clear()
         self._rate.clear()
 
-    async def _run(self) -> None:
-        await drive_connections(
-            lambda snap: self._fan_out(self._build_snapshot(snap, time.monotonic())),
-            # No source yet: show "nothing connected" instead of a stuck skeleton.
-            on_no_source=lambda: self._fan_out(self._build_snapshot(EMPTY_SNAPSHOT, time.monotonic())),
-            on_error=self._reset_rates,
+    def start(self) -> None:
+        """Start the always-on unified feed (lifespan-managed).
+
+        One ``/connections`` WebSocket drives both the live snapshot and usage
+        accounting. Keeping rate state warm even while the modal's closed means
+        the first frame a viewer gets already carries live rates — the list moves
+        the instant it opens instead of sitting frozen for a sample or two.
+        """
+        if self._task is not None and not self._task.done():
+            return
+        from app.services import usage_service
+
+        def consume(snap: ConnectionSnapshot) -> None:
+            usage_service.recorder.ingest(snap)
+            self.observe(snap)
+
+        def on_error() -> None:
+            self.reset_rates()
+            usage_service.recorder.reset_baseline()
+
+        self._task = asyncio.create_task(
+            drive_connections(
+                consume,
+                # No source yet: show "nothing connected" instead of a stuck skeleton.
+                on_no_source=lambda: self.observe(EMPTY_SNAPSHOT),
+                on_error=on_error,
+            )
         )
+
+    async def stop(self) -> None:
+        if self._task is not None:
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+            self._task = None
+        self._prev.clear()
+        self._rate.clear()
+        self._latest = None
 
 
 collector = ConnectionsCollector()

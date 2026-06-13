@@ -15,7 +15,6 @@ import time
 import tldextract
 
 from app.services import store
-from app.services.connection_stream import drive_connections
 from app.services.system_proxy.base import Connection, ConnectionSnapshot
 
 logger = logging.getLogger(__name__)
@@ -51,7 +50,6 @@ class UsageRecorder:
         self._prev: dict[str, tuple[int, int]] = {}
         # Pending (domain, hour_ts) -> [down, up] awaiting flush.
         self._buf: dict[tuple[str, int], list[int]] = {}
-        self._source_task: asyncio.Task | None = None
         self._flush_task: asyncio.Task | None = None
         self._flushes = 0
 
@@ -80,6 +78,11 @@ class UsageRecorder:
         for stale in set(self._prev) - seen:
             self._prev.pop(stale, None)
 
+    def reset_baseline(self) -> None:
+        """Forget counters after a feed gap; a restart may reset them and we'd
+        otherwise mis-attribute the jump."""
+        self._prev.clear()
+
     def _drain(self) -> list[tuple[str, int, int, int]]:
         if not self._buf:
             return []
@@ -107,30 +110,24 @@ class UsageRecorder:
                 logger.debug("usage flush loop error; retrying", exc_info=True)
 
     def start(self) -> None:
-        """Start the always-on usage feed and its periodic flush (lifespan-managed).
+        """Start the periodic flush (lifespan-managed).
 
-        Owns its own ``/connections`` consumer so usage keeps accruing whether or
-        not anyone's watching the live-connections modal.
+        The connections collector owns the single always-on ``/connections``
+        feed and calls :meth:`ingest`, so usage accrues whether or not anyone's
+        watching the live-connections modal.
         """
         store.init_usage()
         self._prev.clear()
         self._buf.clear()
-        if self._source_task is None or self._source_task.done():
-            # A gap may mean Clash restarted with reset counters; re-baseline so we
-            # don't mis-attribute the jump.
-            self._source_task = asyncio.create_task(
-                drive_connections(self.ingest, on_error=self._prev.clear)
-            )
         if self._flush_task is None or self._flush_task.done():
             self._flush_task = asyncio.create_task(self._flush_loop())
 
     async def flush_and_stop(self) -> None:
-        for task in (self._source_task, self._flush_task):
-            if task is not None:
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
-        self._source_task = self._flush_task = None
+        if self._flush_task is not None:
+            self._flush_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._flush_task
+        self._flush_task = None
         await self.flush_now()
 
     def purge_all(self) -> None:
