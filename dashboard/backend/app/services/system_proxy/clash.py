@@ -25,7 +25,11 @@ from app.models.schemas import (
 )
 from app.services import docker_service
 from app.services.system_proxy import registry
-from app.services.system_proxy.base import SystemProxyController
+from app.services.system_proxy.base import (
+    Connection,
+    ConnectionSnapshot,
+    SystemProxyController,
+)
 
 # Names Clash exposes that aren't user-selectable routes.
 HIDDEN_ROUTES = frozenset({"REJECT", "DIRECT", "auto", "direct_interface"})
@@ -134,8 +138,8 @@ class ClashController(SystemProxyController):
                     continue
                 yield int(data.get("up", 0) or 0), int(data.get("down", 0) or 0)
 
-    async def stream_connections(self) -> AsyncIterator[dict]:
-        """Stream Clash's ``/connections`` WebSocket"""
+    async def stream_connections(self) -> AsyncIterator[ConnectionSnapshot]:
+        """Stream Clash's ``/connections`` WebSocket as normalized snapshots."""
         scheme = "wss" if settings.clash_api_url.startswith("https") else "ws"
         base = settings.clash_api_url.split("://", 1)[-1].rstrip("/")
         uri = f"{scheme}://{base}/connections"
@@ -145,9 +149,10 @@ class ClashController(SystemProxyController):
         async with ws_connect(uri, additional_headers=headers, open_timeout=10) as ws:
             async for message in ws:
                 try:
-                    yield json.loads(message)
+                    raw = json.loads(message)
                 except ValueError:
                     continue
+                yield _to_snapshot(raw)
 
     async def test_latencies(self) -> dict[str, int]:
         state = await self.get_state()
@@ -176,6 +181,32 @@ class ClashController(SystemProxyController):
                 except Exception:
                     results[name] = -1
         return results
+
+
+def _to_connection(raw: dict) -> Connection:
+    """Translate one Clash connection object into the normalized model."""
+    meta = raw.get("metadata") or {}
+    return Connection(
+        id=raw.get("id") or "",
+        host=(meta.get("host") or "").strip(),
+        dest_ip=(meta.get("destinationIP") or "").strip(),
+        dest_port=str(meta.get("destinationPort") or ""),
+        network=(meta.get("network") or "").lower(),
+        chains=tuple(raw.get("chains") or ()),
+        upload=int(raw.get("upload", 0) or 0),
+        download=int(raw.get("download", 0) or 0),
+        rule=" ".join(x for x in (raw.get("rule"), raw.get("rulePayload")) if x).strip(),
+        start=raw.get("start") or "",
+    )
+
+
+def _to_snapshot(raw: dict) -> ConnectionSnapshot:
+    """Translate a Clash ``/connections`` frame into the normalized snapshot."""
+    return ConnectionSnapshot(
+        upload_total=int(raw.get("uploadTotal", 0) or 0),
+        download_total=int(raw.get("downloadTotal", 0) or 0),
+        connections=tuple(_to_connection(c) for c in (raw.get("connections") or [])),
+    )
 
 
 def _find_clash_config() -> Path | None:

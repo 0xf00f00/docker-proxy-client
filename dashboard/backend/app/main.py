@@ -19,7 +19,7 @@ from app.routers import (
     traffic,
     usage,
 )
-from app.services import connections_service, connectivity_service, docker_service, store, usage_service
+from app.services import connectivity_service, docker_service, store, usage_service
 from app.static_files import CachedStaticFiles
 
 
@@ -29,13 +29,13 @@ async def lifespan(app: FastAPI):
     connectivity_service.load_cache()
     # Opt-in; when off, erase any history from a prior opt-in.
     if settings.connection_tracking:
+        # The live-connections collector is lazy (starts when the modal opens); the
+        # usage recorder owns the always-on feed.
         usage_service.recorder.start()
-        connections_service.collector.start()
     else:
         store.wipe_usage()
     yield
     if settings.connection_tracking:
-        await connections_service.collector.stop()
         await usage_service.recorder.flush_and_stop()
     docker_service.close_client()
 

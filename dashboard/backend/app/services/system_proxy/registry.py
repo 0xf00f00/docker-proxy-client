@@ -2,7 +2,19 @@ from collections.abc import Callable
 
 from app.models.schemas import ContainerInfo
 from app.services import docker_service
-from app.services.system_proxy.base import SystemProxyController
+from app.services.system_proxy.base import (
+    Capability,
+    SupportsConnectionsStream,
+    SupportsTrafficStream,
+    SystemProxyController,
+)
+
+# Capability -> the protocol an active controller must implement to offer it.
+# Add a row here to expose a new optional capability to the rest of the app.
+_CAPABILITIES: dict[Capability, type] = {
+    Capability.CONNECTIONS: SupportsConnectionsStream,
+    Capability.TRAFFIC: SupportsTrafficStream,
+}
 
 # A factory takes the container backing the controller and returns an instance.
 ControllerFactory = Callable[[ContainerInfo], SystemProxyController]
@@ -38,3 +50,16 @@ def get_active_controller() -> SystemProxyController | None:
         return None
     factory = _REGISTRY[container.dashboard.controller or ""]
     return factory(container)
+
+
+def active_capabilities() -> set[Capability]:
+    """Optional capabilities the active controller supports.
+
+    Empty when there's no active controller. Lets features gate on what the
+    running backend can actually do, so swapping Clash for one that lacks a
+    capability disables that feature instead of failing at runtime.
+    """
+    controller = get_active_controller()
+    if controller is None:
+        return set()
+    return {cap for cap, proto in _CAPABILITIES.items() if isinstance(controller, proto)}

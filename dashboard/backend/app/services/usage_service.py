@@ -1,10 +1,10 @@
 """Persistent per-domain data-usage accounting.
 
-Fed raw Clash ``/connections`` snapshots by the connections pump (so there's one
-shared stream, not a second subscriber). Diffs each connection's cumulative byte
-counters into per-registrable-domain hourly buckets and flushes them to a small,
-separately-deletable SQLite file. Gated entirely by ``settings.connection_tracking``
-— nothing here runs unless the operator opted in at deploy time.
+Runs its own always-on consumer of the active controller's live-connections feed
+(independent of the modal). Diffs each connection's cumulative byte counters into
+per-registrable-domain hourly buckets and flushes them to a small, separately-
+deletable SQLite file. Gated entirely by ``settings.connection_tracking`` — nothing
+here runs unless the operator opted in at deploy time.
 """
 
 import asyncio
@@ -15,6 +15,8 @@ import time
 import tldextract
 
 from app.services import store
+from app.services.connection_stream import drive_connections
+from app.services.system_proxy.base import Connection, ConnectionSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -35,13 +37,11 @@ def _floor_hour(ts: float) -> int:
 OTHER = "Other"
 
 
-def _domain_of(conn: dict) -> str:
+def _domain_of(conn: Connection) -> str:
     """Registrable domain a connection talks to (``*.googlevideo.com`` ->
     ``googlevideo.com``); non-domain traffic collapses to ``Other``."""
-    meta = conn.get("metadata") or {}
-    host = (meta.get("host") or "").strip()
-    if host:
-        return _extract(host).registered_domain or OTHER
+    if conn.host:
+        return _extract(conn.host).registered_domain or OTHER
     return OTHER
 
 
@@ -51,20 +51,20 @@ class UsageRecorder:
         self._prev: dict[str, tuple[int, int]] = {}
         # Pending (domain, hour_ts) -> [down, up] awaiting flush.
         self._buf: dict[tuple[str, int], list[int]] = {}
-        self._task: asyncio.Task | None = None
+        self._source_task: asyncio.Task | None = None
+        self._flush_task: asyncio.Task | None = None
         self._flushes = 0
 
-    def ingest(self, raw: dict) -> None:
-        conns = raw.get("connections") or []
+    def ingest(self, snap: ConnectionSnapshot) -> None:
         hour = _floor_hour(time.time())
         seen: set[str] = set()
-        for conn in conns:
-            cid = conn.get("id")
+        for conn in snap.connections:
+            cid = conn.id
             if not cid:
                 continue
             seen.add(cid)
-            up = int(conn.get("upload", 0) or 0)
-            down = int(conn.get("download", 0) or 0)
+            up = conn.upload
+            down = conn.download
             prev = self._prev.get(cid)
             self._prev[cid] = (up, down)
             if prev is None:
@@ -92,7 +92,7 @@ class UsageRecorder:
         if rows:
             await asyncio.to_thread(store.upsert_usage, rows)
 
-    async def _run(self) -> None:
+    async def _flush_loop(self) -> None:
         while True:
             try:
                 await asyncio.sleep(FLUSH_INTERVAL_SEC)
@@ -107,18 +107,30 @@ class UsageRecorder:
                 logger.debug("usage flush loop error; retrying", exc_info=True)
 
     def start(self) -> None:
+        """Start the always-on usage feed and its periodic flush (lifespan-managed).
+
+        Owns its own ``/connections`` consumer so usage keeps accruing whether or
+        not anyone's watching the live-connections modal.
+        """
         store.init_usage()
         self._prev.clear()
         self._buf.clear()
-        if self._task is None or self._task.done():
-            self._task = asyncio.create_task(self._run())
+        if self._source_task is None or self._source_task.done():
+            # A gap may mean Clash restarted with reset counters; re-baseline so we
+            # don't mis-attribute the jump.
+            self._source_task = asyncio.create_task(
+                drive_connections(self.ingest, on_error=self._prev.clear)
+            )
+        if self._flush_task is None or self._flush_task.done():
+            self._flush_task = asyncio.create_task(self._flush_loop())
 
     async def flush_and_stop(self) -> None:
-        if self._task is not None:
-            self._task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._task
-            self._task = None
+        for task in (self._source_task, self._flush_task):
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        self._source_task = self._flush_task = None
         await self.flush_now()
 
     def purge_all(self) -> None:

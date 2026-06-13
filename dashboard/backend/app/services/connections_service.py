@@ -5,7 +5,8 @@ import contextlib
 import logging
 import time
 
-from app.services import usage_service
+from app.services.connection_stream import drive_connections
+from app.services.system_proxy.base import EMPTY_SNAPSHOT, Connection, ConnectionSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -18,22 +19,9 @@ QUEUE_MAXSIZE = 8
 SITE_CAP = 200
 
 
-def _conn_host(meta: dict) -> str:
+def _conn_host(conn: Connection) -> str:
     """The website a connection is talking to, falling back to its dest IP."""
-    host = (meta.get("host") or "").strip()
-    if host:
-        return host
-    ip = (meta.get("destinationIP") or "").strip()
-    return ip or "unknown"
-
-
-def _conn_exit(chains: list) -> str:
-    """The proxy a connection actually egresses through.
-
-    Clash orders ``chains`` outermost-group-last, so ``chains[0]`` is the real
-    outbound. Empty chains (rare) read as a direct connection.
-    """
-    return chains[0] if chains else "DIRECT"
+    return conn.host or conn.dest_ip or "unknown"
 
 
 class ConnectionsCollector:
@@ -51,32 +39,27 @@ class ConnectionsCollector:
         q: asyncio.Queue[dict] = asyncio.Queue(maxsize=QUEUE_MAXSIZE)
         async with self._lock:
             self._subscribers.add(q)
+            # Lazy pump: the upstream WebSocket lives exactly as long as someone's
+            # watching, so nothing about who's connected is held while the modal's
+            # closed. A fresh connect also makes Clash replay a snapshot at once,
+            # so the first viewer paints immediately.
+            if self._task is None or self._task.done():
+                self._task = asyncio.create_task(self._run())
         return q
 
     async def unsubscribe(self, q: asyncio.Queue[dict]) -> None:
         async with self._lock:
             self._subscribers.discard(q)
-            if not self._subscribers:
-                # No one's watching: drop the live-rate baselines and last snapshot
-                # so the next viewer starts clean (usage accounting keeps its own).
-                self._prev.clear()
-                self._rate.clear()
-                self._latest = None
-
-    def start(self) -> None:
-        """Start the always-on pump (lifespan-managed; only when tracking is on)."""
-        if self._task is None or self._task.done():
-            self._task = asyncio.create_task(self._run())
-
-    async def stop(self) -> None:
-        if self._task is not None:
-            self._task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._task
-            self._task = None
-        self._prev.clear()
-        self._rate.clear()
-        self._latest = None
+            if self._subscribers:
+                return
+            # Last viewer gone: stop the pump (closing the upstream WebSocket) and
+            # drop every trace of the snapshot. Usage accounting keeps its own feed.
+            if self._task is not None:
+                self._task.cancel()
+                self._task = None
+            self._prev.clear()
+            self._rate.clear()
+            self._latest = None
 
     def latest(self) -> dict | None:
         return self._latest
@@ -91,16 +74,16 @@ class ConnectionsCollector:
             with contextlib.suppress(asyncio.QueueFull):
                 q.put_nowait(snapshot)
 
-    def _update_rates(self, conns: list[dict], now: float) -> dict[str, tuple[float, float]]:
+    def _update_rates(self, conns: tuple[Connection, ...], now: float) -> dict[str, tuple[float, float]]:
         """Diff cumulative byte counters into smoothed per-connection rates."""
         seen: set[str] = set()
         for conn in conns:
-            cid = conn.get("id")
+            cid = conn.id
             if not cid:
                 continue
             seen.add(cid)
-            up = int(conn.get("upload", 0) or 0)
-            down = int(conn.get("download", 0) or 0)
+            up = conn.upload
+            down = conn.download
             prev = self._prev.get(cid)
             self._prev[cid] = (up, down, now)
             if prev is None:
@@ -127,20 +110,19 @@ class ConnectionsCollector:
             self._rate.pop(stale, None)
         return self._rate
 
-    def _build_snapshot(self, raw: dict, now: float) -> dict:
-        conns = raw.get("connections") or []
+    def _build_snapshot(self, snap: ConnectionSnapshot, now: float) -> dict:
+        conns = snap.connections
         rates = self._update_rates(conns, now)
 
         groups: dict[str, dict] = {}
         for conn in conns:
-            cid = conn.get("id")
-            meta = conn.get("metadata") or {}
-            host = _conn_host(meta)
-            exit_proxy = _conn_exit(conn.get("chains") or [])
-            up = int(conn.get("upload", 0) or 0)
-            down = int(conn.get("download", 0) or 0)
+            cid = conn.id
+            host = _conn_host(conn)
+            exit_proxy = conn.exit
+            up = conn.upload
+            down = conn.download
             up_bps, down_bps = rates.get(cid, (0.0, 0.0)) if cid else (0.0, 0.0)
-            start = conn.get("start") or ""
+            start = conn.start
 
             detail = {
                 "id": cid,
@@ -148,11 +130,11 @@ class ConnectionsCollector:
                 "up": up,
                 "downRate": round(down_bps),
                 "upRate": round(up_bps),
-                "network": (meta.get("network") or "").lower(),
-                "dest": meta.get("destinationIP") or "",
-                "port": meta.get("destinationPort") or "",
+                "network": conn.network,
+                "dest": conn.dest_ip,
+                "port": conn.dest_port,
                 "exit": exit_proxy,
-                "rule": " ".join(x for x in (conn.get("rule"), conn.get("rulePayload")) if x).strip(),
+                "rule": conn.rule,
                 "since": start,
             }
 
@@ -201,8 +183,8 @@ class ConnectionsCollector:
             "ts": int(time.time()),
             "count": len(conns),
             "totals": {
-                "down": int(raw.get("downloadTotal", 0) or 0),
-                "up": int(raw.get("uploadTotal", 0) or 0),
+                "down": snap.download_total,
+                "up": snap.upload_total,
                 "downRate": round(sum(s["downRate"] for s in sites)),
                 "upRate": round(sum(s["upRate"] for s in sites)),
             },
@@ -210,36 +192,18 @@ class ConnectionsCollector:
             "truncated": dropped,
         }
 
-    def _consume(self, raw: dict) -> None:
-        # Usage accrues whether or not the modal is open; the grouped snapshot is
-        # only built when someone's watching.
-        usage_service.recorder.ingest(raw)
-        if self._subscribers:
-            self._fan_out(self._build_snapshot(raw, time.monotonic()))
+    def _reset_rates(self) -> None:
+        """Drop rate baselines after a feed gap so deltas don't span the outage."""
+        self._prev.clear()
+        self._rate.clear()
 
     async def _run(self) -> None:
-        # Imported here to avoid a module-load cycle (registry -> docker_service).
-        from app.services.system_proxy import registry
-        from app.services.system_proxy.base import SupportsConnectionsStream
-
-        while True:
-            try:
-                controller = await asyncio.to_thread(registry.get_active_controller)
-                if controller is None or not isinstance(controller, SupportsConnectionsStream):
-                    # No live-connections source — emit an empty snapshot so the UI
-                    # shows "nothing connected" rather than a perpetual skeleton.
-                    self._fan_out(self._build_snapshot({}, time.monotonic()))
-                    await asyncio.sleep(5.0)
-                    continue
-                async for raw in controller.stream_connections():
-                    self._consume(raw)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.debug("connections collector loop error; retrying", exc_info=True)
-                self._prev.clear()
-                self._rate.clear()
-                await asyncio.sleep(3.0)
+        await drive_connections(
+            lambda snap: self._fan_out(self._build_snapshot(snap, time.monotonic())),
+            # No source yet: show "nothing connected" instead of a stuck skeleton.
+            on_no_source=lambda: self._fan_out(self._build_snapshot(EMPTY_SNAPSHOT, time.monotonic())),
+            on_error=self._reset_rates,
+        )
 
 
 collector = ConnectionsCollector()
