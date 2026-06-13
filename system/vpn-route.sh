@@ -15,8 +15,8 @@ usage() {
     echo "  --dhcp                Use DHCP to obtain IP and gateway for the VPN interface if not set"
     echo "  -h, --help            Display this help message"
     echo
-    echo "CAKE shaping (env only): CAKE_UL_BANDWIDTH/CAKE_UL_OPTIONS (upload),"
-    echo "CAKE_DL_BANDWIDTH/CAKE_DL_OPTIONS (download via IFB)."
+    echo "CAKE shaping (env only; requires TUN stack: gvisor):"
+    echo "  CAKE_UL_BANDWIDTH/CAKE_UL_OPTIONS (upload), CAKE_DL_BANDWIDTH/CAKE_DL_OPTIONS (download via IFB)."
     exit 1
 }
 

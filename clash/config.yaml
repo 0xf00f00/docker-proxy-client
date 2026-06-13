@@ -53,7 +53,7 @@ sniffer:
 tun:
   enable: true
   device: utun
-  stack: system
+  stack: gvisor
   auto-route: false
   auto-redir: false
   auto-detect-interface: true

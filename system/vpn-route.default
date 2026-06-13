@@ -10,11 +10,11 @@
 DIRECT_DOMAINS=time.google.com,time.cloudflare.com,time.apple.com,time.windows.com,0.pool.ntp.org,0.debian.pool.ntp.org,1.debian.pool.ntp.org,2.debian.pool.ntp.org,3.debian.pool.ntp.org,region1.v2.argotunnel.com,region2.v2.argotunnel.com
 
 # ---- CAKE: per-client/per-flow fairness inside the tunnel ----
+# REQUIRES TUN `stack: gvisor`.
 # Queues only form at the bottleneck: each value must sit BELOW the matching
 # WAN rate (and below any upstream-router shaper) or the queue forms at the
 # router and CAKE here does nothing. Measure first (curl --interface eth0),
-# then set ~85-90%: tunnel crypto overhead plus direct/frp traffic share the
-# same WAN link. A unit suffix (Kbit/Mbit/Gbit) is REQUIRED; unit-less values
+# then set ~85-90%. A unit suffix (Kbit/Mbit/Gbit) is REQUIRED; unit-less values
 # are rejected (tc would read them as bytes/sec and throttle to nothing).
 # Empty/unset = disabled; the next service run also removes the qdisc.
 

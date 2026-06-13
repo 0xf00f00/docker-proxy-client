@@ -65,28 +65,21 @@ imperative script triggered on device appearance.
 
 ## Per-flow fairness inside the tunnel (CAKE)
 
+**Requires TUN `stack: gvisor`.** On `stack: system`, a CAKE qdisc on
+*either* direction throttles the whole tunnel to that one rate in *both*
+directions.
+
 - **Upload** (`CAKE_UL_BANDWIDTH`): root CAKE qdisc on `utun` egress (client→internet).
 - **Download** (`CAKE_DL_BANDWIDTH`): root qdiscs are egress-only and decrypted
   download enters `utun` as *ingress* (proxy writes to the TUN), so it's redirected through an `ifb-utun` device carrying its own CAKE qdisc.
 
-Default options are `besteffort nat` (download adds `ingress`). The `nat` flag is load-bearing.
-
-Rates require a unit suffix (`11Mbit`).
-
-### Picking the rates
-
-The queue must form **on TUN**, not at the router: set each rate to ~85–90%
-of the *measured* WAN rate in that direction (`curl --interface eth0` to
-measure raw)
-
-### Enable / change / disable
+Default options are `besteffort nat` (download adds `ingress`). The `nat` flag is load-bearing. Set each rate to ~85–90% of the *measured* WAN rate in that direction (`curl --interface eth0`), so the queue forms on TUN, not at the router.
 
 ```bash
 sudo nano /etc/default/vpn-route           # set CAKE_UL_BANDWIDTH / CAKE_DL_BANDWIDTH
-sudo systemctl start vpn-route.service   # applies live; no clash restart, no outage
-
-tc -s qdisc show dev utun                # -> qdisc cake ... bandwidth 11Mbit ... nat
-tc -s qdisc show dev ifb-utun            # -> qdisc cake ... bandwidth 28Mbit ... ingress
+sudo systemctl start vpn-route.service     # applies live; no clash restart, no outage
+tc -s qdisc show dev utun                  # -> qdisc cake ... bandwidth 11Mbit ... nat
+tc -s qdisc show dev ifb-utun              # -> qdisc cake ... bandwidth 30Mbit ... ingress
 ```
 
 To disable: clear the variables and `systemctl start vpn-route.service` again; the script removes the qdisc and IFB itself.
