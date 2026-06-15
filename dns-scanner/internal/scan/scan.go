@@ -39,6 +39,9 @@ type Deps struct {
 	CertifyAnyway bool
 	// OnCertResult fires once per certification attempt with its verdict.
 	OnCertResult func(ip string, accepted bool, reason string)
+	// OnResult fires once per probed resolver with its complete funnel Result
+	// (accepted or not) — for funnel tallies and near-miss collection.
+	OnResult func(r score.Result)
 }
 
 // Run funnels each ip through the gates (and certification when a prober is set)
@@ -80,6 +83,9 @@ func Run(ctx context.Context, d Deps, ips []string, targetN int, stopAtTarget bo
 					d.OnProbe()
 				}
 				res := runResolver(ctx, d, certSem, ip)
+				if d.OnResult != nil {
+					d.OnResult(res)
+				}
 				if res.GatesPassed() && (d.Prober == nil || res.Certified) {
 					mu.Lock()
 					results = append(results, res)

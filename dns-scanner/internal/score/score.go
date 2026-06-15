@@ -25,6 +25,8 @@ type Result struct {
 	DownloadMTU   int
 	CertRTTms     int64
 	CertifyReason string
+
+	Backup bool
 }
 
 // GatesPassed reports whether the cheap funnel cleared the resolver for the

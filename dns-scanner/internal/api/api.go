@@ -48,6 +48,20 @@ type ResolverInfo struct {
 	DownloadMTU int    `json:"down_mtu,omitempty"`
 	EDNSMax     int    `json:"edns_max,omitempty"`
 	LossPct     int    `json:"loss_pct"`
+	Backup      bool   `json:"backup,omitempty"` // admitted via the backup tier
+}
+
+// Funnel is the per-stage survivor count of the last sweep — how many candidates
+// made it past each gate. A cliff at one stage localises a problem at a glance.
+type Funnel struct {
+	Probed  int `json:"probed"`
+	Alive   int `json:"alive"`
+	NX      int `json:"nx"`
+	Forward int `json:"forward"`
+	EDNS    int `json:"edns"`
+	Upload  int `json:"upload"`
+	Gates   int `json:"gates"`
+	Cert    int `json:"cert"`
 }
 
 // errorResponse is the body returned for 4xx responses.
@@ -78,6 +92,10 @@ type Snapshot struct {
 	NextScanUnix       int64          `json:"next_scan_unix"`
 	IntervalDays       int            `json:"interval_days"`
 	TargetN            int            `json:"target_n,omitempty"`
+
+	// Last-cycle diagnostics (funnel pushed live; backup count set at cycle end).
+	Funnel      Funnel `json:"funnel"`
+	BackupCount int    `json:"backup_count"`
 }
 
 type Server struct {
@@ -154,6 +172,9 @@ func (s *Server) BeginRun(startUnix int64, cancel context.CancelFunc) {
 		p.Candidates = 0
 		p.Probed = 0
 		p.Accepted = 0
+		// Clear the previous run's diagnostics so the new run builds them fresh.
+		p.Funnel = Funnel{}
+		p.BackupCount = 0
 	})
 	s.mu.Lock()
 	s.cancel = cancel
@@ -197,6 +218,20 @@ func (s *Server) EndRun(startUnix int64, durSec int, outcome string, working []R
 // SetTarget records the per-cycle resolver target (the dashboard shows
 // "accepted of target" progress). Set once at startup; it doesn't change.
 func (s *Server) SetTarget(n int) { s.update(func(p *Snapshot) { p.TargetN = n }) }
+
+// SetFunnel updates just the live per-stage funnel. Pushed periodically during
+// the sweep so the breakdown builds up mid-run and is preserved if the user
+// pauses or stops partway.
+func (s *Server) SetFunnel(f Funnel) { s.update(func(p *Snapshot) { p.Funnel = f }) }
+
+// SetCycleStats records the last cycle's funnel and backup count. Called just
+// before EndRun so the values persist into the idle snapshot.
+func (s *Server) SetCycleStats(f Funnel, backupCount int) {
+	s.update(func(p *Snapshot) {
+		p.Funnel = f
+		p.BackupCount = backupCount
+	})
+}
 
 func (s *Server) SetSchedule(nextUnix int64, intervalDays int) {
 	s.update(func(p *Snapshot) {

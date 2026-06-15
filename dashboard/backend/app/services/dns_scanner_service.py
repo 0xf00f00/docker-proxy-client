@@ -8,7 +8,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.config import settings
-from app.models.schemas import DnsResolver, DnsScannerStatus
+from app.models.schemas import (
+    DnsFunnel,
+    DnsResolver,
+    DnsScannerStatus,
+)
 from app.services import docker_service
 
 _CONTAINER = "dns-scanner"
@@ -96,11 +100,31 @@ def _resolvers_from_api(raw: object) -> list[DnsResolver]:
                     down_mtu=int(r.get("down_mtu", 0)),
                     edns_max=int(r.get("edns_max", 0)),
                     loss_pct=int(r.get("loss_pct", 0)),
+                    backup=bool(r.get("backup", False)),
                 )
             )
         except (ValueError, TypeError):
             continue
     return out
+
+
+def _funnel_from_api(raw: object) -> DnsFunnel:
+    if not isinstance(raw, dict):
+        return DnsFunnel()
+    try:
+        return DnsFunnel(
+            probed=int(raw.get("probed", 0)),
+            alive=int(raw.get("alive", 0)),
+            nx=int(raw.get("nx", 0)),
+            forward=int(raw.get("forward", 0)),
+            edns=int(raw.get("edns", 0)),
+            upload=int(raw.get("upload", 0)),
+            gates=int(raw.get("gates", 0)),
+            cert=int(raw.get("cert", 0)),
+        )
+    except (ValueError, TypeError):
+        return DnsFunnel()
+
 
 
 def _managed_resolvers() -> list[str]:
@@ -149,6 +173,8 @@ def get_status() -> DnsScannerStatus:
             next_scan=_dt(snap.get("next_scan_unix")),
             interval_days=int(snap.get("interval_days", 0)),
             history_count=int(snap.get("history_count", 0)),
+            funnel=_funnel_from_api(snap.get("funnel")),
+            backup_count=int(snap.get("backup_count", 0)),
         )
 
     # API unreachable: degrade off the only persisted artifact (the managed block

@@ -69,18 +69,26 @@ func queryAccept(s *dnsprobe.Session, name string, qtype uint16) bool {
 
 // EDNS returns the largest advertised UDP payload size the resolver echoes back
 // (1232 → 900 → 512), a coarse download-capacity signal. 0 = no usable EDNS.
+// Each size is retried once on a dropped reply: on a jittery resolver a single
+// lost datagram must not read as "no EDNS" and veto a resolver that certifies.
 func EDNS(s *dnsprobe.Session, domain string) int {
 	for _, size := range []uint16{1232, 900, 512} {
-		pkt, id, err := dnsprobe.BuildQuery(dnsprobe.RandLabel(6)+"."+domain, dnsprobe.TypeTXT, size)
-		if err != nil {
-			continue
-		}
-		resp, err := s.Query(pkt, id)
-		if err != nil || resp.Rcode == dnsprobe.RcodeFormErr {
-			continue
-		}
-		if resp.EDNSPayload >= int(size) {
-			return int(size)
+		for attempt := 0; attempt < 2; attempt++ {
+			if attempt > 0 {
+				time.Sleep(150 * time.Millisecond)
+			}
+			pkt, id, err := dnsprobe.BuildQuery(dnsprobe.RandLabel(6)+"."+domain, dnsprobe.TypeTXT, size)
+			if err != nil {
+				break
+			}
+			resp, err := s.Query(pkt, id)
+			if err != nil {
+				continue // transient loss — retry this size before moving on
+			}
+			if resp.Rcode != dnsprobe.RcodeFormErr && resp.EDNSPayload >= int(size) {
+				return int(size)
+			}
+			break // clean reply without a usable OPT (or FormErr) — try the next smaller size
 		}
 	}
 	return 0

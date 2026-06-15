@@ -90,6 +90,18 @@ export interface DnsResolver {
   down_mtu: number;
   edns_max: number;
   loss_pct: number;
+  backup?: boolean;
+}
+
+export interface DnsFunnel {
+  probed: number;
+  alive: number;
+  nx: number;
+  forward: number;
+  edns: number;
+  upload: number;
+  gates: number;
+  cert: number;
 }
 
 export interface DnsScannerStatus {
@@ -112,6 +124,8 @@ export interface DnsScannerStatus {
   next_scan: string | null;
   interval_days: number;
   history_count: number;
+  funnel: DnsFunnel;
+  backup_count: number;
 }
 
 export interface IpInfo {

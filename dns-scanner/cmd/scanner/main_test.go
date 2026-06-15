@@ -78,3 +78,38 @@ func TestCertReportSummary(t *testing.T) {
 		t.Errorf("sweepFails = %v, want [9.9.9.9]", fails)
 	}
 }
+
+func TestFunnelAddTallies(t *testing.T) {
+	f := &funnel{}
+	f.add(score.Result{})                                                                                                      // dead: probed only
+	f.add(score.Result{AliveRTT: time.Millisecond})                                                                            // alive
+	f.add(score.Result{AliveRTT: time.Millisecond, NXOK: true})                                                                // +nx
+	f.add(score.Result{AliveRTT: time.Millisecond, NXOK: true, Forwards: true, EDNSMax: 0, UploadOK: true})                    // near-miss (no edns → no gates)
+	f.add(score.Result{AliveRTT: time.Millisecond, NXOK: true, Forwards: true, EDNSMax: 512, UploadOK: true, Certified: true}) // full pass
+	g := f.snapshot()
+	if g.Probed != 5 || g.Alive != 4 || g.NX != 3 || g.Forward != 2 || g.EDNS != 1 || g.Upload != 2 || g.Gates != 1 || g.Cert != 1 {
+		t.Errorf("funnel snapshot = %+v", g)
+	}
+}
+
+func TestNearMissCollectsAndExcludesWorking(t *testing.T) {
+	l := &liveSet{}
+	nm := newNearMiss(2, l)
+	// Forwards but failed gates (EDNSMax 0) → near-miss.
+	nm.consider(score.Result{IP: "1.1.1.1", Forwards: true, UploadOK: true})
+	nm.consider(score.Result{IP: "1.1.1.1", Forwards: true, UploadOK: true}) // dup ignored
+	nm.consider(score.Result{IP: "8.8.8.8", Forwards: true, UploadOK: true})
+	nm.consider(score.Result{IP: "9.9.9.9", Forwards: true, UploadOK: true}) // over cap (2) → dropped
+	// Not a near-miss: no Forwards, or already certified.
+	nm.consider(score.Result{IP: "2.2.2.2", Forwards: false})
+	nm.consider(score.Result{IP: "3.3.3.3", Forwards: true, NXOK: true, EDNSMax: 512, UploadOK: true, Certified: true})
+	got := nm.ips()
+	if len(got) != 2 || got[0] != "1.1.1.1" || got[1] != "8.8.8.8" {
+		t.Fatalf("nearMiss ips = %v, want [1.1.1.1 8.8.8.8]", got)
+	}
+	// Once 1.1.1.1 is working, it is excluded from the backup candidate list.
+	l.working = []score.Result{{IP: "1.1.1.1"}}
+	if got := nm.ips(); len(got) != 1 || got[0] != "8.8.8.8" {
+		t.Errorf("nearMiss ips after working = %v, want [8.8.8.8]", got)
+	}
+}

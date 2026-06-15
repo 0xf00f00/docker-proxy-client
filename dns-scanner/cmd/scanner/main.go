@@ -41,6 +41,8 @@ const (
 	canaryInterval time.Duration = time.Hour          // recovery-canary poll cadence while in outage
 	certFailTTL    time.Duration = 5 * 24 * time.Hour // how long a cert failure suppresses a sweep re-probe
 	certFailCap                  = 5000               // max cert-failure entries kept (oldest evicted)
+
+	nearMissCap = 200 // max backup candidates (gate-failures) kept for the backup tier
 )
 
 type config struct {
@@ -226,7 +228,20 @@ func runCycle(ctx context.Context, cfg config, base scan.Deps, srv *api.Server, 
 	verifyDeps.CertifyAnyway = true
 	verifyDeps.OnCertResult = func(_ string, accepted bool, reason string) { rep.note(accepted, reason) }
 
+	// The sweep is the discovery funnel: tally per-stage survivors and collect
+	// near-misses (proved recursion, failed a capacity gate) for the backup tier.
+	fn := &funnel{}
+	nm := newNearMiss(nearMissCap, l)
+
 	sweepDeps := deps
+	sweepDeps.OnResult = func(r score.Result) {
+		fn.add(r)
+		nm.consider(r)
+		// Push the funnel live on every result so the breakdown builds up smoothly
+		// mid-sweep and survives a pause/stop. Downstream (a bounded SSE channel +
+		// the dashboard's 0.3s debounce) coalesces, so per-result pushes are cheap.
+		srv.SetFunnel(fn.snapshot())
+	}
 	sweepDeps.OnCertResult = func(ip string, accepted bool, reason string) {
 		rep.note(accepted, reason)
 		if !accepted {
@@ -255,15 +270,38 @@ func runCycle(ctx context.Context, cfg config, base scan.Deps, srv *api.Server, 
 			slog.Info("sweeping tiers", "need", need, "candidates", len(sweep), "seed", seed)
 			scan.Run(scanCtx, sweepDeps, sweep, need, true)
 			prog.flush()
+			srv.SetFunnel(fn.snapshot()) // exact final funnel (the throttle skips the tail)
 		}
 	} else {
 		slog.Info("known resolvers satisfy target — no sweep", "count", l.count())
+	}
+
+	// 2b) Backup tier: if still short of target, certify the sweep's near-misses
+	// (resolvers that proved real recursion but failed a cheap capacity gate). A
+	// strict gate must not strand a resolver that actually carries the tunnel.
+	backupCount := 0
+	if l.certifyOn && l.count() < cfg.targetN && scanCtx.Err() == nil {
+		if cand := nm.ips(); len(cand) > 0 {
+			before := l.count()
+			l.setBackup(true)
+			backupDeps := deps
+			backupDeps.CertifyAnyway = true
+			backupDeps.OnCertResult = func(_ string, accepted bool, reason string) { rep.note(accepted, reason) }
+			prog.beginPhase("backup", len(cand))
+			slog.Info("backup tier — certifying gate-failures", "candidates", len(cand), "need", cfg.targetN-before)
+			scan.Run(scanCtx, backupDeps, cand, cfg.targetN-before, true)
+			prog.flush()
+			l.setBackup(false)
+			backupCount = l.count() - before
+		}
 	}
 
 	working := score.RankWorking(l.snapshot())
 
 	if scanCtx.Err() != nil {
 		slog.Info("scan cancelled — keeping current resolvers (no clobber, no backoff change)", "probed", prog.total())
+		// Preserve the partial funnel/diagnostics gathered up to the stop point.
+		srv.SetCycleStats(fn.snapshot(), backupCount)
 		srv.EndRun(start.Unix(), int(time.Since(start).Seconds()), "stopped", toResolverInfo(working), len(st.History))
 		report(cfg, base.Prober != nil, working)
 		return
@@ -324,6 +362,15 @@ func runCycle(ctx context.Context, cfg config, base scan.Deps, srv *api.Server, 
 		outcome += " — " + cs
 		slog.Info("certification summary", "outcome", outcome)
 	}
+
+	// Cycle diagnostics: the per-stage funnel and how many resolvers the backup
+	// tier recovered — both observed facts, surfaced to the dashboard and the log.
+	fstat := fn.snapshot()
+	slog.Info("funnel", "probed", fstat.Probed, "alive", fstat.Alive, "nx", fstat.NX,
+		"forward", fstat.Forward, "edns", fstat.EDNS, "upload", fstat.Upload,
+		"gates", fstat.Gates, "cert", fstat.Cert, "working", len(working), "backup", backupCount)
+	srv.SetCycleStats(fstat, backupCount)
+
 	srv.EndRun(start.Unix(), int(time.Since(start).Seconds()), outcome, toResolverInfo(working), len(st.History))
 	report(cfg, base.Prober != nil, working)
 }
@@ -388,6 +435,93 @@ func (c *certReport) summary() string {
 	return out
 }
 
+// funnel tallies per-stage survivors of the sweep (concurrency-safe). A cliff at
+// one stage localises a problem — e.g. everything dying at "edns" exposed the
+// EDNS-stripping middlebox incident at a glance.
+type funnel struct {
+	probed, alive, nx, forward, edns, upload, gates, cert atomic.Int64
+}
+
+func (f *funnel) add(r score.Result) {
+	f.probed.Add(1)
+	if r.AliveRTT > 0 {
+		f.alive.Add(1)
+	}
+	if r.NXOK {
+		f.nx.Add(1)
+	}
+	if r.Forwards {
+		f.forward.Add(1)
+	}
+	if r.EDNSMax > 0 {
+		f.edns.Add(1)
+	}
+	if r.UploadOK {
+		f.upload.Add(1)
+	}
+	if r.GatesPassed() {
+		f.gates.Add(1)
+	}
+	if r.Certified {
+		f.cert.Add(1)
+	}
+}
+
+func (f *funnel) snapshot() api.Funnel {
+	return api.Funnel{
+		Probed: int(f.probed.Load()), Alive: int(f.alive.Load()), NX: int(f.nx.Load()),
+		Forward: int(f.forward.Load()), EDNS: int(f.edns.Load()), Upload: int(f.upload.Load()),
+		Gates: int(f.gates.Load()), Cert: int(f.cert.Load()),
+	}
+}
+
+// nearMiss collects sweep resolvers that proved real recursion (Forwards) but
+// failed a cheap capacity gate — the backup tier re-certifies these when the
+// pool is short of target. Bounded and deduped.
+type nearMiss struct {
+	mu   sync.Mutex
+	l    *liveSet
+	cap  int
+	seen map[string]struct{}
+	list []string
+}
+
+func newNearMiss(cap int, l *liveSet) *nearMiss {
+	return &nearMiss{l: l, cap: cap, seen: make(map[string]struct{})}
+}
+
+func (n *nearMiss) consider(r score.Result) {
+	if !r.Forwards || r.GatesPassed() || r.Certified {
+		return
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if len(n.list) >= n.cap {
+		return
+	}
+	if _, dup := n.seen[r.IP]; dup {
+		return
+	}
+	n.seen[r.IP] = struct{}{}
+	n.list = append(n.list, r.IP)
+}
+
+// ips returns the collected near-misses, excluding any that have since become
+// working (so the backup leg never re-probes an already-accepted resolver).
+func (n *nearMiss) ips() []string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	have := n.l.ipsSet()
+	out := make([]string, 0, len(n.list))
+	for _, ip := range n.list {
+		if _, ok := have[ip]; ok {
+			continue
+		}
+		out = append(out, ip)
+	}
+	return out
+}
+
 type progress struct {
 	srv        *api.Server
 	start      time.Time
@@ -398,10 +532,10 @@ type progress struct {
 	lastLog time.Time
 }
 
-const (
-	progressPushEvery = 10              // push the counter to the API every N probes (throttle SSE churn)
-	progressLogEvery  = 5 * time.Second // ...and log a heartbeat at most this often
-)
+// progressLogEvery throttles the slog heartbeat only. The API counter is pushed
+// every probe — the dashboard's bounded SSE channel + 0.3s debounce coalesce it,
+// so a coarse push interval would just make small legs (verify) jump and stall.
+const progressLogEvery = 5 * time.Second
 
 func newProgress(srv *api.Server) *progress {
 	return &progress{srv: srv, start: time.Now()}
@@ -413,13 +547,11 @@ func (p *progress) beginPhase(phase string, n int) {
 	p.srv.SetPhase(phase, total)
 }
 
-// tick is the per-probe callback: bump the counter, push it (throttled), and
-// heartbeat the rate/ETA to the log.
+// tick is the per-probe callback: bump the counter, push it live, and heartbeat
+// the rate/ETA to the log (throttled).
 func (p *progress) tick() {
 	done := p.probed.Add(1)
-	if done%progressPushEvery == 0 {
-		p.srv.SetProbed(int(done))
-	}
+	p.srv.SetProbed(int(done))
 
 	p.mu.Lock()
 	now := time.Now()
@@ -460,11 +592,17 @@ type liveSet struct {
 	lastFlush   time.Time        // last mid-cycle mdns restart (debounce)
 	certifyOn   bool             // false = gates-only; never push uncertified resolvers live
 	certFailed  map[string]int64 // carried read-only so incremental saves preserve the skip-list
+	inBackup    bool             // true during the backup leg — admissions are tagged Backup
 	working     []score.Result
 }
 
+func (l *liveSet) setBackup(v bool) { l.mu.Lock(); l.inBackup = v; l.mu.Unlock() }
+
 func (l *liveSet) onAccept(r score.Result, _ int) {
 	l.mu.Lock()
+	if l.inBackup {
+		r.Backup = true
+	}
 	l.working = upsertResult(l.working, r)
 	l.srv.SetAccepted(len(l.working))
 	// Crash-safe incremental persist (preserve history/backoff for cycle-end).
@@ -649,7 +787,7 @@ func toWorking(rs []score.Result) []state.Working {
 func toResolverInfo(rs []score.Result) []api.ResolverInfo {
 	out := make([]api.ResolverInfo, len(rs))
 	for i, r := range rs {
-		out[i] = api.ResolverInfo{IP: r.IP, UploadMTU: r.UploadMTU, DownloadMTU: r.DownloadMTU, EDNSMax: r.EDNSMax, LossPct: int(r.LossFrac * 100)}
+		out[i] = api.ResolverInfo{IP: r.IP, UploadMTU: r.UploadMTU, DownloadMTU: r.DownloadMTU, EDNSMax: r.EDNSMax, LossPct: int(r.LossFrac * 100), Backup: r.Backup}
 	}
 	return out
 }

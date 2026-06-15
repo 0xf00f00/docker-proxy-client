@@ -245,6 +245,22 @@ class DnsResolver(BaseModel):
     down_mtu: int = 0
     edns_max: int = 0
     loss_pct: int = 0
+    # True when admitted via the backup tier (failed a cheap check but certified).
+    backup: bool = False
+
+
+class DnsFunnel(BaseModel):
+    """Per-stage survivor counts of the last sweep — a cliff at one stage localises
+    a problem (the EDNS-stripping incident showed as a collapse at `edns`)."""
+
+    probed: int = 0
+    alive: int = 0
+    nx: int = 0
+    forward: int = 0
+    edns: int = 0
+    upload: int = 0
+    gates: int = 0
+    cert: int = 0
 
 
 class DnsScannerStatus(BaseModel):
@@ -276,6 +292,10 @@ class DnsScannerStatus(BaseModel):
     next_scan: datetime | None = None
     interval_days: int = 0
     history_count: int = 0
+    # Last-cycle diagnostics: where the sweep funnel narrowed and how many
+    # resolvers the backup tier recovered.
+    funnel: DnsFunnel = DnsFunnel()
+    backup_count: int = 0
 
 
 class EdgeTestRequest(BaseModel):

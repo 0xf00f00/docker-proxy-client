@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Pause, Play, Power, RotateCw, Square } from "lucide-react";
 import { toast } from "sonner";
-import type { DnsResolver, DnsScannerStatus } from "@/types";
+import type { DnsFunnel, DnsResolver, DnsScannerStatus } from "@/types";
 import { openDnsScannerStream, pauseDnsScan, resumeDnsScan, runDnsScan, startContainer, stopDnsScan } from "@/api/client";
 import { getErrorMessage } from "@/utils/errors";
 import { formatAgo, formatDuration, formatUntil } from "@/utils/format";
@@ -130,7 +130,10 @@ export default function DnsScannerSection() {
 
   return (
     <div>
-      <h2 className="text-muted mb-3 text-xs font-medium tracking-wide uppercase">DNS Resolvers</h2>
+      <div className="mb-3">
+        <h2 className="text-muted text-xs font-medium tracking-wide uppercase">DNS Resolvers</h2>
+        <p className="text-muted mt-0.5 text-[11px] normal-case">Emergency DNS for when the internet is blocked</p>
+      </div>
       <div className="border-border bg-card overflow-hidden rounded-xl border">
         <div className="flex min-h-12 items-center gap-3 px-4 py-3">
           <span className={cn("inline-block h-2.5 w-2.5 shrink-0 rounded-full", view.dot)} aria-label={view.label} />
@@ -152,26 +155,17 @@ export default function DnsScannerSection() {
           </div>
         )}
 
-        {count > 0 && data && data.working.length > 0 && (
+        {data && hasDetails(data) && (
           <div className="border-border border-t">
             <button
               type="button"
               onClick={() => setShowResolvers((v) => !v)}
               className="text-muted hover:text-foreground flex min-h-11 w-full items-center justify-between px-4 text-xs"
             >
-              <span>Show found resolvers ({count})</span>
+              <span>{count > 0 ? `Show details (${count})` : "Show details"}</span>
               <span>{showResolvers ? "Hide" : "Show"}</span>
             </button>
-            {showResolvers && (
-              <ul className="space-y-1.5 px-4 pb-3">
-                {data.working.map((r) => (
-                  <li key={r.ip} className="flex items-center gap-2">
-                    <span className="flex-1 truncate font-mono text-xs text-zinc-400">{r.ip}</span>
-                    <Health resolver={r} />
-                  </li>
-                ))}
-              </ul>
-            )}
+            {showResolvers && <Details data={data} />}
           </div>
         )}
 
@@ -304,9 +298,15 @@ function deriveView(s: {
     };
   }
   if (count > 0) {
-    return { dot: "bg-emerald-500", label: `${count} working`, sub: scheduleLine(data) };
+    const target = data?.target_n ?? 0;
+    // Green once we have a full backup set; amber while still thin (below target).
+    const dot = target > 0 && count < target ? "bg-amber-500" : "bg-emerald-500";
+    const noun = count === 1 ? "resolver" : "resolvers";
+    return { dot, label: `${count} backup ${noun} ready`, sub: scheduleLine(data) };
   }
-  return { dot: "bg-red-500", label: "No resolvers found", sub: scheduleLine(data) };
+  // Zero is "none yet", never a failure (RED is reserved for down). During an
+  // outage finding nothing is expected — stay neutral grey, not alarming red.
+  return { dot: "bg-zinc-500", label: "No backup resolvers yet", sub: scheduleLine(data) };
 }
 
 // Header sub-line: just the result the user cares about. The activity detail
@@ -408,6 +408,71 @@ function useTicker(active: boolean): number {
     return () => clearInterval(id);
   }, [active]);
   return now;
+}
+
+// hasDetails decides whether the "Show details" panel has anything to show: the
+// resolver list or the last sweep's funnel.
+function hasDetails(data: DnsScannerStatus): boolean {
+  return data.working.length > 0 || (data.funnel?.probed ?? 0) > 0;
+}
+
+function Details({ data }: { data: DnsScannerStatus }) {
+  const backupCount = data.backup_count ?? 0;
+  return (
+    <div className="space-y-3 px-4 pb-3">
+      {data.funnel && data.funnel.probed > 0 && (
+        <FunnelView funnel={data.funnel} working={data.working_count} live={data.state !== "idle"} />
+      )}
+
+      {backupCount > 0 && (
+        <p className="text-muted text-[11px]">
+          {backupCount} found via backup test — worked despite failing a quick check.
+        </p>
+      )}
+
+      {data.working.length > 0 && (
+        <ul className="space-y-1.5">
+          {data.working.map((r) => (
+            <li key={r.ip} className="flex items-center gap-2">
+              <span className="flex-1 truncate font-mono text-xs text-zinc-400">{r.ip}</span>
+              {r.backup && (
+                <span className="rounded bg-zinc-700 px-1 py-0.5 text-[9px] tracking-wide text-zinc-300 uppercase">backup</span>
+              )}
+              <Health resolver={r} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// FunnelView shows where the last sweep narrowed, in plain words — a collapse at
+// one stage (e.g. EDNS) makes a hidden problem obvious instead of silent.
+function FunnelView({ funnel, working, live }: { funnel: DnsFunnel; working: number; live: boolean }) {
+  const rows: Array<[string, number]> = [
+    ["Checked", funnel.probed],
+    ["Reachable", funnel.alive],
+    ["Real DNS server", funnel.forward],
+    ["Supports EDNS", funnel.edns],
+    ["Carried the tunnel", funnel.cert],
+    ["Working", working],
+  ];
+  const max = Math.max(1, funnel.probed);
+  return (
+    <div className="space-y-1">
+      <p className="text-muted text-[10px] tracking-wide uppercase">{live ? "This search so far" : "Last search"}</p>
+      {rows.map(([label, n]) => (
+        <div key={label} className="flex items-center gap-2">
+          <span className="text-muted w-28 shrink-0 truncate text-[11px]">{label}</span>
+          <div className="h-1 flex-1 overflow-hidden rounded-full bg-zinc-800">
+            <div className="h-full rounded-full bg-zinc-500" style={{ width: `${Math.max(2, Math.round((n / max) * 100))}%` }} />
+          </div>
+          <span className="text-muted w-14 shrink-0 text-right text-[11px] tabular-nums">{n.toLocaleString()}</span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function Health({ resolver }: { resolver: DnsResolver }) {
