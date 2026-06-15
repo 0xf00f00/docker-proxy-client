@@ -82,15 +82,21 @@ export default function HealthBar({
   };
 
   const activeBucket = active != null ? buckets[active] : null;
-  // Keep the readout off the very edges so it doesn't clip.
-  const readoutLeft = active != null ? Math.min(92, Math.max(8, ((active + 0.5) / count) * 100)) : 0;
+  // Center of the active bucket, 0..1, used to anchor the readout horizontally.
+  const frac = active != null ? (active + 0.5) / count : 0;
+  // Pin to the edges near the ends so the readout never overflows the modal;
+  // center it everywhere in between.
+  const readoutStyle: React.CSSProperties =
+    frac < 0.2 ? { left: 0 } : frac > 0.8 ? { right: 0 } : { left: `${frac * 100}%`, transform: "translateX(-50%)" };
 
   return (
     <div className="relative">
       {activeBucket && (
+        // Below the bar (not above): the bar sits at the top of the modal's
+        // scroll container, so an upward readout clips behind the fixed header.
         <div
-          className="border-border bg-card text-foreground pointer-events-none absolute -top-1 z-10 -translate-x-1/2 -translate-y-full rounded-md border px-2 py-1 text-[11px] font-medium whitespace-nowrap tabular-nums shadow-lg"
-          style={{ left: `${readoutLeft}%` }}
+          className="border-border bg-card text-foreground pointer-events-none absolute top-full z-20 mt-1 max-w-full rounded-md border px-2 py-1 text-[11px] font-medium whitespace-nowrap tabular-nums shadow-lg"
+          style={readoutStyle}
         >
           {scrubLabel(activeBucket)}
         </div>
