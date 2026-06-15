@@ -75,6 +75,15 @@ export async function stopContainer(name: string): Promise<void> {
   await api.post(`/containers/${name}/stop`);
 }
 
+// Older log lines for scroll-up history paging: returns up to `limit` lines
+// that occurred before `until` (Unix epoch seconds, sub-second precision).
+export async function fetchLogHistory(name: string, until: number, limit: number): Promise<string> {
+  const { data } = await api.get<{ text: string }>(`/containers/${name}/logs/history`, {
+    params: { until, limit },
+  });
+  return data.text;
+}
+
 // ---------- Scanner ----------
 
 export async function fetchScannerStatus(): Promise<ScannerStatus> {

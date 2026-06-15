@@ -92,6 +92,25 @@ async def get_logs(container_name: str, tail: int = 100):
         raise HTTPException(status_code=500, detail="Failed to fetch logs") from None
 
 
+@router.get("/{container_name}/logs/history", dependencies=[RequireAuth])
+async def get_logs_history(container_name: str, until: float, limit: int = 500):
+    """Older log lines for scroll-up history paging.
+
+    Returns up to `limit` lines that occurred before the `until` epoch
+    timestamp (Unix seconds, sub-second precision honoured by Docker). The
+    client passes the oldest timestamp it currently holds to walk backwards.
+    """
+    limit = max(1, min(limit, 2000))
+    try:
+        text = await asyncio.to_thread(docker_service.get_container_logs_before, container_name, until, limit)
+        return {"text": text}
+    except docker.errors.NotFound:
+        raise HTTPException(status_code=404, detail="Container not found") from None
+    except Exception:
+        logger.exception("Failed to fetch log history for %s", container_name)
+        raise HTTPException(status_code=500, detail="Failed to fetch logs") from None
+
+
 @router.get("/stream")
 async def stream_containers():
     """Push container state changes in near real-time.

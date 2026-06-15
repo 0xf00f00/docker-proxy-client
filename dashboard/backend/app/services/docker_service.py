@@ -353,3 +353,14 @@ def stop_container(container_name: str) -> None:
 def get_container_logs(container_name: str, tail: int = 100) -> str:
     container = get_client().containers.get(container_name)
     return container.logs(tail=tail, timestamps=True).decode("utf-8", errors="replace")
+
+
+def get_container_logs_before(container_name: str, until: float, limit: int = 500) -> str:
+    """Last `limit` log lines that occurred before the `until` epoch timestamp.
+
+    Powers scroll-up history paging: the viewer passes the oldest timestamp it
+    holds and gets back the chunk preceding it (timestamps included so the
+    client can keep paging and de-dupe the boundary line).
+    """
+    container = get_client().containers.get(container_name)
+    return container.logs(tail=limit, until=until, timestamps=True).decode("utf-8", errors="replace")
