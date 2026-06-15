@@ -184,12 +184,17 @@ async def stream_containers():
 
 
 @router.get("/{container_name}/logs/stream", dependencies=[RequireAuth])
-async def stream_container_logs(container_name: str, tail: int = 200):
+async def stream_container_logs(container_name: str, tail: int = 200, since: float = 0.0):
     """Follow a container's logs over SSE.
 
     Emits ``chunk`` events carrying the raw decoded log stream (carriage
     returns, ANSI escapes and all) for an xterm.js terminal to render, plus a
     terminal ``end`` event when the container exits or the client disconnects.
+
+    With ``since`` (a Unix epoch) the stream backfills everything from that
+    timestamp before following live — used to resume without a gap after the
+    viewer dropped the connection to browse history. Otherwise it starts from
+    the last ``tail`` lines.
     """
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue[tuple[str, str] | None] = asyncio.Queue(maxsize=4000)
@@ -203,7 +208,12 @@ async def stream_container_logs(container_name: str, tail: int = 200):
         logger.exception("Cannot fetch container %s for log stream", container_name)
         raise HTTPException(status_code=503, detail="Cannot connect to Docker") from None
 
-    log_stream = container.logs(stream=True, follow=True, timestamps=True, tail=tail)
+    log_kwargs: dict = {"stream": True, "follow": True, "timestamps": True}
+    if since > 0:
+        log_kwargs["since"] = since  # backfill the gap, then follow live
+    else:
+        log_kwargs["tail"] = tail
+    log_stream = container.logs(**log_kwargs)
 
     def push(event_name: str, data: str) -> None:
         with contextlib.suppress(RuntimeError):

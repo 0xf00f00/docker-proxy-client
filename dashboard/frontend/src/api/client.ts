@@ -332,8 +332,15 @@ export interface LogStreamHandlers {
   onError?: (err: Event) => void;
 }
 
-export function openLogStream(containerName: string, tail: number, handlers: LogStreamHandlers): EventSource {
-  const url = `/api/v1/containers/${encodeURIComponent(containerName)}/logs/stream?tail=${tail}`;
+export function openLogStream(
+  containerName: string,
+  params: { tail?: number; since?: number },
+  handlers: LogStreamHandlers,
+): EventSource {
+  const q = new URLSearchParams();
+  if (params.since && params.since > 0) q.set("since", String(params.since));
+  else q.set("tail", String(params.tail ?? 200));
+  const url = `/api/v1/containers/${encodeURIComponent(containerName)}/logs/stream?${q.toString()}`;
   // The only auth-gated stream: a 401 here (expired session) should re-prompt login.
   const es = createEventSource(url, handlers.onError, { probeAuth: true });
   if (handlers.onOpen) es.onopen = handlers.onOpen;

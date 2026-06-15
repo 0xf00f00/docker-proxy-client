@@ -19,6 +19,7 @@ const SCROLLBACK = 50_000;
 const MAX_BUFFER = 16_000_000;
 const HISTORY_CHUNK = 500; // lines fetched per scroll-up page
 const NEAR_TOP_ROWS = 2; // trigger a history fetch within this many rows of the top
+const BOTTOM_ROWS = 2; // within this many rows of the bottom counts as "following live"
 
 // Docker `timestamps=True` prefixes every line with an RFC3339 timestamp.
 const TS_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z) /;
@@ -29,6 +30,10 @@ function splitLines(text: string): string[] {
   return lines;
 }
 
+function isoToEpoch(iso: string): number {
+  return Date.parse(iso.replace(/(\.\d{3})\d+Z$/, "$1Z")) / 1000;
+}
+
 // Oldest timestamp held in the buffer — the cursor for paging further back.
 // RFC3339 is fixed-width so the raw string sorts chronologically; epoch (ms
 // precision, enough for the `until` window) is what the backend wants.
@@ -36,7 +41,20 @@ function oldestTimestamp(buffer: string): { iso: string; epoch: number } | null 
   for (const line of splitLines(buffer)) {
     const iso = TS_RE.exec(line)?.[1];
     if (!iso) continue;
-    const epoch = Date.parse(iso.replace(/(\.\d{3})\d+Z$/, "$1Z")) / 1000;
+    const epoch = isoToEpoch(iso);
+    return Number.isNaN(epoch) ? null : { iso, epoch };
+  }
+  return null;
+}
+
+// Newest timestamp held — the cursor for resuming the live stream with `since`
+// so the gap accrued while browsing history is backfilled, not lost.
+function newestTimestamp(buffer: string): { iso: string; epoch: number } | null {
+  const lines = splitLines(buffer);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const iso = TS_RE.exec(lines[i] ?? "")?.[1];
+    if (!iso) continue;
+    const epoch = isoToEpoch(iso);
     return Number.isNaN(epoch) ? null : { iso, epoch };
   }
   return null;
@@ -65,6 +83,9 @@ export default function LogsModal({ containerName, displayName, onClose }: Props
   const [hasOutput, setHasOutput] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [historyExhausted, setHistoryExhausted] = useState(false);
+  // User explicitly hit Pause: stay paused even back at the bottom (vs. the
+  // automatic pause that scrolling up triggers, which resumes at the bottom).
+  const [manualPaused, setManualPaused] = useState(false);
 
   const esRef = useRef<EventSource | null>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -73,11 +94,16 @@ export default function LogsModal({ containerName, displayName, onClose }: Props
   const loadingOlderRef = useRef(false);
   const exhaustedRef = useRef(false);
   const loadOlderRef = useRef<() => void>(() => {});
+  const handleScrollRef = useRef<(viewportY: number) => void>(() => {});
+  const manualPausedRef = useRef(false);
   // During a history rewrite, live lines are held here instead of being written
   // to the terminal, so the bottom doesn't grow mid-rewrite and throw off the
   // viewport anchor. Flushed once the rewrite settles.
   const rewritingRef = useRef(false);
   const pendingLiveRef = useRef("");
+  // After resuming with `since`, Docker re-sends the boundary second; drop lines
+  // we already hold (compared by RFC3339 string, which sorts chronologically).
+  const dedupeRef = useRef<{ boundary: string; remainder: string } | null>(null);
 
   useEffect(() => {
     let term: Terminal | null = null;
@@ -108,10 +134,7 @@ export default function LogsModal({ containerName, displayName, onClose }: Props
           termRef.current = term;
           if (bufferRef.current) term.write(bufferRef.current); // replay backlog
 
-          // Scroll near the top → pull the previous page of history.
-          term.onScroll((viewportY) => {
-            if (viewportY <= NEAR_TOP_ROWS) loadOlderRef.current();
-          });
+          term.onScroll((viewportY) => handleScrollRef.current(viewportY));
 
           // Once open, keep the terminal fitted to later size changes too.
           ro = new ResizeObserver(() => {
@@ -143,19 +166,60 @@ export default function LogsModal({ containerName, displayName, onClose }: Props
     };
   }, []);
 
+  // Filter the freshly-resumed stream against what we already hold. Operates
+  // line-wise (buffering the trailing partial line) until the first genuinely
+  // newer line, then disables itself so live throughput isn't taxed.
+  const applyDedupe = useCallback((text: string): string => {
+    const st = dedupeRef.current;
+    if (!st) return text;
+    const data = st.remainder + text;
+    const nl = data.lastIndexOf("\n");
+    if (nl === -1) {
+      st.remainder = data;
+      return "";
+    }
+    st.remainder = data.slice(nl + 1);
+    const out: string[] = [];
+    for (const line of data.slice(0, nl + 1).split("\n")) {
+      if (line === "") continue;
+      if (!dedupeRef.current) {
+        out.push(line);
+        continue;
+      }
+      const iso = TS_RE.exec(line)?.[1];
+      if (iso && iso <= st.boundary) continue; // already shown — drop the dupe
+      dedupeRef.current = null; // first new line: stop filtering from here on
+      out.push(line);
+    }
+    let result = out.length ? out.join("\n") + "\n" : "";
+    if (!dedupeRef.current && st.remainder) {
+      result += st.remainder; // filtering done — let the partial line through
+      st.remainder = "";
+    }
+    return result;
+  }, []);
+
   const open = useCallback(
-    (tail: number) => {
+    (params: { tail?: number; since?: number }) => {
       setStreamError(null);
       setStreaming(true);
-      esRef.current = openLogStream(containerName, tail, {
+      if (params.since) {
+        const newest = newestTimestamp(bufferRef.current);
+        dedupeRef.current = newest ? { boundary: newest.iso, remainder: "" } : null;
+      } else {
+        dedupeRef.current = null;
+      }
+      esRef.current = openLogStream(containerName, params, {
         onChunk: (text) => {
+          const incoming = applyDedupe(text);
+          if (!incoming) return;
           setHasOutput(true);
-          const next = bufferRef.current + text;
+          const next = bufferRef.current + incoming;
           bufferRef.current = next.length > MAX_BUFFER ? next.slice(-MAX_BUFFER) : next;
           // Mid-rewrite: stash for the post-rewrite flush instead of writing now
           // (writing would move the bottom and skew the scroll anchor).
-          if (rewritingRef.current) pendingLiveRef.current += text;
-          else termRef.current?.write(text);
+          if (rewritingRef.current) pendingLiveRef.current += incoming;
+          else termRef.current?.write(incoming);
         },
         onOpen: () => {
           // Fires on initial connect AND every successful reconnect. After
@@ -175,14 +239,24 @@ export default function LogsModal({ containerName, displayName, onClose }: Props
         },
       });
     },
-    [containerName],
+    [containerName, applyDedupe],
   );
 
   const close = useCallback(() => {
     esRef.current?.close();
     esRef.current = null;
+    dedupeRef.current = null;
     setStreaming(false);
   }, []);
+
+  // Resume live from the newest line we hold so nothing emitted while browsing
+  // is lost, and jump to the bottom to actually follow it.
+  const resumeLive = useCallback(() => {
+    if (esRef.current) return;
+    const newest = newestTimestamp(bufferRef.current);
+    open(newest ? { since: newest.epoch } : { tail: RESUME_TAIL });
+    termRef.current?.scrollToBottom();
+  }, [open]);
 
   // Fetch the page of logs preceding the oldest line we hold and prepend it,
   // keeping the user anchored on the same content. xterm has no prepend, so we
@@ -248,31 +322,68 @@ export default function LogsModal({ containerName, displayName, onClose }: Props
     }
   }, [containerName]);
 
-  useEffect(() => {
-    loadOlderRef.current = loadOlder;
-  }, [loadOlder]);
+  // Scroll position drives live-follow: scrolling up off the bottom drops the
+  // live connection (stops the jumping AND frees a connection slot for history
+  // under the browser's per-host cap); returning to the bottom resumes it.
+  const handleScroll = useCallback(
+    (viewportY: number) => {
+      const term = termRef.current;
+      if (!term) return;
+      // Ignore the programmatic scrolls our own history rewrite produces.
+      if (rewritingRef.current || loadingOlderRef.current) return;
+
+      const atBottom = viewportY >= term.buffer.active.baseY - BOTTOM_ROWS;
+      if (atBottom) {
+        if (!esRef.current && !manualPausedRef.current) resumeLive();
+        return;
+      }
+      if (esRef.current) close(); // scrolled up → auto-pause live
+      if (viewportY <= NEAR_TOP_ROWS) loadOlderRef.current();
+    },
+    [resumeLive, close],
+  );
 
   useEffect(() => {
-    open(INITIAL_TAIL);
+    loadOlderRef.current = loadOlder;
+    handleScrollRef.current = handleScroll;
+  }, [loadOlder, handleScroll]);
+
+  useEffect(() => {
+    open({ tail: INITIAL_TAIL });
     return () => {
       esRef.current?.close();
       esRef.current = null;
     };
   }, [open]);
 
-  const handlePauseResume = () => (streaming ? close() : open(RESUME_TAIL));
+  const handlePauseResume = () => {
+    if (streaming) {
+      manualPausedRef.current = true;
+      setManualPaused(true);
+      close();
+    } else {
+      manualPausedRef.current = false;
+      setManualPaused(false);
+      resumeLive();
+    }
+  };
 
   const handleClear = () => {
     bufferRef.current = "";
     pendingLiveRef.current = "";
     rewritingRef.current = false;
+    dedupeRef.current = null;
     termRef.current?.reset();
     exhaustedRef.current = false;
     setHistoryExhausted(false);
     setHasOutput(false);
   };
 
-  const isLiveBadge = streaming && !streamError;
+  const mode: "live" | "history" | "paused" = streaming
+    ? "live"
+    : manualPaused
+      ? "paused"
+      : "history";
 
   return (
     <Modal
@@ -281,14 +392,14 @@ export default function LogsModal({ containerName, displayName, onClose }: Props
       title={`${displayName} — Logs`}
       subtitle={
         <div className="flex items-center gap-2">
-          <StatusBadge live={isLiveBadge} error={streamError} />
+          <StatusBadge mode={mode} error={streamError} />
         </div>
       }
       headerActions={
         <>
           <IconButton
             onClick={handlePauseResume}
-            label={streaming ? "Pause streaming" : "Resume streaming"}
+            label={streaming ? "Pause streaming" : "Resume live"}
             icon={streaming ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
           />
           <IconButton
@@ -333,7 +444,7 @@ export default function LogsModal({ containerName, displayName, onClose }: Props
   );
 }
 
-function StatusBadge({ live, error }: { live: boolean; error: string | null }) {
+function StatusBadge({ mode, error }: { mode: "live" | "history" | "paused"; error: string | null }) {
   if (error) {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-red-500/10 px-1.5 py-0.5 text-[10px] font-medium text-red-400">
@@ -342,7 +453,7 @@ function StatusBadge({ live, error }: { live: boolean; error: string | null }) {
       </span>
     );
   }
-  if (live) {
+  if (mode === "live") {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-400">
         <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
@@ -353,7 +464,7 @@ function StatusBadge({ live, error }: { live: boolean; error: string | null }) {
   return (
     <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-400">
       <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
-      PAUSED · scroll to browse
+      {mode === "history" ? "HISTORY · scroll down for live" : "PAUSED"}
     </span>
   );
 }
