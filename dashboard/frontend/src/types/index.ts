@@ -221,28 +221,6 @@ export interface SystemProxyReorderResult {
   active: string | null;
 }
 
-export interface SystemDnsResult {
-  success: boolean;
-  hostname: string;
-  resolved_ip?: string;
-  error?: string;
-  latency_ms: number;
-}
-
-export interface SystemConnectivityResult {
-  success: boolean;
-  latency_ms: number;
-  status_code?: number;
-  error?: string;
-}
-
-export interface SystemHealthResult {
-  dns: SystemDnsResult;
-  connectivity: SystemConnectivityResult;
-  /** Whether per-host connection tracking (live + usage) is enabled (env opt-in). */
-  connection_tracking: boolean;
-}
-
 export type UsagePeriod = "today" | "week" | "month" | "all";
 
 /** One domain's data usage over a period. Bytes are cumulative; share is 0..1. */
@@ -269,6 +247,106 @@ export interface UsageReport {
   totalUp: number;
   sites: UsageSite[];
   series: UsageBucket[];
+}
+
+// ---------- Network health over time ----------
+
+export type HealthStatus = "good" | "degraded" | "outage" | "unknown";
+export type HealthWindow = "24h" | "7d" | "30d" | "90d";
+
+/** Seconds spent in each state within a span. */
+export interface HealthSecs {
+  good: number;
+  degraded: number;
+  outage: number;
+  unknown: number;
+}
+
+/** A pass/fail sub-signal of the health probe (e.g. did the name resolve). */
+export interface HealthCheck {
+  success: boolean;
+}
+
+/** The live status right now, with a plain-language cause. */
+export interface HealthCurrent {
+  ts: number;
+  status: HealthStatus;
+  regime: string;
+  latencyMs: number | null;
+  reachable: boolean;
+  cause: string;
+  causeLabel: string;
+  /** Finer "why" behind the status (e.g. how slow, DNS failing); null when the label says it all. */
+  causeDetail?: string | null;
+  /** DNS resolution health — present on live samples, absent on a restored one. */
+  dns?: HealthCheck;
+}
+
+/** Today-so-far rollup for the headline card. */
+export interface HealthToday {
+  since: number;
+  until: number;
+  uptimePct: number | null;
+  secs: HealthSecs;
+  incidentCount: number;
+  downtimeS: number;
+  degradedS: number;
+}
+
+export interface HealthCurrentResponse {
+  now: number;
+  current: HealthCurrent | null;
+  /** Live/usage connection tracking active (deploy opt-in + controller support). */
+  connectionTracking: boolean;
+  today: HealthToday;
+}
+
+/** One cell/segment of the timeline: a worst-case color plus time-in-state. */
+export interface HealthBucket {
+  ts: number;
+  size: number;
+  status: HealthStatus;
+  uptimePct: number | null;
+  secs: HealthSecs;
+  measuredSecs: number;
+  totalSecs: number;
+}
+
+export interface HealthSummary {
+  secs: HealthSecs;
+  measuredSecs: number;
+  uptimePct: number | null;
+}
+
+export interface HealthTimeline {
+  window: HealthWindow;
+  since: number;
+  until: number;
+  bucketSize: number;
+  buckets: HealthBucket[];
+  summary: HealthSummary;
+}
+
+/** A discrete outage/degradation episode (derived from samples). */
+export interface HealthIncident {
+  start: number;
+  end: number | null;
+  durationS: number;
+  status: HealthStatus;
+  regime: string;
+  cause: string;
+  causeLabel: string;
+  /** Finer "why" behind the incident (e.g. how slow, DNS failing); null when unremarkable. */
+  causeDetail?: string | null;
+  ongoing: boolean;
+}
+
+export interface HealthIncidentsResponse {
+  window: HealthWindow;
+  since: number;
+  until: number;
+  incidents: HealthIncident[];
+  count: number;
 }
 
 /** A live throughput snapshot. All rates are bytes/second. */

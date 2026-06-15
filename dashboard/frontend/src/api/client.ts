@@ -9,7 +9,6 @@ import type {
   ConfigFile,
   IpInfo,
   SpeedTestProgress,
-  SystemHealthResult,
   SystemProxyMode,
   SystemProxyReorderResult,
   SystemProxyState,
@@ -22,6 +21,10 @@ import type {
   ConnectionsSnapshot,
   UsagePeriod,
   UsageReport,
+  HealthWindow,
+  HealthCurrentResponse,
+  HealthTimeline,
+  HealthIncidentsResponse,
 } from "@/types";
 
 const api = axios.create({ baseURL: "/api/v1" });
@@ -178,11 +181,6 @@ export async function fetchSystemProxyEgressIp(): Promise<IpInfo | null> {
 
 // ---------- System ----------
 
-export async function fetchSystemHealth(): Promise<SystemHealthResult> {
-  const { data } = await api.get<SystemHealthResult>("/system/health");
-  return data;
-}
-
 export async function cancelSpeedTest(): Promise<void> {
   await api.post("/system/speed/cancel");
 }
@@ -196,6 +194,35 @@ export async function fetchUsageTop(period: UsagePeriod, limit = 20): Promise<Us
 
 export async function clearUsage(): Promise<void> {
   await api.delete("/usage");
+}
+
+// ---------- Network health over time ----------
+
+export async function fetchHealthCurrent(): Promise<HealthCurrentResponse> {
+  const { data } = await api.get<HealthCurrentResponse>("/health/current");
+  return data;
+}
+
+/** Force an immediate probe (header tap-to-recheck) and return fresh status. */
+export async function fetchHealthCheck(): Promise<HealthCurrentResponse> {
+  const { data } = await api.post<HealthCurrentResponse>("/health/check");
+  return data;
+}
+
+export async function fetchHealthTimeline(window: HealthWindow): Promise<HealthTimeline> {
+  const { data } = await api.get<HealthTimeline>("/health/timeline", { params: { window } });
+  return data;
+}
+
+export async function fetchHealthIncidents(window: HealthWindow, minDuration = 60): Promise<HealthIncidentsResponse> {
+  const { data } = await api.get<HealthIncidentsResponse>("/health/incidents", {
+    params: { window, min_duration: minDuration },
+  });
+  return data;
+}
+
+export async function clearHealth(): Promise<void> {
+  await api.delete("/health");
 }
 
 // ---------- SSE streams ----------

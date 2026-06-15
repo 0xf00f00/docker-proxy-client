@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     password: str = ""
     state_dir: str = "/state"
     connection_tracking: bool = False
+    health_monitoring: bool = True
 
     model_config = {"env_prefix": "DASHBOARD_", "env_file": ".env"}
 

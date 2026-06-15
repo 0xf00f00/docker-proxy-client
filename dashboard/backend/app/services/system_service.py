@@ -1,43 +1,11 @@
 import asyncio
 import json
-import socket
 import threading
 import time
 import timeit
 from collections.abc import AsyncGenerator
 
 import speedtest
-
-from app.services import direct_net
-
-CONNECTIVITY_URL = "http://www.gstatic.com/generate_204"
-
-
-async def test_dns(hostname: str = "google.com") -> dict:
-    start = time.monotonic()
-    try:
-        ip = await asyncio.to_thread(socket.gethostbyname, hostname)
-        elapsed = (time.monotonic() - start) * 1000
-        return {"success": True, "hostname": hostname, "resolved_ip": ip, "latency_ms": round(elapsed, 1)}
-    except socket.gaierror as e:
-        elapsed = (time.monotonic() - start) * 1000
-        return {"success": False, "hostname": hostname, "error": str(e), "latency_ms": round(elapsed, 1)}
-
-
-async def test_connectivity() -> dict:
-    start = time.monotonic()
-    try:
-        async with direct_net.async_client(timeout=15) as client:
-            resp = await client.get(CONNECTIVITY_URL)
-            elapsed = (time.monotonic() - start) * 1000
-            return {
-                "success": resp.status_code == 204,
-                "latency_ms": round(elapsed, 1),
-                "status_code": resp.status_code,
-            }
-    except Exception as e:
-        elapsed = (time.monotonic() - start) * 1000
-        return {"success": False, "latency_ms": round(elapsed, 1), "error": str(e)}
 
 
 class SpeedTestRunner:

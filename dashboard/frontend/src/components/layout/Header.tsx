@@ -1,9 +1,10 @@
-import { lazy, Suspense, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Network, Globe, Wifi, Loader2, LogIn, LogOut, ArrowDown, ArrowUp, ChevronRight } from "lucide-react";
+import { lazy, Suspense, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Network, Globe, Wifi, WifiOff, Loader2, LogIn, LogOut, ArrowDown, ArrowUp, ChevronRight } from "lucide-react";
 import ConfirmDialog from "@/components/common/ConfirmDialog";
 import { toast } from "sonner";
-import { logout, fetchSystemHealth } from "@/api/client";
+import { logout, fetchHealthCheck, fetchHealthCurrent } from "@/api/client";
+import type { HealthCurrent } from "@/types";
 import { AUTH_STATUS_KEY, useAuth } from "@/hooks/useAuth";
 import { useTraffic } from "@/hooks/useTraffic";
 import { formatRate, formatRateShort } from "@/utils/format";
@@ -13,57 +14,59 @@ import { cn } from "@/utils/cn";
 
 const ConnectionsModal = lazy(() => import("@/components/connections/ConnectionsModal"));
 
-interface CheckResult {
-  success: boolean;
-  latency_ms: number;
-}
-
 type PillState = "good" | "slow" | "down" | "unknown";
 
-// "Is my uplink up?"
+// How often the header re-reads the shared health snapshot while the page is open.
 const POLL_MS = 25_000;
-
-const DNS_SLOW_MS = 250;
 const NET_SLOW_MS = 600;
 
-const OFFLINE_AFTER_FAILS = 2;
+type BadgeIcon = "up" | "down" | "dns";
 
-function probeState(check: CheckResult | undefined, slowMs: number, offline: boolean): PillState {
-  if (!check) return "unknown";
-  if (!check.success) return offline ? "down" : "slow";
-  return check.latency_ms > slowMs ? "slow" : "good";
+const BADGE_ICON: Record<BadgeIcon, React.ReactNode> = {
+  up: <Wifi className="h-3.5 w-3.5" />,
+  down: <WifiOff className="h-3.5 w-3.5" />,
+  dns: <Globe className="h-3.5 w-3.5" />,
+};
+
+interface Badge {
+  state: PillState;
+  label: string;
+  icon: BadgeIcon;
+  latencyMs?: number;
+}
+
+function netBadge(cur: HealthCurrent | null): Badge {
+  if (!cur) return { state: "unknown", label: "Checking", icon: "up" };
+  if (cur.reachable) {
+    const slow = (cur.latencyMs ?? 0) > NET_SLOW_MS;
+    return { state: slow ? "slow" : "good", label: slow ? "Slow" : "Online", icon: "up", latencyMs: cur.latencyMs ?? undefined };
+  }
+  if (cur.dns && !cur.dns.success) return { state: "down", label: "DNS", icon: "dns" };
+  return { state: "down", label: "Offline", icon: "down" };
 }
 
 export default function Header({ pauseAutoRefresh = false }: { pauseAutoRefresh?: boolean }) {
   const [showConnections, setShowConnections] = useState(false);
+  const qc = useQueryClient();
   const health = useQuery({
-    queryKey: ["system-health"],
-    queryFn: fetchSystemHealth,
+    queryKey: ["health-current"],
+    queryFn: fetchHealthCurrent,
     refetchInterval: pauseAutoRefresh ? false : POLL_MS,
     retry: 0,
   });
+  // Tap-to-recheck forces an immediate probe; the result is shared with the
+  // health card via the same query cache key.
+  const recheck = useMutation({
+    mutationFn: fetchHealthCheck,
+    onSuccess: (data) => qc.setQueryData(["health-current"], data),
+  });
 
-  const offlineFails = useRef(0);
-  const lastSeen = useRef(0);
-  if (health.data && health.dataUpdatedAt !== lastSeen.current) {
-    lastSeen.current = health.dataUpdatedAt;
-    const bothFailed = !health.data.dns.success && !health.data.connectivity.success;
-    offlineFails.current = bothFailed ? offlineFails.current + 1 : 0;
-  }
+  const cur = health.data?.current ?? null;
+  const badge = netBadge(cur);
+  const busy = health.isFetching || recheck.isPending;
+  const doRecheck = () => recheck.mutate();
 
-  const offline = !health.isError && offlineFails.current >= OFFLINE_AFTER_FAILS;
-  const pills: { dns: PillState; net: PillState } = health.isError
-    ? { dns: "unknown", net: "unknown" }
-    : {
-        dns: probeState(health.data?.dns, DNS_SLOW_MS, offline),
-        net: probeState(health.data?.connectivity, NET_SLOW_MS, offline),
-      };
-
-  const recheck = () => {
-    health.refetch();
-  };
-
-  const trackingEnabled = health.data?.connection_tracking ?? false;
+  const trackingEnabled = health.data?.connectionTracking ?? false;
   const openConnections = trackingEnabled ? () => setShowConnections(true) : undefined;
 
   return (
@@ -78,20 +81,12 @@ export default function Header({ pauseAutoRefresh = false }: { pauseAutoRefresh?
         <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
           <TrafficPill onOpen={openConnections} />
           <StatusPill
-            icon={<Globe className="h-3.5 w-3.5" />}
-            label="DNS"
-            state={pills.dns}
-            latencyMs={health.data?.dns.latency_ms}
-            isFetching={health.isFetching}
-            onClick={recheck}
-          />
-          <StatusPill
-            icon={<Wifi className="h-3.5 w-3.5" />}
-            label="Net"
-            state={pills.net}
-            latencyMs={health.data?.connectivity.latency_ms}
-            isFetching={health.isFetching}
-            onClick={recheck}
+            icon={BADGE_ICON[badge.icon]}
+            label={badge.label}
+            state={badge.state}
+            latencyMs={badge.latencyMs}
+            isFetching={busy}
+            onClick={doRecheck}
           />
           <AuthControl />
         </div>
@@ -293,13 +288,6 @@ function AuthControl() {
   );
 }
 
-const STATE_WORD: Record<PillState, string> = {
-  good: "online",
-  slow: "slow",
-  down: "down",
-  unknown: "unknown",
-};
-
 function StatusPill({
   icon,
   label,
@@ -315,14 +303,12 @@ function StatusPill({
   isFetching: boolean;
   onClick: () => void;
 }) {
-  const latencyText = latencyMs != null ? `${latencyMs}ms` : "—";
-
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={isFetching}
-      aria-label={`${label} ${STATE_WORD[state]} — tap to recheck`}
+      aria-label={`Network status: ${label}. Tap to recheck.`}
       aria-busy={isFetching}
       className={cn(
         "relative inline-flex min-h-9 min-w-[5.25rem] items-center gap-1.5 rounded-full px-2.5 text-xs font-medium transition-colors duration-300",
@@ -350,14 +336,9 @@ function StatusPill({
         />
       </span>
       <span>{label}</span>
-      <span
-        className={cn(
-          "ml-auto min-w-[2.5rem] text-right text-[10px] tabular-nums",
-          state === "unknown" ? "opacity-40" : "opacity-70",
-        )}
-      >
-        {latencyText}
-      </span>
+      {latencyMs != null && (
+        <span className="ml-auto text-right text-[10px] tabular-nums opacity-70">{latencyMs}ms</span>
+      )}
     </button>
   );
 }

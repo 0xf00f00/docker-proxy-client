@@ -140,3 +140,82 @@ def wipe_usage() -> None:
     for suffix in ("", "-wal", "-shm"):
         with contextlib.suppress(FileNotFoundError):
             base.with_name(base.name + suffix).unlink()
+
+
+# ---------- Network-health history (separate, deletable db) ----------
+
+
+def _health_db_path() -> Path:
+    return Path(settings.state_dir) / "health.db"
+
+
+def _health_connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(str(_health_db_path()))
+    conn.execute("PRAGMA journal_mode=WAL")
+    # NORMAL: commits don't fsync (only checkpoints do). We batch writes and can
+    # lose the last few samples on a power cut — an accepted tradeoff for SD wear.
+    conn.execute("PRAGMA synchronous=NORMAL")
+    return conn
+
+
+def init_health() -> None:
+    Path(settings.state_dir).mkdir(parents=True, exist_ok=True)
+    with _health_connect() as conn:
+        # Run-length-encoded status timeline: one row per state, held until the next.
+        # Health is a step function, so storing transitions (not per-probe samples)
+        # is the whole history at a fraction of the writes. ``end_ts`` of the open
+        # (latest) row also doubles as the monitor's last-alive heartbeat. ``detail``
+        # is the granular "why" captured when the segment opened (JSON: degraded latency,
+        # outage DNS failure), so incidents can explain themselves; null when uninformative.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS health_segment ("
+            "start_ts INTEGER PRIMARY KEY, end_ts INTEGER NOT NULL, "
+            "status TEXT NOT NULL, regime TEXT NOT NULL, detail TEXT)"
+        )
+
+
+def add_segment(start_ts: int, end_ts: int, status: str, regime: str, detail: str | None = None) -> None:
+    with _health_connect() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO health_segment (start_ts, end_ts, status, regime, detail) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (start_ts, end_ts, status, regime, detail),
+        )
+
+
+def set_segment_end(start_ts: int, end_ts: int) -> None:
+    """Extend a segment's end (heartbeat for the open row, or close on transition)."""
+    with _health_connect() as conn:
+        conn.execute("UPDATE health_segment SET end_ts = ? WHERE start_ts = ?", (end_ts, start_ts))
+
+
+def latest_segment() -> tuple[int, int, str, str, str | None] | None:
+    """The open (most recent) segment as (start_ts, end_ts, status, regime, detail), or None."""
+    with _health_connect() as conn:
+        return conn.execute(
+            "SELECT start_ts, end_ts, status, regime, detail FROM health_segment ORDER BY start_ts DESC LIMIT 1"
+        ).fetchone()
+
+
+def health_segments(since_ts: int, until_ts: int) -> list[tuple[int, int, str, str, str | None]]:
+    """Segments overlapping [since, until), ascending — includes the one straddling
+    ``since`` so the state in force when the window opened is covered."""
+    with _health_connect() as conn:
+        return conn.execute(
+            "SELECT start_ts, end_ts, status, regime, detail FROM health_segment "
+            "WHERE end_ts > ? AND start_ts < ? ORDER BY start_ts",
+            (since_ts, until_ts),
+        ).fetchall()
+
+
+def prune_health(before_ts: int) -> None:
+    with _health_connect() as conn:
+        conn.execute("DELETE FROM health_segment WHERE end_ts < ?", (before_ts,))
+
+
+def wipe_health() -> None:
+    """Delete the whole health db (file + WAL/SHM sidecars). Used on purge."""
+    base = _health_db_path()
+    for suffix in ("", "-wal", "-shm"):
+        with contextlib.suppress(FileNotFoundError):
+            base.with_name(base.name + suffix).unlink()

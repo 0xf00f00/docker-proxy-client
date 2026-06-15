@@ -3,6 +3,7 @@ import { AlertCircle, Loader2 } from "lucide-react";
 import Header from "@/components/layout/Header";
 import ConnectionBanner from "@/components/layout/ConnectionBanner";
 import SpeedTest from "@/components/system/SpeedTest";
+import HealthSection from "@/components/health/HealthSection";
 import ProxyGrid from "@/components/containers/ProxyGrid";
 import DnsSection from "@/components/containers/DnsSection";
 import ScannerSection from "@/components/scanner/ScannerSection";
@@ -39,6 +40,10 @@ export default function App() {
       <ConnectionBanner />
       <Header pauseAutoRefresh={connectivity.running || speedRunning} />
       <main className="mx-auto max-w-3xl px-3 py-4 sm:px-4 sm:py-6">
+        <div className="mb-4 sm:mb-6">
+          <HealthSection />
+        </div>
+
         <SpeedTest onRunningChange={setSpeedRunning} />
 
         {state.kind === "initial" && widgetEntry?.Skeleton && (

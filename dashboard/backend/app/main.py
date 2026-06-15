@@ -13,13 +13,23 @@ from app.routers import (
     containers,
     dns_scanner,
     env_editor,
+    health,
     scanner,
     system,
     system_proxy,
     traffic,
     usage,
 )
-from app.services import connections_service, connectivity_service, docker_service, store, usage_service
+from app.services import (
+    connections_service,
+    connectivity_service,
+    docker_service,
+    store,
+    usage_service,
+)
+from app.services import (
+    health as health_service,
+)
 from app.static_files import CachedStaticFiles
 
 
@@ -35,7 +45,11 @@ async def lifespan(app: FastAPI):
         connections_service.collector.start()
     else:
         store.wipe_usage()
+    if settings.health_monitoring:
+        health_service.monitor.start()
     yield
+    if settings.health_monitoring:
+        await health_service.monitor.stop()
     if settings.connection_tracking:
         await connections_service.collector.stop()
         await usage_service.recorder.flush_and_stop()
@@ -59,6 +73,7 @@ _routers = (
     traffic,
     connections,
     usage,
+    health,
 )
 for module in _routers:
     app.include_router(module.router, prefix="/api/v1")
