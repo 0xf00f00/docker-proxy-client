@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowDown, ArrowUp, BarChart3, Loader2, Trash2 } from "lucide-react";
 import ConfirmDialog from "@/components/common/ConfirmDialog";
@@ -101,7 +101,7 @@ export default function UsageView() {
           )}
         </div>
 
-        {hasData && <UsageBars series={report!.series} period={period} />}
+        {hasData && <UsageBars key={period} series={report!.series} period={period} />}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
@@ -157,30 +157,106 @@ function tickLabel(period: UsagePeriod, bucket: UsageBucket, i: number): string 
   return "";
 }
 
+function bucketSeconds(period: UsagePeriod): number {
+  return period === "today" ? 3600 : 86400;
+}
+
+// The scrubbed bucket's time window, e.g. "2–3 PM" (hourly) or "Mon, Jun 9" (daily).
+function bucketLabel(period: UsagePeriod, b: UsageBucket): string {
+  const start = new Date(b.ts * 1000);
+  if (period === "today") {
+    const end = new Date((b.ts + 3600) * 1000);
+    const h = (d: Date) => d.toLocaleTimeString(undefined, { hour: "numeric" });
+    return `${h(start)}–${h(end)}`;
+  }
+  return start.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+}
+
 function UsageBars({ series, period }: { series: UsageBucket[]; period: UsagePeriod }) {
+  const trackRef = useRef<HTMLDivElement>(null);
+  const draggingRef = useRef(false);
+  // null = follow the default (current bucket); a number = the bucket the user picked.
+  const [selected, setSelected] = useState<number | null>(null);
+  // The bucket under the finger mid-drag, shown live before release.
+  const [active, setActive] = useState<number | null>(null);
+
   if (series.length === 0) return null;
   const max = Math.max(1, ...series.map((b) => b.value));
   const nowSec = Date.now() / 1000;
-  const bucketSec = period === "today" ? 3600 : 86400;
+  const bucketSec = bucketSeconds(period);
+  const count = series.length;
+
+  // Default readout: the in-progress bucket, else the most recent one with data.
+  const currentIdx = series.findIndex((b) => b.ts <= nowSec && b.ts + bucketSec > nowSec);
+  let defaultIdx = currentIdx;
+  if (defaultIdx < 0) for (let i = count - 1; i >= 0; i -= 1) if ((series[i]?.value ?? 0) > 0) { defaultIdx = i; break; }
+  if (defaultIdx < 0) defaultIdx = count - 1;
+
+  const shownIdx = active ?? selected ?? defaultIdx;
+  const shown = series[shownIdx]!;
+  const shownFuture = shown.ts > nowSec;
+
+  const indexFromX = (clientX: number): number => {
+    const el = trackRef.current;
+    if (!el) return 0;
+    const r = el.getBoundingClientRect();
+    return Math.max(0, Math.min(count - 1, Math.floor(((clientX - r.left) / r.width) * count)));
+  };
+  const onPointerDown = (e: React.PointerEvent) => {
+    draggingRef.current = true;
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    setActive(indexFromX(e.clientX));
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (draggingRef.current || e.pointerType === "mouse") setActive(indexFromX(e.clientX));
+  };
+  const onPointerUp = (e: React.PointerEvent) => {
+    draggingRef.current = false;
+    setSelected(indexFromX(e.clientX));
+    setActive(null);
+  };
+  const onPointerLeave = () => {
+    if (!draggingRef.current) setActive(null);
+  };
 
   return (
     <div className="mt-4">
-      <div className="flex h-14 items-end gap-px">
-        {series.map((b) => {
+      <div className="mb-1.5 flex items-baseline justify-between gap-2 text-xs">
+        <span className="text-muted truncate">{bucketLabel(period, shown)}</span>
+        <span className="shrink-0 font-semibold tabular-nums">
+          {shownFuture ? "—" : formatBytes(shown.value)}
+        </span>
+      </div>
+      <div
+        ref={trackRef}
+        className="flex h-14 cursor-pointer touch-none items-end gap-px select-none"
+        role="img"
+        aria-label="Data used over time"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerLeave={onPointerLeave}
+        onPointerCancel={onPointerLeave}
+      >
+        {series.map((b, i) => {
           const future = b.ts > nowSec;
           const current = !future && b.ts + bucketSec > nowSec;
           const pct = b.value > 0 ? Math.max(8, (b.value / max) * 100) : 0;
+          const highlight = i === shownIdx;
           return (
             <div key={b.ts} className="flex h-full flex-1 items-end">
               {pct > 0 ? (
                 <div
-                  className={cn("w-full rounded-sm", current ? "bg-sky-400" : "bg-sky-500/70")}
+                  className={cn(
+                    "w-full rounded-sm",
+                    current ? "bg-sky-400" : "bg-sky-500/70",
+                    highlight && "ring-2 ring-white",
+                  )}
                   style={{ height: `${pct}%` }}
-                  title={formatBytes(b.value)}
                 />
               ) : (
                 // Empty/future bucket: a faint baseline keeps the axis continuous.
-                <div className="h-0.5 w-full rounded-sm bg-zinc-800" />
+                <div className={cn("w-full rounded-sm", highlight ? "h-1 bg-zinc-600" : "h-0.5 bg-zinc-800")} />
               )}
             </div>
           );
