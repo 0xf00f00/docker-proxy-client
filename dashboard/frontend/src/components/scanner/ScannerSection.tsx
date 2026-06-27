@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Power, RotateCw, Square } from "lucide-react";
+import { Power, RotateCw, Settings, Square } from "lucide-react";
 import { toast } from "sonner";
 import type { EdgeTest, ScannerStatus } from "@/types";
 import { cancelScan, openScannerStream, runScan, startContainer, testEdge } from "@/api/client";
@@ -11,6 +11,10 @@ import { Btn, LOG, SPIN } from "@/components/scanner/ControlButton";
 
 const loadLogsModal = () => import("@/components/common/LogsModal");
 const LogsModal = lazy(loadLogsModal);
+const loadEnvModal = () => import("@/components/config/EnvModal");
+const EnvModal = lazy(loadEnvModal);
+
+const NAME = "Clean-IP Scanner";
 
 type LogTarget = { container: string; name: string } | null;
 
@@ -26,6 +30,7 @@ const PHASE_LABEL: Record<TestPhase, string> = {
 export default function ScannerSection() {
   const [data, setData] = useState<ScannerStatus | null>(null);
   const [logs, setLogs] = useState<LogTarget>(null);
+  const [showEnv, setShowEnv] = useState(false);
   const [showPool, setShowPool] = useState(false);
   const [pending, setPending] = useState(false);
   const baseline = useRef<string | null>(null);
@@ -69,7 +74,7 @@ export default function ScannerSection() {
     onError: (e) => toast.error(`Stop failed: ${getErrorMessage(e)}`),
   });
   const start = useMutation({
-    mutationFn: () => startContainer("cf-edge-manager"),
+    mutationFn: (name: string) => startContainer(name),
     onSuccess: () => toast.success("Manager starting"),
     onError: (e) => toast.error(`Start failed: ${getErrorMessage(e)}`),
   });
@@ -141,6 +146,7 @@ export default function ScannerSection() {
   const scanning = (data?.scanning ?? false) || pending;
   const busy = scan.isPending || start.isPending;
   const stateLabel = scanning ? "Scanning…" : running ? "Idle" : "Off";
+  const container = data?.container ?? "";
 
   return (
     <div>
@@ -240,16 +246,19 @@ export default function ScannerSection() {
           )}
           {!running && (
             <Btn
-              onClick={() => start.mutate()}
-              disabled={busy}
+              onClick={() => start.mutate(container)}
+              disabled={busy || !container}
               variant="positive"
               icon={start.isPending ? SPIN : <Power className="h-3.5 w-3.5" />}
             >
               Start
             </Btn>
           )}
-          <Btn onClick={() => setLogs({ container: "cf-edge-manager", name: "Manager" })} icon={LOG}>
+          <Btn onClick={() => setLogs({ container, name: "Manager" })} disabled={!container} icon={LOG}>
             Manager logs
+          </Btn>
+          <Btn onClick={() => setShowEnv(true)} disabled={!container} icon={<Settings className="h-3.5 w-3.5" />}>
+            Settings
           </Btn>
         </div>
       </div>
@@ -258,6 +267,12 @@ export default function ScannerSection() {
         fallback={logs ? <ModalLoadingShell title={`${logs.name} — Logs`} onClose={() => setLogs(null)} /> : null}
       >
         {logs && <LogsModal containerName={logs.container} displayName={logs.name} onClose={() => setLogs(null)} />}
+      </Suspense>
+
+      <Suspense
+        fallback={showEnv ? <ModalLoadingShell title={`${NAME} — Settings`} onClose={() => setShowEnv(false)} /> : null}
+      >
+        {showEnv && <EnvModal containerName={container} displayName={NAME} onClose={() => setShowEnv(false)} />}
       </Suspense>
     </div>
   );

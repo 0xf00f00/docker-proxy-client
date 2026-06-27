@@ -11,6 +11,8 @@ from app.config import settings
 from app.models.schemas import EdgeSurvival, EdgeTest, ScannerStatus
 from app.services import docker_service
 
+_CONTAINER = "cf-edge-manager"
+
 # The scanner's Go control API
 _API_BASE = os.environ.get("DASHBOARD_SCANNER_API_URL", "http://127.0.0.1:8088")
 _API_TIMEOUT = 2.0
@@ -173,10 +175,11 @@ def get_status() -> ScannerStatus:
         test_pending = False
 
     return ScannerStatus(
-        scanner_running=_running("cf-edge-manager"),
+        container=_CONTAINER,
+        scanner_running=_running(_CONTAINER),
         scanner_api_reachable=reachable,
         scanning=scanning,
-        picker_running=_running("cf-edge-manager"),
+        picker_running=_running(_CONTAINER),
         last_scan=last_scan,
         pool=pool,
         byedpi_ip=_first_token(_BYEDPI_HOSTS),

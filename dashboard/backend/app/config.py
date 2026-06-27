@@ -1,11 +1,13 @@
 import fcntl
+import os
 import socket
 import struct
 
 from pydantic_settings import BaseSettings
 
 
-def _get_interface_ip(interface: str) -> str | None:
+def _interface_ip(interface: str) -> str | None:
+    """IPv4 currently bound to `interface`, or None if it has none / is absent."""
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         return socket.inet_ntoa(
@@ -15,24 +17,8 @@ def _get_interface_ip(interface: str) -> str | None:
         return None
 
 
-def _detect_host_lan_ip(interface: str) -> str:
-    ip = _get_interface_ip(interface)
-    if ip:
-        return ip
-    # Fallback: connect to a public IP to find the default route source address
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.connect(("1.1.1.1", 80))
-        ip = sock.getsockname()[0]
-        sock.close()
-        return ip
-    except OSError:
-        return "127.0.0.1"
-
-
 class Settings(BaseSettings):
     host_lan_interface: str = "eth0"
-    host_lan_ip: str = ""
     clash_api_url: str = "http://127.0.0.1:9697"
     clash_api_secret: str = ""
     docker_host: str = "unix:///var/run/docker.sock"
@@ -47,9 +33,12 @@ class Settings(BaseSettings):
 
     model_config = {"env_prefix": "DASHBOARD_", "env_file": ".env"}
 
-    def model_post_init(self, __context: object) -> None:
-        if not self.host_lan_ip:
-            self.host_lan_ip = _detect_host_lan_ip(self.host_lan_interface)
+    @property
+    def host_lan_ip(self) -> str:
+        override = os.environ.get("DASHBOARD_HOST_LAN_IP", "").strip()
+        if override:
+            return override
+        return _interface_ip(self.host_lan_interface) or "127.0.0.1"
 
 
 settings = Settings()

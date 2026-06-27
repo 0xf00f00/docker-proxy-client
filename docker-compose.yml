@@ -261,6 +261,7 @@ services:
     image: ghcr.io/oiyoa/skirk:${SKIRK_VERSION:-latest}
     container_name: skirk
     restart: *default-restart
+    profiles: ["on-demand"]
     labels:
       - dashboard.enable=true
       - dashboard.category=proxy
@@ -518,9 +519,17 @@ services:
       - NET_ADMIN
       - NET_RAW
     labels:
-      - dashboard.enable=false
+      # enable=true + category=tools keeps it out of the proxy grid (rendered by
+      # the custom Clean-IP Scanner section) while letting the generic env editor
+      # reach its one user-facing switch.
+      - dashboard.enable=true
+      - dashboard.category=tools
+      - dashboard.name=Clean-IP Scanner
+      - dashboard.testable=false
+      - dashboard.env=CF_SCAN_ENABLE
       - autoheal=true
     environment:
+      - SCAN_ENABLE=${CF_SCAN_ENABLE:-false}
       - SCAN_CRON=${CF_SCAN_CRON:-}
       - TZ=${TZ:-UTC}
       - SELECT_ENABLE=${CF_SELECT_ENABLE:-false}
@@ -573,6 +582,7 @@ services:
         MDNS_VERSION: ${MDNS_VERSION:-latest}
     container_name: mdns
     restart: *default-restart
+    profiles: ["on-demand"]
     labels:
       - autoheal=true
       - dashboard.enable=true
@@ -612,12 +622,12 @@ services:
     container_name: dns-scanner
     restart: *default-restart
     depends_on:
-      - mdns
       - docker-socket-proxy
     labels:
       - dashboard.enable=true
       - dashboard.category=tools
       - dashboard.name=DNS Scanner
+      - dashboard.env=SCANNER_AUTO_SCAN
     environment:
       - MDNS_DOMAIN=${MDNS_DOMAIN}
       - MDNS_ENCRYPTION_KEY=${MDNS_ENCRYPTION_KEY}
@@ -627,6 +637,7 @@ services:
       - MDNS_MIN_DOWNLOAD_MTU=${MDNS_MIN_DOWNLOAD_MTU:-200}
       - MDNS_MAX_DOWNLOAD_MTU=${MDNS_MAX_DOWNLOAD_MTU:-4000}
       - SCANNER_DAEMON=1
+      - SCANNER_AUTO_SCAN=${SCANNER_AUTO_SCAN:-0}
       - SCANNER_RESOLVERS_PATH=/hostmdns/client_resolvers.txt
       - SCANNER_STATE_FILE=/state/scanner-state.json
       - SCANNER_BIND_IP=192.168.88.252

@@ -71,6 +71,7 @@ export interface EdgeTestResponse {
 }
 
 export interface ScannerStatus {
+  container: string;
   scanner_running: boolean;
   scanner_api_reachable: boolean;
   scanning: boolean;
@@ -105,6 +106,7 @@ export interface DnsFunnel {
 }
 
 export interface DnsScannerStatus {
+  container: string;
   scanner_running: boolean;
   api_reachable: boolean;
   state: string;

@@ -22,6 +22,8 @@ import (
 	"github.com/0xf00f00/cf-edge-manager/internal/scanner"
 )
 
+const defaultScanCron = "0 0 5 * * *"
+
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
@@ -42,18 +44,23 @@ func main() {
 
 	svc.Start(ctx)
 
-	// Scheduled discovery scan, evaluated in the container TZ; the dashboard can
-	// still POST /scans on demand.
-	if cfg.ScanCron != "" {
+	// Scheduled discovery scan, gated by the on/off switch (SCAN_ENABLE, off by
+	// default, editable from the dashboard). Cadence from SCAN_CRON, or a daily
+	// default when unset. The dashboard can still POST /scans on demand either way.
+	if cfg.ScanEnable {
+		schedule := cfg.ScanCron
+		if schedule == "" {
+			schedule = defaultScanCron
+		}
 		c := cron.New(cron.WithSeconds(), cron.WithLocation(time.Local))
-		if _, err := c.AddFunc(cfg.ScanCron, func() {
-			log.Info("scheduled scan enqueued", "job", svc.EnqueueScan(), "cron", cfg.ScanCron)
+		if _, err := c.AddFunc(schedule, func() {
+			log.Info("scheduled scan enqueued", "job", svc.EnqueueScan(), "cron", schedule)
 		}); err != nil {
-			log.Error("invalid SCAN_CRON; no scheduled scans", "cron", cfg.ScanCron, "err", err)
+			log.Error("invalid SCAN_CRON; no scheduled scans", "cron", schedule, "err", err)
 		} else {
 			c.Start()
 			defer c.Stop()
-			log.Info("scan scheduler started", "cron", cfg.ScanCron, "tz", time.Local.String())
+			log.Info("scan scheduler started", "cron", schedule, "tz", time.Local.String())
 		}
 	}
 

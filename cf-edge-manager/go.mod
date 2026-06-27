@@ -1,6 +1,6 @@
 module github.com/0xf00f00/cf-edge-manager
 
-go 1.26
+go 1.25.6
 
 require (
 	github.com/refraction-networking/utls v1.8.2

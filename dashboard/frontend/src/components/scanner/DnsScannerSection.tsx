@@ -1,9 +1,16 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Pause, Play, Power, RotateCw, Square } from "lucide-react";
+import { Pause, Play, Power, RotateCw, Settings, Square } from "lucide-react";
 import { toast } from "sonner";
 import type { DnsFunnel, DnsResolver, DnsScannerStatus } from "@/types";
-import { openDnsScannerStream, pauseDnsScan, resumeDnsScan, runDnsScan, startContainer, stopDnsScan } from "@/api/client";
+import {
+  openDnsScannerStream,
+  pauseDnsScan,
+  resumeDnsScan,
+  runDnsScan,
+  startContainer,
+  stopDnsScan,
+} from "@/api/client";
 import { getErrorMessage } from "@/utils/errors";
 import { formatAgo, formatDuration, formatUntil } from "@/utils/format";
 import { cn } from "@/utils/cn";
@@ -14,8 +21,9 @@ const loadLogsModal = () => import("@/components/common/LogsModal");
 const LogsModal = lazy(loadLogsModal);
 const loadConfirmDialog = () => import("@/components/common/ConfirmDialog");
 const ConfirmDialog = lazy(loadConfirmDialog);
+const loadEnvModal = () => import("@/components/config/EnvModal");
+const EnvModal = lazy(loadEnvModal);
 
-const CONTAINER = "dns-scanner";
 const NAME = "DNS Scanner";
 const NOOP = () => {};
 
@@ -24,6 +32,7 @@ type TransitionAction = "starting" | "searching" | "pausing" | "resuming" | "sto
 export default function DnsScannerSection() {
   const [data, setData] = useState<DnsScannerStatus | null>(null);
   const [showLogs, setShowLogs] = useState(false);
+  const [showEnv, setShowEnv] = useState(false);
   const [showResolvers, setShowResolvers] = useState(false);
   const [action, setAction] = useState<TransitionAction>(null);
   const [confirmStop, setConfirmStop] = useState(false);
@@ -103,7 +112,7 @@ export default function DnsScannerSection() {
     onError: (e) => toast.error(`Stop failed: ${getErrorMessage(e)}`),
   });
   const start = useMutation({
-    mutationFn: () => startContainer(CONTAINER),
+    mutationFn: (name: string) => startContainer(name),
     onSuccess: () => {
       toast.success("Starting scanner");
       setAction("starting");
@@ -113,6 +122,7 @@ export default function DnsScannerSection() {
 
   const running = data?.scanner_running ?? false;
   const reachable = data?.api_reachable ?? false;
+  const container = data?.container ?? "";
 
   const starting = start.isPending || action === "starting";
   const searching = scan.isPending || action === "searching";
@@ -180,8 +190,8 @@ export default function DnsScannerSection() {
             </Btn>
           ) : !running ? (
             <Btn
-              onClick={() => start.mutate()}
-              disabled={busy}
+              onClick={() => start.mutate(container)}
+              disabled={busy || !container}
               variant="positive"
               icon={<Power className="h-3.5 w-3.5" />}
             >
@@ -235,14 +245,25 @@ export default function DnsScannerSection() {
               Search now
             </Btn>
           )}
-          <Btn onClick={() => setShowLogs(true)} icon={LOG}>
+          <Btn onClick={() => setShowLogs(true)} disabled={!container} icon={LOG}>
             Logs
+          </Btn>
+          <Btn onClick={() => setShowEnv(true)} disabled={!container} icon={<Settings className="h-3.5 w-3.5" />}>
+            Settings
           </Btn>
         </div>
       </div>
 
-      <Suspense fallback={showLogs ? <ModalLoadingShell title={`${NAME} — Logs`} onClose={() => setShowLogs(false)} /> : null}>
-        {showLogs && <LogsModal containerName={CONTAINER} displayName={NAME} onClose={() => setShowLogs(false)} />}
+      <Suspense
+        fallback={showLogs ? <ModalLoadingShell title={`${NAME} — Logs`} onClose={() => setShowLogs(false)} /> : null}
+      >
+        {showLogs && <LogsModal containerName={container} displayName={NAME} onClose={() => setShowLogs(false)} />}
+      </Suspense>
+
+      <Suspense
+        fallback={showEnv ? <ModalLoadingShell title={`${NAME} — Settings`} onClose={() => setShowEnv(false)} /> : null}
+      >
+        {showEnv && <EnvModal containerName={container} displayName={NAME} onClose={() => setShowEnv(false)} />}
       </Suspense>
 
       <Suspense fallback={null}>
@@ -388,9 +409,12 @@ function Progress({
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
         {pct === null ? (
           // Total unknown yet: a segment sweeping across, not a fixed-width fill.
-          <div className={cn("h-full w-1/3 rounded-full animate-indeterminate", bar)} />
+          <div className={cn("animate-indeterminate h-full w-1/3 rounded-full", bar)} />
         ) : (
-          <div className={cn("h-full rounded-full transition-[width] duration-500", bar)} style={{ width: `${pct}%` }} />
+          <div
+            className={cn("h-full rounded-full transition-[width] duration-500", bar)}
+            style={{ width: `${pct}%` }}
+          />
         )}
       </div>
       {timeLine && <div className="text-muted mt-1.5 text-[10px] tabular-nums">{timeLine}</div>}
@@ -436,7 +460,9 @@ function Details({ data }: { data: DnsScannerStatus }) {
             <li key={r.ip} className="flex items-center gap-2">
               <span className="flex-1 truncate font-mono text-xs text-zinc-400">{r.ip}</span>
               {r.backup && (
-                <span className="rounded bg-zinc-700 px-1 py-0.5 text-[9px] tracking-wide text-zinc-300 uppercase">backup</span>
+                <span className="rounded bg-zinc-700 px-1 py-0.5 text-[9px] tracking-wide text-zinc-300 uppercase">
+                  backup
+                </span>
               )}
               <Health resolver={r} />
             </li>
@@ -466,7 +492,10 @@ function FunnelView({ funnel, working, live }: { funnel: DnsFunnel; working: num
         <div key={label} className="flex items-center gap-2">
           <span className="text-muted w-28 shrink-0 truncate text-[11px]">{label}</span>
           <div className="h-1 flex-1 overflow-hidden rounded-full bg-zinc-800">
-            <div className="h-full rounded-full bg-zinc-500" style={{ width: `${Math.max(2, Math.round((n / max) * 100))}%` }} />
+            <div
+              className="h-full rounded-full bg-zinc-500"
+              style={{ width: `${Math.max(2, Math.round((n / max) * 100))}%` }}
+            />
           </div>
           <span className="text-muted w-14 shrink-0 text-right text-[11px] tabular-nums">{n.toLocaleString()}</span>
         </div>

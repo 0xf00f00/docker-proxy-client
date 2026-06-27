@@ -154,6 +154,7 @@ def get_status() -> DnsScannerStatus:
     if snap is not None:
         working = _resolvers_from_api(snap.get("working"))
         return DnsScannerStatus(
+            container=_CONTAINER,
             scanner_running=running,
             api_reachable=True,
             state=str(snap.get("state", "idle")),
@@ -181,6 +182,7 @@ def get_status() -> DnsScannerStatus:
     # of the resolver file). Live state (scanning/progress/schedule) is unknown.
     managed = _managed_resolvers()
     return DnsScannerStatus(
+        container=_CONTAINER,
         scanner_running=running,
         api_reachable=False,
         working_count=len(managed),

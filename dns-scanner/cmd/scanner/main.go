@@ -72,6 +72,7 @@ type config struct {
 	maxDays       int
 	resolversPath string
 	statePath     string
+	autoScan      bool
 	reloadURL     string
 	apiAddr       string
 	apiSecret     string
@@ -131,17 +132,24 @@ func main() {
 
 	for {
 		if cfg.daemon {
-			interval := time.Duration(st.BackoffDays) * dayUnit
-			next := time.Now().Add(interval) // never-run: bootstrap a full interval out
-			if st.UpdatedUnix > 0 {
-				next = time.Unix(st.UpdatedUnix, 0).Add(interval)
-			}
-			srv.SetSchedule(next.Unix(), st.BackoffDays)
-			slog.Info("scan scheduled", "interval_days", st.BackoffDays, "next", next.Format(time.RFC3339))
-			inOutage := len(st.Working) == 0
-			anchors := st.RecentHistoryIPs(canaryAnchors, nil)
-			if !waitNext(ctx, cfg, deps, srv, anchors, time.Until(next), inOutage) {
-				return
+			if cfg.autoScan {
+				interval := time.Duration(st.BackoffDays) * dayUnit
+				next := time.Now().Add(interval) // never-run: bootstrap a full interval out
+				if st.UpdatedUnix > 0 {
+					next = time.Unix(st.UpdatedUnix, 0).Add(interval)
+				}
+				srv.SetSchedule(next.Unix(), st.BackoffDays)
+				slog.Info("scan scheduled", "interval_days", st.BackoffDays, "next", next.Format(time.RFC3339))
+				inOutage := len(st.Working) == 0
+				anchors := st.RecentHistoryIPs(canaryAnchors, nil)
+				if !waitNext(ctx, cfg, deps, srv, anchors, time.Until(next), inOutage) {
+					return
+				}
+			} else {
+				srv.SetSchedule(0, st.BackoffDays)
+				if !waitManual(ctx, srv) {
+					return
+				}
 			}
 		}
 
@@ -149,6 +157,16 @@ func main() {
 		if !cfg.daemon {
 			return
 		}
+	}
+}
+
+func waitManual(ctx context.Context, srv *api.Server) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-srv.Trigger():
+		slog.Info("manual scan triggered")
+		return true
 	}
 }
 
@@ -904,6 +922,7 @@ func loadConfig() config {
 		maxDays:       atoiEnv("SCANNER_MAX_INTERVAL_DAYS", 7),
 		resolversPath: envOr("SCANNER_RESOLVERS_PATH", "../mdns/client_resolvers.txt"),
 		statePath:     envOr("SCANNER_STATE_FILE", "scanner-state.json"),
+		autoScan:      atoiEnv("SCANNER_AUTO_SCAN", 0) == 1,
 		reloadURL:     os.Getenv("SCANNER_RELOAD_URL"),
 		apiAddr:       envOr("SCANNER_API_ADDR", ":8088"),
 		apiSecret:     os.Getenv("SCANNER_API_SECRET"),

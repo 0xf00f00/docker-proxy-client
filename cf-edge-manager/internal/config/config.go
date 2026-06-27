@@ -45,11 +45,12 @@ type Config struct {
 	// outage. Lenient by design: any one target answering lets the scan proceed.
 	Preflight bool
 
-	// ScanCron schedules the periodic full discovery scan (6-field cron, seconds
-	// leading; evaluated in the container TZ). Empty is the DEFAULT and disables
-	// scheduled scans entirely -- automated work is opt-in, so out of the box
-	// nothing runs on a timer (the dashboard can still trigger a scan on demand).
-	// Set e.g. "0 0 5 * * 1" (Mondays 05:00) to enable.
+	// ScanEnable is the on/off switch for the periodic discovery scan. Off is the
+	// DEFAULT, so out of the box nothing runs on a timer (the dashboard can still
+	// trigger a scan on demand).
+	ScanEnable bool
+
+	// Set e.g. "0 0 5 * * 1" (Mondays 05:00).
 	ScanCron string
 
 	// Fake-SNI connect-survival gate (post-rank; one candidate at a time, but a
@@ -145,7 +146,8 @@ func Load() (Config, error) {
 		ScanTimeout:     envSeconds("SCAN_TIMEOUT_S", 21600),
 		TestTimeout:     envSeconds("TEST_TIMEOUT_S", 180),
 		Preflight:       envBool("SCAN_PREFLIGHT", true),
-		ScanCron:        env("SCAN_CRON", ""), // empty = no scheduled scans (opt-in)
+		ScanEnable:      envBool("SCAN_ENABLE", false),
+		ScanCron:        env("SCAN_CRON", ""),
 		TLSCheck:        envBool("TLS_GATE_ENABLE", false),
 		TLSSNI:          env("TLS_SNI", "hcaptcha.com"),
 		TLSUTLS:         env("TLS_UTLS", "firefox"),

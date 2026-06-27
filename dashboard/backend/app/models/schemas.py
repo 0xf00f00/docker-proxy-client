@@ -221,6 +221,7 @@ class EdgeTest(BaseModel):
 
 
 class ScannerStatus(BaseModel):
+    container: str = ""
     scanner_running: bool
     # False when the scanner's control API is unreachable (status is then served
     # from the on-disk fallback). Distinct from scanner_running (container up).
@@ -267,6 +268,7 @@ class DnsScannerStatus(BaseModel):
     """Merged view of the dns-scanner service: its Go control-API snapshot plus the
     container's running state. Unix timestamps are converted to UTC datetimes."""
 
+    container: str = ""
     scanner_running: bool
     # False when the scanner's control API is unreachable (status then degrades to
     # whatever the on-disk resolver file reveals). Distinct from scanner_running.
