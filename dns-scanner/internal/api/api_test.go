@@ -66,6 +66,25 @@ func TestAuthRequiredOnScan(t *testing.T) {
 	}
 }
 
+// SeedFromState must surface the persisted resolvers/last-run in the snapshot at
+// startup, so the dashboard shows the known set before any cycle runs (regression:
+// auto-scan-off left the snapshot empty and the UI read "no resolvers / not checked").
+func TestSeedFromStatePopulatesSnapshot(t *testing.T) {
+	s := NewServer("")
+	s.SeedFromState([]ResolverInfo{{IP: "1.2.3.4"}, {IP: "5.6.7.8", LossPct: 10}}, 1700000000, 7)
+
+	snap := s.Get()
+	if snap.WorkingCount != 2 || len(snap.Working) != 2 || snap.Working[0].IP != "1.2.3.4" {
+		t.Fatalf("working not seeded: count=%d working=%+v", snap.WorkingCount, snap.Working)
+	}
+	if snap.LastRunUnix != 1700000000 {
+		t.Fatalf("LastRunUnix = %d, want 1700000000", snap.LastRunUnix)
+	}
+	if snap.HistoryCount != 7 {
+		t.Fatalf("HistoryCount = %d, want 7", snap.HistoryCount)
+	}
+}
+
 // Drive the control transitions directly (no HTTP) to assert idempotency and
 // the start/pause/resume/stop state machine.
 func TestControlStateMachine(t *testing.T) {

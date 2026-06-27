@@ -158,6 +158,18 @@ func (s *Server) publishLocked() {
 	}
 }
 
+// SeedFromState hydrates the snapshot with the persisted working set, last-run
+// time, and history size loaded at startup, so the dashboard reflects what's
+// already known before (or without) a new scan runs. Call once before serving.
+func (s *Server) SeedFromState(working []ResolverInfo, lastRunUnix int64, historyCount int) {
+	s.update(func(p *Snapshot) {
+		p.Working = working
+		p.WorkingCount = len(working)
+		p.LastRunUnix = lastRunUnix
+		p.HistoryCount = historyCount
+	})
+}
+
 // ----- run lifecycle (called by the scan loop) -----------------------------
 
 // BeginRun marks a run active and registers cancel so the control API can stop

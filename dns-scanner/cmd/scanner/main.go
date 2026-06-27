@@ -129,6 +129,9 @@ func main() {
 	if st.BackoffDays < cfg.baseDays {
 		st.BackoffDays = cfg.baseDays
 	}
+	// Surface the persisted resolvers immediately, so the dashboard shows the
+	// known set even when auto-scan is off and no cycle has run this boot.
+	srv.SeedFromState(seedResolvers(st.Working), st.UpdatedUnix, len(st.History))
 
 	for {
 		if cfg.daemon {
@@ -800,6 +803,16 @@ func toWorking(rs []score.Result) []state.Working {
 		ws[i] = state.Working{IP: r.IP, UploadMTU: r.UploadMTU, DownloadMTU: r.DownloadMTU, EDNSMax: r.EDNSMax, LossPct: int(r.LossFrac * 100)}
 	}
 	return ws
+}
+
+// seedResolvers converts the persisted working set into the API's resolver shape
+// for the startup snapshot hydration.
+func seedResolvers(ws []state.Working) []api.ResolverInfo {
+	out := make([]api.ResolverInfo, len(ws))
+	for i, w := range ws {
+		out[i] = api.ResolverInfo{IP: w.IP, UploadMTU: w.UploadMTU, DownloadMTU: w.DownloadMTU, EDNSMax: w.EDNSMax, LossPct: w.LossPct}
+	}
+	return out
 }
 
 func toResolverInfo(rs []score.Result) []api.ResolverInfo {
