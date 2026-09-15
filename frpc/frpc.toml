@@ -8,6 +8,7 @@ loginFailExit = false
 
 # supports tcp, kcp, quic, websocket and wss now, default is tcp
 transport.protocol = "tcp"
+{{ if .Envs.FRP_PROXY_URL }}transport.proxyURL = "{{ .Envs.FRP_PROXY_URL }}"{{ end }}
 
 transport.tls.enable = true
 transport.tls.certFile = "/data/certs/client.crt"

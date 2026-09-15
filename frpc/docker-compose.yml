@@ -12,3 +12,33 @@ services:
       - FRP_AUTH_TOKEN=${FRP_AUTH_TOKEN}
     command: -c /frpc.toml
     network_mode: host
+
+  # Direct to a second relay; its domain must be in vpn-route DIRECT_DOMAINS.
+  frpc-secondary:
+    image: ghcr.io/fatedier/frpc:${FRP_VERSION:-v0.66.0}
+    container_name: frpc-secondary
+    restart: unless-stopped
+    volumes:
+      - ./frpc.toml:/frpc.toml:ro
+      - ./certs/secondary:/data/certs:ro
+    environment:
+      - FRP_SERVER_ADDR=${FRP_SECONDARY_SERVER_ADDR:?set FRP_SECONDARY_SERVER_ADDR in .env}
+      - FRP_SSH_REMOTE_PORT=${FRP_SECONDARY_SSH_REMOTE_PORT:-2280}
+      - FRP_AUTH_TOKEN=${FRP_SECONDARY_AUTH_TOKEN:?set FRP_SECONDARY_AUTH_TOKEN in .env}
+    command: -c /frpc.toml
+    network_mode: host
+
+  frpc-psiphon:
+    image: ghcr.io/fatedier/frpc:${FRP_VERSION:-v0.66.0}
+    container_name: frpc-psiphon
+    restart: unless-stopped
+    volumes:
+      - ./frpc.toml:/frpc.toml:ro
+      - ./certs:/data/certs:ro
+    environment:
+      - FRP_SERVER_ADDR=${FRP_SERVER_ADDR}
+      - FRP_SSH_REMOTE_PORT=${FRP_PSIPHON_SSH_REMOTE_PORT:-${FRP_SSH_REMOTE_PORT}}
+      - FRP_AUTH_TOKEN=${FRP_AUTH_TOKEN}
+      - FRP_PROXY_URL=${FRP_PSIPHON_PROXY_URL:-socks5://10.20.0.14:1080}
+    command: -c /frpc.toml
+    network_mode: host
