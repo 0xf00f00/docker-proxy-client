@@ -2,9 +2,9 @@
 // production path: local socks -> xray (vless/xHTTP) -> in-process sni-spoofing
 // (fake-SNI) -> edge -> fronted origin. A fake-SNI-only check was measured to
 // disagree with production, so this is the only survival signal we trust. xray
-// runs as one long-lived bundled binary; only sni-spoofing's connect varies per
-// edge (cancel ctx + re-Run). Expensive: single-flight, backoff on inconclusive
-// runs, per-edge cache.
+// and sni-spoofing are BOTH restarted per edge: sni's connect varies, and xray
+// must not carry a pooled xHTTP tunnel from the previous edge into this probe.
+// Expensive: single-flight, backoff on inconclusive runs, per-edge cache.
 package realpath
 
 import (
@@ -223,7 +223,14 @@ func (p *Prober) run(parent context.Context, ip string) Result {
 	case <-time.After(p.cfg.ReadyWait):
 		return Result{IP: ip, Err: "sni ready timeout"}
 	}
-	// xray's socks must also be accepting (it is long-lived, but guard the first call)
+	// xray pools xHTTP connections. Restart xray per edge so each probe
+	// dials fresh through the sni instance just stood up for THIS ip.
+	p.Stop()
+	if err := p.Start(); err != nil {
+		return Result{IP: ip, Err: "xray restart: " + err.Error()} // nil Survived: our stack, no signal
+	}
+
+	// xray's socks must be accepting before we probe
 	if !waitDial(net.JoinHostPort("127.0.0.1", strconv.Itoa(p.cfg.SocksPort)), time.Now().Add(p.cfg.ReadyWait)) {
 		return Result{IP: ip, Err: "xray socks not ready"}
 	}
