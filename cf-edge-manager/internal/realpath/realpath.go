@@ -73,6 +73,15 @@ type Result struct {
 	Err      string  `json:"error,omitempty"`
 }
 
+// failedVerdict is the verdict for an edge that demonstrably failed the probe.
+func failedVerdict(ip string, count int, err error) Result {
+	survived := false
+	return Result{
+		IP: ip, Survived: &survived, Fails: count, Probes: count,
+		FailRate: 1, Err: "pregate: " + errStr(err),
+	}
+}
+
 type cacheEntry struct {
 	at  time.Time
 	res Result
@@ -225,9 +234,8 @@ func (p *Prober) run(parent context.Context, ip string) Result {
 	// fast and skip the (Count-request) burst rather than spend it on a dead edge.
 	if p.cfg.PreGate {
 		if err := p.dohPreGate(ctx); err != nil {
-			fail := true
 			p.log.Info("realpath: pre-gate failed; skipping burst", "ip", ip, "err", errStr(err))
-			return Result{IP: ip, Survived: &fail, Fails: p.cfg.Count, Probes: p.cfg.Count, FailRate: 1, Err: "pregate: " + errStr(err)}
+			return failedVerdict(ip, p.cfg.Count, err)
 		}
 	}
 

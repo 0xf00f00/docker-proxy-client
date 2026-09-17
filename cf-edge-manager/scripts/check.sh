@@ -2,10 +2,10 @@
 # Runs the same checks as the scanner-image CI lint job (gofmt, go vet,
 # golangci-lint, go test -race) so failures surface locally, not only on
 # GitHub Actions. Keep the golangci-lint version in sync with
-# .github/workflows/scanner-image.yml.
+# .github/workflows/manager-image.yml.
 set -euo pipefail
 
-GOLANGCI_VERSION="v2.12.2"
+GOLANGCI_VERSION="v2.13.2"
 
 cd "$(dirname "$0")/.."  # cf-edge-manager
 

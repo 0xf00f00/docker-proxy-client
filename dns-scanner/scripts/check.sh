@@ -5,7 +5,7 @@
 # .github/workflows/dns-scanner-image.yml.
 set -euo pipefail
 
-GOLANGCI_VERSION="v2.12.2"
+GOLANGCI_VERSION="v2.13.2"
 
 cd "$(dirname "$0")/.."  # dns-scanner
 
