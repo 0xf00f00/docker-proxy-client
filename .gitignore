@@ -35,6 +35,7 @@ dashboard/frontend/dist/
 # Build / tool caches (any depth)
 __pycache__/
 .ruff_cache/
+.pytest_cache/
 *.tsbuildinfo
 
 xray-fallback/config.json

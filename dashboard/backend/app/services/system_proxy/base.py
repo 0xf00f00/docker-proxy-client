@@ -15,6 +15,7 @@ class Capability(StrEnum):
 
     CONNECTIONS = "connections"
     TRAFFIC = "traffic"
+    PATHS = "paths"
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +37,7 @@ class Connection:
     download: int
     rule: str  # matched routing rule, "" if none.
     start: str  # ISO-8601 start time, "" if unknown.
+    internal: bool = False  # the controller's own traffic (health checks, DNS)
 
     @property
     def exit(self) -> str:
@@ -53,6 +55,18 @@ class ConnectionSnapshot:
 
 
 EMPTY_SNAPSHOT = ConnectionSnapshot(upload_total=0, download_total=0, connections=())
+
+
+@dataclass(frozen=True, slots=True)
+class PathHealth:
+    alive: bool | None
+    delay_ms: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class PathStatus:
+    active: str | None
+    paths: dict[str, PathHealth]
 
 
 @runtime_checkable
@@ -112,3 +126,10 @@ class SupportsConnectionsStream(Protocol):
         caller can reconnect.
         """
         ...
+
+
+@runtime_checkable
+class SupportsPathStatus(Protocol):
+    """Optional capability: report the failover choice and each route's own last health check."""
+
+    async def path_status(self) -> PathStatus: ...

@@ -5,7 +5,7 @@ import contextlib
 import logging
 import time
 
-from app.services.connection_stream import drive_connections
+from app.services.connection_stream import FeedTap, drive_connections
 from app.services.system_proxy.base import EMPTY_SNAPSHOT, Connection, ConnectionSnapshot
 
 logger = logging.getLogger(__name__)
@@ -185,31 +185,40 @@ class ConnectionsCollector:
         self._prev.clear()
         self._rate.clear()
 
-    def start(self) -> None:
+    def start(self, *, track: bool = True, taps: tuple[FeedTap, ...] = ()) -> None:
         """Start the always-on unified feed (lifespan-managed).
 
-        One ``/connections`` WebSocket drives both the live snapshot and usage
-        accounting. Keeping rate state warm even while the modal's closed means
-        the first frame a viewer gets already carries live rates — the list moves
-        the instant it opens instead of sitting frozen for a sample or two.
+        One ``/connections`` WebSocket drives the live snapshot and usage
+        accounting (when ``track``) plus any ``taps``. Keeping rate state warm even
+        while the modal's closed means the first frame a viewer gets already carries
+        live rates — the list moves the instant it opens instead of sitting frozen.
         """
         if self._task is not None and not self._task.done():
             return
         from app.services import usage_service
 
         def consume(snap: ConnectionSnapshot) -> None:
-            usage_service.recorder.ingest(snap)
-            self.observe(snap)
+            for tap in taps:
+                try:
+                    tap.ingest(snap)
+                except Exception:
+                    logger.debug("connections tap failed", exc_info=True)
+            if track:
+                usage_service.recorder.ingest(snap)
+                self.observe(snap)
 
         def on_error() -> None:
-            self.reset_rates()
-            usage_service.recorder.reset_baseline()
+            for tap in taps:
+                tap.reset()
+            if track:
+                self.reset_rates()
+                usage_service.recorder.reset_baseline()
 
         self._task = asyncio.create_task(
             drive_connections(
                 consume,
                 # No source yet: show "nothing connected" instead of a stuck skeleton.
-                on_no_source=lambda: self.observe(EMPTY_SNAPSHOT),
+                on_no_source=(lambda: self.observe(EMPTY_SNAPSHOT)) if track else None,
                 on_error=on_error,
             )
         )

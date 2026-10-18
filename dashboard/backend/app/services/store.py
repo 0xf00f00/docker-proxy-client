@@ -172,6 +172,19 @@ def init_health() -> None:
             "start_ts INTEGER PRIMARY KEY, end_ts INTEGER NOT NULL, "
             "status TEXT NOT NULL, regime TEXT NOT NULL, detail TEXT)"
         )
+        # Keyed by (boot_id, uptime): wall time is unreliable until the clock syncs.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS health_sample ("
+            "boot_id TEXT NOT NULL, uptime_s INTEGER NOT NULL, ts INTEGER NOT NULL, "
+            "synced INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (boot_id, uptime_s))"
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_health_sample_ts ON health_sample(ts)")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS health_event ("
+            "id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, boot_id TEXT NOT NULL, uptime_s INTEGER NOT NULL, "
+            "synced INTEGER NOT NULL, kind TEXT NOT NULL, data TEXT)"
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_health_event_ts ON health_event(ts)")
 
 
 def add_segment(start_ts: int, end_ts: int, status: str, regime: str, detail: str | None = None) -> None:
@@ -211,6 +224,76 @@ def health_segments(since_ts: int, until_ts: int) -> list[tuple[int, int, str, s
 def prune_health(before_ts: int) -> None:
     with _health_connect() as conn:
         conn.execute("DELETE FROM health_segment WHERE end_ts < ?", (before_ts,))
+
+
+def add_health_sample(boot_id: str, uptime_s: int, ts: int, synced: bool, data: str) -> None:
+    with _health_connect() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO health_sample (boot_id, uptime_s, ts, synced, data) VALUES (?, ?, ?, ?, ?)",
+            (boot_id, uptime_s, ts, int(synced), data),
+        )
+
+
+def add_health_event(ts: int, boot_id: str, uptime_s: int, synced: bool, kind: str, data: str | None) -> None:
+    with _health_connect() as conn:
+        conn.execute(
+            "INSERT INTO health_event (ts, boot_id, uptime_s, synced, kind, data) VALUES (?, ?, ?, ?, ?, ?)",
+            (ts, boot_id, uptime_s, int(synced), kind, data),
+        )
+
+
+def restamp_unsynced(boot_id: str, boot_wall: int) -> int:
+    with _health_connect() as conn:
+        n = conn.execute(
+            "UPDATE health_sample SET ts = ((? + uptime_s) / 60) * 60, synced = 1 WHERE boot_id = ? AND synced = 0",
+            (boot_wall, boot_id),
+        ).rowcount
+        conn.execute(
+            "UPDATE health_event SET ts = ? + uptime_s, synced = 1 WHERE boot_id = ? AND synced = 0",
+            (boot_wall, boot_id),
+        )
+        return n
+
+
+def last_health_sample() -> tuple[str, int, int, int] | None:
+    """(boot_id, uptime_s, ts, synced) of the last write, by insertion order."""
+    with _health_connect() as conn:
+        return conn.execute(
+            "SELECT boot_id, uptime_s, ts, synced FROM health_sample ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()
+
+
+def last_health_event(boot_id: str) -> tuple[int, str] | None:
+    """(uptime_s, kind)."""
+    with _health_connect() as conn:
+        return conn.execute(
+            "SELECT uptime_s, kind FROM health_event WHERE boot_id = ? ORDER BY id DESC LIMIT 1", (boot_id,)
+        ).fetchone()
+
+
+def health_samples(since_ts: int, until_ts: int) -> list[tuple[int, str, int, str]]:
+    """(ts, boot_id, uptime_s, data) of clock-synced samples, ascending."""
+    with _health_connect() as conn:
+        return conn.execute(
+            "SELECT ts, boot_id, uptime_s, data FROM health_sample "
+            "WHERE synced = 1 AND ts >= ? AND ts < ? ORDER BY ts",
+            (since_ts, until_ts),
+        ).fetchall()
+
+
+def health_events(since_ts: int, until_ts: int) -> list[tuple[int, str, str, int, str | None]]:
+    """(ts, boot_id, kind, synced, data), ascending."""
+    with _health_connect() as conn:
+        return conn.execute(
+            "SELECT ts, boot_id, kind, synced, data FROM health_event WHERE ts >= ? AND ts < ? ORDER BY ts, id",
+            (since_ts, until_ts),
+        ).fetchall()
+
+
+def prune_health_raw(samples_before: int, events_before: int) -> None:
+    with _health_connect() as conn:
+        conn.execute("DELETE FROM health_sample WHERE ts < ?", (samples_before,))
+        conn.execute("DELETE FROM health_event WHERE ts < ?", (events_before,))
 
 
 def wipe_health() -> None:

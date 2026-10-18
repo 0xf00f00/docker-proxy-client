@@ -6,11 +6,13 @@ so the dashboard can show outages and quality degradation over time.
 """
 
 import asyncio
+import json
 import time
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
 
+from app.auth import RequireAuth
 from app.config import settings
 from app.services import health as hs
 from app.services import store
@@ -141,6 +143,30 @@ async def health_incidents(window: str = "24h", min_duration: int = 60):
     incidents = _within_window(incidents, since, until)
     incidents.sort(key=lambda i: i["start"], reverse=True)
     return {"window": window, "since": since, "until": until, "incidents": incidents, "count": len(incidents)}
+
+
+_RAW_MAX_SPAN_S = 7 * 86400
+
+
+@router.get("/raw", dependencies=[RequireAuth])
+async def health_raw(since: int | None = None, until: int | None = None):
+    until = until or int(time.time())
+    since = since if since is not None else until - 86400
+    if not 0 < until - since <= _RAW_MAX_SPAN_S:
+        raise HTTPException(status_code=400, detail="window must be 1s..7d")
+    samples, events = await asyncio.gather(
+        asyncio.to_thread(store.health_samples, since, until),
+        asyncio.to_thread(store.health_events, since, until),
+    )
+    return {
+        "since": since,
+        "until": until,
+        "samples": [{"ts": ts, "boot": b, "uptime": up, **json.loads(d)} for ts, b, up, d in samples],
+        "events": [
+            {"ts": ts, "boot": b, "kind": k, "synced": bool(sy), **({"data": json.loads(d)} if d else {})}
+            for ts, b, k, sy, d in events
+        ],
+    }
 
 
 @router.delete("")

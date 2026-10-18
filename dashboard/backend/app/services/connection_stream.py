@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from collections.abc import Callable
+from typing import Protocol
 
 from app.services.system_proxy.base import ConnectionSnapshot, SupportsConnectionsStream
 
@@ -12,6 +13,12 @@ logger = logging.getLogger(__name__)
 NO_SOURCE_RETRY_SEC = 5.0
 # Backoff after a stream fault before reconnecting.
 ERROR_RETRY_SEC = 3.0
+
+
+class FeedTap(Protocol):
+    def ingest(self, snap: ConnectionSnapshot) -> None: ...
+
+    def reset(self) -> None: ...
 
 
 async def drive_connections(

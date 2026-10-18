@@ -12,12 +12,14 @@ This is composite system health, not per-proxy. The package is split by concern:
 - ``timeline``  — pure analytics over stored segments (buckets, summary, incidents).
 - ``probe``     — the probe I/O and regime-backed classification.
 - ``monitor``   — the always-on loop + persistence; exposes the ``monitor`` singleton.
+- ``recorder``  — per-minute raw samples from ``collectors``.
 
 This module is the public facade: import what you need from ``app.services.health``.
 """
 
 from app.services.health.cause import cause_for, snapshot_from_segment
 from app.services.health.monitor import HealthMonitor, monitor
+from app.services.health.recorder import recorder
 from app.services.health.settings import MAX_GAP_S, STATUSES, Status
 from app.services.health.timeline import (
     bucketize,
@@ -36,6 +38,7 @@ __all__ = [
     "clip_segments",
     "find_incidents",
     "monitor",
+    "recorder",
     "snapshot_from_segment",
     "summarize",
 ]

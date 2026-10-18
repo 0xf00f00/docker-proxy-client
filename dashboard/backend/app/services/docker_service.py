@@ -21,22 +21,29 @@ SOCKET_PATHS = [
 CATEGORY_ORDER = {"proxy": 0, "dns": 1, "infra": 2}
 
 
-def get_client() -> docker.DockerClient:
-    global _client
-    if _client is not None:
-        return _client
-
+def _connect(timeout: int) -> docker.DockerClient:
     for path in SOCKET_PATHS:
         if not path:
             continue
         try:
-            _client = docker.DockerClient(base_url=path)
-            _client.ping()
-            return _client
+            client = docker.DockerClient(base_url=path, timeout=timeout)
+            client.ping()
+            return client
         except Exception:
-            _client = None
+            continue
 
     raise RuntimeError("Cannot connect to Docker. Tried: " + ", ".join(p for p in SOCKET_PATHS if p))
+
+
+def get_client() -> docker.DockerClient:
+    global _client
+    if _client is None:
+        _client = _connect(timeout=60)
+    return _client
+
+
+def new_client(timeout: int) -> docker.DockerClient:
+    return _connect(timeout)
 
 
 def close_client() -> None:

@@ -23,3 +23,14 @@ HEARTBEAT_S = float(os.environ.get("HEALTH_HEARTBEAT_S", "300"))
 
 Status = Literal["good", "degraded", "outage", "unknown"]
 STATUSES: tuple[Status, ...] = get_args(Status)
+
+
+def _names(env: str, default: str) -> tuple[str, ...]:
+    return tuple(n.strip() for n in os.environ.get(env, default).split(",") if n.strip())
+
+
+SAMPLE_RETENTION_DAYS = 35
+EVENT_RETENTION_DAYS = 400
+MONITOR_GAP_S = 180
+EDGE_CONTAINERS = _names("HEALTH_EDGE_CONTAINERS", "sni-spoofing,sni-spoofing-fallback")
+CORE_CONTAINERS = _names("HEALTH_CORE_CONTAINERS", "clash,xray,sni-spoofing,xray-fallback,sni-spoofing-fallback")

@@ -28,6 +28,8 @@ from app.services.system_proxy import registry
 from app.services.system_proxy.base import (
     Connection,
     ConnectionSnapshot,
+    PathHealth,
+    PathStatus,
     SystemProxyController,
 )
 
@@ -154,6 +156,12 @@ class ClashController(SystemProxyController):
                     continue
                 yield _to_snapshot(raw)
 
+    async def path_status(self) -> PathStatus:
+        async with httpx.AsyncClient(timeout=5) as c:
+            r = await c.get(f"{settings.clash_api_url}/proxies", headers=self._headers())
+            r.raise_for_status()
+            return _to_path_status(r.json().get("proxies") or {})
+
     async def test_latencies(self) -> dict[str, int]:
         state = await self.get_state()
         names = [r.name for r in state.routes]
@@ -197,6 +205,7 @@ def _to_connection(raw: dict) -> Connection:
         download=int(raw.get("download", 0) or 0),
         rule=" ".join(x for x in (raw.get("rule"), raw.get("rulePayload")) if x).strip(),
         start=raw.get("start") or "",
+        internal=meta.get("type") == "Inner",
     )
 
 
@@ -207,6 +216,23 @@ def _to_snapshot(raw: dict) -> ConnectionSnapshot:
         download_total=int(raw.get("downloadTotal", 0) or 0),
         connections=tuple(_to_connection(c) for c in (raw.get("connections") or [])),
     )
+
+
+def _to_path_status(proxies: dict, group: str = "auto") -> PathStatus:
+    grp = proxies.get(group) or {}
+    paths: dict[str, PathHealth] = {}
+    for name in grp.get("all") or []:
+        if name in HIDDEN_ROUTES:
+            continue
+        p = proxies.get(name) or {}
+        history = p.get("history") or []
+        delay = history[-1].get("delay") if history else None
+        alive = p.get("alive")
+        paths[name] = PathHealth(
+            alive=alive if isinstance(alive, bool) else None,
+            delay_ms=delay if isinstance(delay, int) and delay > 0 else None,
+        )
+    return PathStatus(active=grp.get("now") or None, paths=paths)
 
 
 def _find_clash_config() -> Path | None:
