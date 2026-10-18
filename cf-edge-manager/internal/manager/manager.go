@@ -11,6 +11,7 @@ import (
 
 	"github.com/0xf00f00/cf-edge-manager/internal/apply"
 	"github.com/0xf00f00/cf-edge-manager/internal/config"
+	"github.com/0xf00f00/cf-edge-manager/internal/decoy"
 	"github.com/0xf00f00/cf-edge-manager/internal/pool"
 	"github.com/0xf00f00/cf-edge-manager/internal/probe"
 	"github.com/0xf00f00/cf-edge-manager/internal/realpath"
@@ -36,7 +37,9 @@ func New(cfg config.Config, log *slog.Logger) *Manager {
 	prober := realpath.New(ProberConfig(cfg), log)
 
 	loss := func(ip string) float64 { return probe.TCPLoss(ip, cfg.Port, cfg.LossPings, cfg.LossTimeout) }
-	survival := func(ip string) *bool { return prober.Probe(context.Background(), ip, realpath.Options{}).Survived }
+	survival := func(ip string) *bool {
+		return prober.Probe(context.Background(), ip, realpath.Options{FakeSNI: applier.CurrentFakeSNI()}).Survived
+	}
 	poolFn := func() []string { return pool.Read(filepath.Join(cfg.OutDir, "pool.txt")) }
 
 	sel := selector.New(selector.Config{
@@ -47,7 +50,9 @@ func New(cfg config.Config, log *slog.Logger) *Manager {
 		SurvivalCheck: cfg.SurvivalCheck,
 	}, log, cfg.SelectState, loss, survival, poolFn, applier)
 
-	return &Manager{cfg: cfg, log: log, prober: prober, applier: applier, sel: sel}
+	m := &Manager{cfg: cfg, log: log, prober: prober, applier: applier, sel: sel}
+	sel.SetDecoy(m.decoyHello, m.decoyTrial, decoy.Seeds())
+	return m
 }
 
 // ProberConfig builds the probe config; the wire params MUST match the live xray
@@ -56,7 +61,7 @@ func New(cfg config.Config, log *slog.Logger) *Manager {
 func ProberConfig(cfg config.Config) realpath.Config {
 	return realpath.Config{
 		OriginHost: cfg.ProbeOriginHost, UUID: cfg.ProbeUUID, Path: cfg.ProbePath,
-		RealUTLS: cfg.ProbeRealUTLS, FakeSNI: cfg.ProbeFakeSNI, FakeUTLS: cfg.ProbeFakeUTLS,
+		RealUTLS: cfg.ProbeRealUTLS, FakeSNI: apply.LiveFakeSNI(cfg.SnispoofConf), FakeUTLS: cfg.ProbeFakeUTLS,
 		Fragment: cfg.ProbeFragment, EdgePort: cfg.Port, ProbeURL: cfg.ProbeURL,
 		PreGate: cfg.ProbePreGate, DoHURL: cfg.ProbeDoHURL,
 		Count: cfg.ProbeCount, Concurrency: cfg.ProbeConcurrency, Spacing: 300 * time.Millisecond,
@@ -68,7 +73,7 @@ func ProberConfig(cfg config.Config) realpath.Config {
 // ProbeSurvival runs an on-demand real-path probe on the manager's long-lived
 // prober (reusing its xray/NFQUEUE), single-flighted against the selector.
 func (m *Manager) ProbeSurvival(ctx context.Context, ip string) realpath.Result {
-	return m.prober.Probe(ctx, ip, realpath.Options{Force: true, Interactive: true})
+	return m.prober.Probe(ctx, ip, realpath.Options{Force: true, Interactive: true, FakeSNI: m.applier.CurrentFakeSNI()})
 }
 
 // Start launches the long-lived xray subprocess and the select loop.
@@ -110,6 +115,7 @@ func (m *Manager) Status() map[string]any {
 		"snispoof":                   m.applier.CurrentSnispoof(),
 		"sni_spoofing_probe_version": m.cfg.SNIVersion,
 		"survival_check":             m.cfg.SurvivalCheck,
+		"fake_sni":                   m.applier.CurrentFakeSNI(),
 	}
 }
 

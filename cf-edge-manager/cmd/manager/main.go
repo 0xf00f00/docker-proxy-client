@@ -87,6 +87,10 @@ func main() {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(mgr.Status())
 		})
+		mux.HandleFunc("POST /manager/decoys/screen", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(mgr.ScreenDecoys(r.Context()))
+		})
 		mux.Handle("/", handler) // delegate everything else to the scanner API
 		handler = mux
 	}
@@ -134,9 +138,8 @@ func buildSurvivalProbe(cfg config.Config, mgr *manager.Manager, log *slog.Logge
 		}
 	}
 	log.Info("real-path test tier: ephemeral per-test prober")
-	rpCfg := manager.ProberConfig(cfg)
 	return func(ctx context.Context, ip string) scanner.SurvivalResult {
-		p := realpath.New(rpCfg, log)
+		p := realpath.New(manager.ProberConfig(cfg), log) // per test: picks up fake-sni edits
 		if err := p.Start(); err != nil {
 			return scanner.SurvivalResult{Err: "xray start: " + err.Error()}
 		}

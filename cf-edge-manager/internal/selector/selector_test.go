@@ -1,6 +1,7 @@
 package selector
 
 import (
+	"errors"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -13,10 +14,27 @@ type fakeApplier struct {
 	byedpi, snispoof string
 	wroteB, wroteS   []string
 	restarts         int
+
+	fakeSNI     string
+	wroteSNI    []string
+	sniErr      error
+	liveConnect string // what the container runs: config as of the last restart
+	liveSNI     string
+	restartErr  error
 }
 
 func (f *fakeApplier) CurrentByedpi() string   { return f.byedpi }
 func (f *fakeApplier) CurrentSnispoof() string { return f.snispoof }
+func (f *fakeApplier) CurrentFakeSNI() string  { return f.fakeSNI }
+func (f *fakeApplier) WriteFakeSNI(sni string) error {
+	if f.sniErr != nil {
+		return f.sniErr
+	}
+	f.wroteSNI = append(f.wroteSNI, sni)
+	f.fakeSNI = sni
+	return nil
+}
+
 func (f *fakeApplier) WriteByedpi(ip string) error {
 	f.wroteB = append(f.wroteB, ip)
 	f.byedpi = ip
@@ -28,7 +46,15 @@ func (f *fakeApplier) WriteSnispoof(ip string) error {
 	f.snispoof = ip
 	return nil
 }
-func (f *fakeApplier) RestartSnispoof() error { f.restarts++; return nil }
+
+func (f *fakeApplier) RestartSnispoof() error {
+	if f.restartErr != nil {
+		return f.restartErr
+	}
+	f.restarts++
+	f.liveConnect, f.liveSNI = f.snispoof, f.fakeSNI
+	return nil
+}
 
 func testCfg() Config {
 	return Config{
@@ -105,7 +131,7 @@ func TestPickCleanBudgetAndFallback(t *testing.T) {
 	probes := []string{}
 	s := newSel(t, cfg, nil, surv, pool, &fakeApplier{})
 	s.survival = func(ip string) *bool { probes = append(probes, ip); return surv[ip] }
-	got := s.pickClean(pool, "", map[string]int64{}, 0)
+	got := s.pickClean(pool, "", map[string]int64{}, 0, true)
 	if len(probes) != 2 {
 		t.Errorf("probe budget = %d, want 2", len(probes))
 	}
@@ -127,7 +153,7 @@ func TestPickCleanReturnsSurvivor(t *testing.T) {
 		}
 		return bptr(true)
 	}
-	if got := s.pickClean(pool, "", map[string]int64{}, 0); got != "b" {
+	if got := s.pickClean(pool, "", map[string]int64{}, 0, true); got != "b" {
 		t.Errorf("got %q, want survivor 'b'", got)
 	}
 	if len(probes) != 2 || probes[0] != "a" || probes[1] != "b" {
@@ -141,7 +167,7 @@ func TestPickCleanExcludeAndTcpLoss(t *testing.T) {
 	loss := map[string]float64{"y": 0.5} // y is tcp-dead
 	s := newSel(t, cfg, loss, nil, pool, &fakeApplier{})
 	// exclude x; y rejected on tcp_loss; z clean+survived
-	if got := s.pickClean(pool, "x", map[string]int64{}, 0); got != "z" {
+	if got := s.pickClean(pool, "x", map[string]int64{}, 0, true); got != "z" {
 		t.Errorf("got %q, want 'z' (x excluded, y tcp-dead)", got)
 	}
 }
@@ -151,7 +177,7 @@ func TestPickCleanAllQuarantinedReconsiders(t *testing.T) {
 	pool := []string{"a", "b"}
 	q := map[string]int64{"a": 9999, "b": 9999} // all quarantined in the future
 	s := newSel(t, cfg, nil, nil, pool, &fakeApplier{})
-	if got := s.pickClean(pool, "", q, 0); got == "" {
+	if got := s.pickClean(pool, "", q, 0, true); got == "" {
 		t.Error("when every candidate is quarantined, pick must reconsider them all (not starve)")
 	}
 }
@@ -234,5 +260,38 @@ func TestTickRestartRateLimit(t *testing.T) {
 	}
 	if len(ap.wroteS) == 0 {
 		t.Error("config should still be written even when restart is rate-limited")
+	}
+}
+
+// Regression: a rate-limited rotation was staged in the file and, once the new
+// edge probed healthy, never restarted -- the container kept the old edge.
+func TestTickStagedRestartGoesLiveLater(t *testing.T) {
+	ap := &fakeApplier{byedpi: "good", snispoof: "bad", liveConnect: "bad"}
+	s := newSel(t, testCfg(), nil, map[string]*bool{"bad": bptr(false)}, []string{"good", "repl", "bad"}, ap)
+	s.saveState(State{LastRestart: 0, Quarantine: map[string]int64{}})
+	s.Tick(100) // inside MinRestartGap: staged
+	if ap.restarts != 0 || !s.loadState().RestartPending {
+		t.Fatalf("expected a staged, pending restart: restarts=%d", ap.restarts)
+	}
+	s.Tick(700) // "repl" now probes healthy, nothing new to write
+	if ap.restarts != 1 || ap.liveConnect != ap.snispoof {
+		t.Errorf("staged edge must go live: restarts=%d file=%s live=%s", ap.restarts, ap.snispoof, ap.liveConnect)
+	}
+	if s.loadState().RestartPending {
+		t.Error("pending must clear after the restart")
+	}
+}
+
+func TestTickFailedRestartRetried(t *testing.T) {
+	ap := &fakeApplier{byedpi: "good", snispoof: "bad", liveConnect: "bad", restartErr: errors.New("docker down")}
+	s := newSel(t, testCfg(), nil, map[string]*bool{"bad": bptr(false)}, []string{"good", "repl", "bad"}, ap)
+	s.Tick(1000)
+	if !s.loadState().RestartPending {
+		t.Fatal("a failed restart must stay pending")
+	}
+	ap.restartErr = nil
+	s.Tick(1600)
+	if ap.restarts != 1 || ap.liveConnect != ap.snispoof {
+		t.Errorf("failed restart must be retried: restarts=%d file=%s live=%s", ap.restarts, ap.snispoof, ap.liveConnect)
 	}
 }

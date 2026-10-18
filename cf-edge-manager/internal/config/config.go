@@ -60,7 +60,6 @@ type Config struct {
 	// pool rather than a TCP-loss-ordered one (a raw ping can't see the
 	// concurrency-triggered per-edge resets that break real use).
 	TLSCheck   bool
-	TLSSNI     string
 	TLSUTLS    string // gate-handshake uTLS fingerprint; the gate sends only the decoy hello, so match PROBE_FAKE_UTLS
 	TLSHold    time.Duration
 	TLSTimeout time.Duration
@@ -94,13 +93,13 @@ type Config struct {
 
 	// Real-path survival probe (embedded sni-spoofing + xray). SurvivalCheck gates
 	// the expensive tier; the wire params MUST match the live xray "proxy" outbound.
-	SurvivalCheck                              bool
-	ProbeOriginHost, ProbeUUID, ProbePath      string
-	ProbeRealUTLS, ProbeFakeSNI, ProbeFakeUTLS string // RealUTLS: xray real-hello fp; FakeUTLS: sni-spoofing decoy-hello fp
-	ProbeFragment                              bool
-	ProbeURL, XrayBin                          string
-	ProbeCount, ProbeConcurrency               int
-	ProbeMinGap, ProbeMaxGap, ProbeCacheTTL    time.Duration
+	SurvivalCheck                           bool
+	ProbeOriginHost, ProbeUUID, ProbePath   string
+	ProbeRealUTLS, ProbeFakeUTLS            string // RealUTLS: xray real-hello fp; FakeUTLS: sni-spoofing decoy-hello fp
+	ProbeFragment                           bool
+	ProbeURL, XrayBin                       string
+	ProbeCount, ProbeConcurrency            int
+	ProbeMinGap, ProbeMaxGap, ProbeCacheTTL time.Duration
 
 	// ProbePreGate runs one DoH-JSON request through the tunnel before the full
 	// survival burst: a tunnelled DoH query is opaque to DPI (just xHTTP bytes to
@@ -149,7 +148,6 @@ func Load() (Config, error) {
 		ScanEnable:      envBool("SCAN_ENABLE", false),
 		ScanCron:        env("SCAN_CRON", ""),
 		TLSCheck:        envBool("TLS_GATE_ENABLE", false),
-		TLSSNI:          env("TLS_SNI", "hcaptcha.com"),
 		TLSUTLS:         env("TLS_UTLS", "firefox"),
 		TLSHold:         envSeconds("TLS_HOLD_S", 3),
 		TLSTimeout:      envSeconds("TLS_TIMEOUT_S", 10),
@@ -177,7 +175,6 @@ func Load() (Config, error) {
 		ProbeUUID:        env("PROBE_UUID", ""),
 		ProbePath:        env("PROBE_PATH", "/"),
 		ProbeRealUTLS:    env("PROBE_REAL_UTLS", "chrome"),
-		ProbeFakeSNI:     env("PROBE_FAKE_SNI", "hcaptcha.com"),
 		ProbeFakeUTLS:    env("PROBE_FAKE_UTLS", "firefox"),
 		ProbeFragment:    envBool("PROBE_FRAGMENT", false),
 		ProbeURL:         env("PROBE_URL", "http://www.gstatic.com/generate_204"),

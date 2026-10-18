@@ -9,6 +9,7 @@ package realpath
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -39,7 +40,7 @@ type Config struct {
 	UUID       string // vless user id
 	Path       string // xHTTP path
 	RealUTLS   string // xray real-hello uTLS fingerprint (e.g. chrome)
-	FakeSNI    string // sni-spoofing decoy SNI (e.g. hcaptcha.com)
+	FakeSNI    string // sni-spoofing decoy SNI when Options.FakeSNI is empty
 	FakeUTLS   string // sni-spoofing decoy-hello uTLS fingerprint (e.g. firefox)
 	Fragment   bool   // sni-spoofing real-ClientHello fragmentation (prod: false)
 	EdgePort   int    // 443
@@ -87,12 +88,17 @@ type cacheEntry struct {
 	res Result
 }
 
+// cacheKey: a verdict holds only for the decoy it was probed with.
+type cacheKey struct{ ip, sni string }
+
 // Options tunes a Probe. Force bypasses the cache; Interactive (on-demand, e.g. a
 // dashboard test) skips the inter-probe backoff and leaves the selector's
-// cadence/cache untouched, while still single-flighting on the lock.
+// cadence/cache untouched, while still single-flighting on the lock. FakeSNI is
+// the decoy to probe with ("" = Config.FakeSNI).
 type Options struct {
 	Force       bool
 	Interactive bool
+	FakeSNI     string
 }
 
 // Prober owns the long-lived xray subprocess and serialises probes.
@@ -105,14 +111,14 @@ type Prober struct {
 	last    time.Time
 
 	cmu   sync.Mutex
-	cache map[string]cacheEntry
+	cache map[cacheKey]cacheEntry
 
 	xray *exec.Cmd
 }
 
 // New returns a Prober; call Start (launches xray) before Probe.
 func New(cfg Config, log *slog.Logger) *Prober {
-	return &Prober{cfg: cfg, log: log, backoff: 1, cache: map[string]cacheEntry{}}
+	return &Prober{cfg: cfg, log: log, backoff: 1, cache: map[cacheKey]cacheEntry{}}
 }
 
 // Start launches the long-lived xray subprocess (fixed config -> the in-process
@@ -152,15 +158,17 @@ func (p *Prober) Stop() {
 // Probe returns the survival verdict for ip, serving a fresh cached result when
 // available. ctx bounds (and can cancel) the whole probe.
 func (p *Prober) Probe(ctx context.Context, ip string, opts Options) Result {
+	sni := cmp.Or(opts.FakeSNI, p.cfg.FakeSNI)
+	key := cacheKey{ip, sni}
 	if !opts.Force {
-		if r, ok := p.cached(ip); ok {
+		if r, ok := p.cached(key); ok {
 			return r
 		}
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if !opts.Force { // re-check under the lock (another caller may have just probed)
-		if r, ok := p.cached(ip); ok {
+		if r, ok := p.cached(key); ok {
 			return r
 		}
 	}
@@ -174,7 +182,7 @@ func (p *Prober) Probe(ctx context.Context, ip string, opts Options) Result {
 			}
 		}
 	}
-	res := p.run(ctx, ip)
+	res := p.run(ctx, ip, sni)
 	if opts.Interactive { // don't perturb the selector's cadence/backoff/cache
 		return res
 	}
@@ -184,16 +192,16 @@ func (p *Prober) Probe(ctx context.Context, ip string, opts Options) Result {
 	} else { // conclusive -> base cadence, and cache it
 		p.backoff = 1
 		p.cmu.Lock()
-		p.cache[ip] = cacheEntry{at: time.Now(), res: res}
+		p.cache[key] = cacheEntry{at: time.Now(), res: res}
 		p.cmu.Unlock()
 	}
 	return res
 }
 
-func (p *Prober) cached(ip string) (Result, bool) {
+func (p *Prober) cached(key cacheKey) (Result, bool) {
 	p.cmu.Lock()
 	defer p.cmu.Unlock()
-	if e, ok := p.cache[ip]; ok && time.Since(e.at) <= p.cfg.CacheTTL {
+	if e, ok := p.cache[key]; ok && time.Since(e.at) <= p.cfg.CacheTTL {
 		r := e.res
 		r.Cached = true
 		return r, true
@@ -203,13 +211,13 @@ func (p *Prober) cached(ip string) (Result, bool) {
 
 // run stands up sni-spoofing for ip, probes, tears it down. parent's
 // cancellation stops the sni proxy and aborts in-flight requests.
-func (p *Prober) run(parent context.Context, ip string) Result {
+func (p *Prober) run(parent context.Context, ip, fakeSNI string) Result {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel() // stops the embedded sni proxy (NFQUEUE teardown)
 
 	ready := make(chan sniproxy.Ready, 1)
 	runErr := make(chan error, 1)
-	go func() { runErr <- sniproxy.Run(ctx, p.sniConfig(ip), p.sniOptions(), ready) }()
+	go func() { runErr <- sniproxy.Run(ctx, p.sniConfig(ip, fakeSNI), p.sniOptions(), ready) }()
 
 	select {
 	case r := <-ready:
@@ -362,11 +370,11 @@ func (p *Prober) dohPreGate(ctx context.Context) error {
 	return nil
 }
 
-func (p *Prober) sniConfig(ip string) *snicfg.Config {
+func (p *Prober) sniConfig(ip, fakeSNI string) *snicfg.Config {
 	return &snicfg.Config{
 		ListenHost: "127.0.0.1", ListenPort: p.cfg.SniPort,
 		ConnectIP: ip, ConnectIPv4s: []string{ip}, ConnectPort: p.cfg.EdgePort,
-		FakeSNI: p.cfg.FakeSNI, UTLSClientHello: p.cfg.FakeUTLS,
+		FakeSNI: fakeSNI, UTLSClientHello: p.cfg.FakeUTLS,
 	}
 }
 

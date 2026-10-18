@@ -82,6 +82,16 @@ func TLSSurvives(ctx context.Context, ip netip.Addr, port int, sni, utlsName str
 	return true, nil
 }
 
+// TLSHello reports whether a TLS handshake naming sni completes against ip:port.
+func TLSHello(ctx context.Context, ip string, port int, sni, utlsName string) bool {
+	conn, err := dialFakeSNI(ctx, net.JoinHostPort(ip, fmt.Sprintf("%d", port)), sni, utlsName)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
 // dialFakeSNI opens a TLS connection to addr with ServerName=sni, using a uTLS
 // fingerprinted ClientHello when utlsName names a browser preset (so the gate's
 // handshake looks like production's), and the Go stdlib hello otherwise.

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/0xf00f00/cf-edge-manager/internal/apply"
 	"github.com/0xf00f00/cf-edge-manager/internal/cfst"
 	"github.com/0xf00f00/cf-edge-manager/internal/probe"
 )
@@ -158,7 +159,8 @@ func survivedStr(s *Survival) string {
 // nothing survives the gate, the TCP-ranked pool is kept as-is rather than
 // emptied (a network-wide bad window must not wipe the pool).
 func (s *Service) tlsGate(ctx context.Context, pool []string) []string {
-	s.log.Info("connect-survival gate", "candidates", len(pool), "sni", s.cfg.TLSSNI,
+	sni := apply.LiveFakeSNI(s.cfg.SnispoofConf) // the decoy production sends
+	s.log.Info("connect-survival gate", "candidates", len(pool), "sni", sni,
 		"burst", s.cfg.TLSBurst, "fail_max", s.cfg.TLSFailMax)
 	type ranked struct {
 		ip       string
@@ -172,7 +174,7 @@ gate:
 			continue
 		}
 		probeCtx, cancel := context.WithTimeout(ctx, s.cfg.TLSTimeout)
-		failRate, sample := probe.BurstSurvival(probeCtx, ip, s.cfg.Port, s.cfg.TLSSNI, s.cfg.TLSUTLS, s.cfg.TLSHold, s.cfg.TLSBurst)
+		failRate, sample := probe.BurstSurvival(probeCtx, ip, s.cfg.Port, sni, s.cfg.TLSUTLS, s.cfg.TLSHold, s.cfg.TLSBurst)
 		cancel()
 		if failRate <= s.cfg.TLSFailMax {
 			survivors = append(survivors, ranked{ipStr, failRate})

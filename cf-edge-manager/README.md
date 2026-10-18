@@ -72,10 +72,16 @@ real-path probe reads every edge as a false failure.
 | `CF_PROBE_PATH` | `/` | xHTTP path of that outbound. |
 | `CF_PROBE_ORIGIN_HOST` | *(required)* | Fronted origin host. |
 | `FALLBACK_HOST` | *(required)* | Fallback edge-path fronted host (→ internal `FALLBACK_FRONT_HOST`). |
-| `CF_PROBE_FAKE_SNI` | `hcaptcha.com` | sni-spoofing decoy SNI (match production). |
 | `CF_PROBE_FAKE_UTLS` | `firefox` | sni-spoofing decoy-hello uTLS fingerprint (the hello DPI inspects). |
 | `CF_PROBE_REAL_UTLS` | `chrome` | xray real-hello uTLS fingerprint (the hello that reaches CF/origin). |
 | `CF_PROBE_FRAGMENT` | `false` | Real-ClientHello fragmentation. Keep `false` — A/B showed fragment-on is *worse* here. |
+
+### Decoy SNI
+
+`fake-sni` in the fallback sni-spoofing config is kept working automatically (needs
+`PROBE_ENABLE`): when it stops working on the real path, the manager switches to a
+name from `internal/decoy/seeds.txt` that does, rewrites the config and restarts
+sni-spoofing. `POST /manager/decoys/screen` shows which names pass plain TLS now.
 
 ### Tier 3 — tuning knobs (defaults are fine; override only with a measured reason)
 
@@ -91,8 +97,8 @@ reachable at all), `RANGES_FILE` (`/cf-ranges.txt`), `OUT_DIR` (`/out`),
 `TEST_COOLDOWN_S` (30), `TEST_QUEUE_MAX` (64), `TEST_TIMEOUT_S` (180).
 
 **Fake-SNI pre-rank gate** (`TLS_GATE_ENABLE`, false — measured *not* to match
-production, prefer the real-path probe): `TLS_SNI`, `TLS_HOLD_S`,
-`TLS_TIMEOUT_S`, `TLS_GAP_S`, `TLS_BURST` (12), `TLS_FAIL_MAX` (0.10).
+production, prefer the real-path probe; its SNI is the fallback config's `fake-sni`):
+`TLS_HOLD_S`, `TLS_TIMEOUT_S`, `TLS_GAP_S`, `TLS_BURST` (12), `TLS_FAIL_MAX` (0.10).
 
 **Selection loop cadence/thresholds** (active only when `SELECT_ENABLE=true`):
 `SELECT_INTERVAL_S` (600), `SELECT_MAX_BACKOFF_S` (21600), `SELECT_SLEEP_CAP_S`

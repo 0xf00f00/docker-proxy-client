@@ -542,7 +542,6 @@ services:
       - PROBE_UUID=${CF_PROBE_UUID:-}
       - PROBE_PATH=${CF_PROBE_PATH:-/}
       - PROBE_ORIGIN_HOST=${CF_PROBE_ORIGIN_HOST:-}
-      - PROBE_FAKE_SNI=${CF_TLS_SNI:-hcaptcha.com}
       - PROBE_FAKE_UTLS=${CF_PROBE_FAKE_UTLS:-firefox}
       - PROBE_REAL_UTLS=${CF_PROBE_REAL_UTLS:-chrome}
       - PROBE_FRAGMENT=${CF_PROBE_FRAGMENT:-false}

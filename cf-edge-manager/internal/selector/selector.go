@@ -12,14 +12,18 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+
+	"github.com/0xf00f00/cf-edge-manager/internal/decoy"
 )
 
 // Applier performs the edge-path side-effects (see package apply).
 type Applier interface {
 	CurrentByedpi() string
 	CurrentSnispoof() string
+	CurrentFakeSNI() string
 	WriteByedpi(ip string) error
 	WriteSnispoof(ip string) error
+	WriteFakeSNI(sni string) error
 	RestartSnispoof() error
 }
 
@@ -38,10 +42,14 @@ type Config struct {
 
 // State is the durable picker state.
 type State struct {
-	Fails       int              `json:"fails"`
-	NextRun     int64            `json:"next_run"`
-	LastRestart int64            `json:"last_restart"`
-	Quarantine  map[string]int64 `json:"quarantine"`
+	Fails          int              `json:"fails"`
+	NextRun        int64            `json:"next_run"`
+	LastRestart    int64            `json:"last_restart"`
+	RestartPending bool             `json:"restart_pending,omitempty"` // snispoof config edited since the last restart
+	Quarantine     map[string]int64 `json:"quarantine"`
+
+	DecoyCheckAfter int64  `json:"decoy_check_after,omitempty"`
+	DecoyDead       string `json:"decoy_dead,omitempty"` // live decoy judged blocked by name
 }
 
 // Selector holds policy + injected probes/IO.
@@ -53,6 +61,10 @@ type Selector struct {
 	pool      func() []string         // best-first scanned pool
 	apply     Applier
 	statePath string
+
+	hello  decoy.Check                // plain TLS hello; nil == decoy self-healing off
+	trial  func(ip, sni string) *bool // real-path probe with decoy sni
+	decoys []string                   // candidate decoys, preferred first
 }
 
 // New builds a Selector from config, injected probes (loss/survival), a pool
@@ -105,7 +117,8 @@ func (s *Selector) edgeOK(ip string, lossMax float64, label string, useSurvival 
 // first MaxProbeCandidates tcp_loss-clean candidates get the expensive probe;
 // if the budget is spent without a confirmed survivor, fall back to the first
 // tcp_loss-clean-but-unprobed edge. A known-real-path-bad edge is never returned.
-func (s *Selector) pickClean(pool []string, exclude string, q map[string]int64, now int64) string {
+// realPath=false picks on tcp_loss alone.
+func (s *Selector) pickClean(pool []string, exclude string, q map[string]int64, now int64, realPath bool) string {
 	candidates := make([]string, 0, len(pool))
 	for _, ip := range pool {
 		if ip != exclude {
@@ -133,7 +146,7 @@ func (s *Selector) pickClean(pool []string, exclude string, q map[string]int64, 
 			s.log.Info("candidate rejected: tcp_loss", "ip", ip, "loss", loss, "max", s.cfg.PickMax)
 			continue
 		}
-		if !s.cfg.SurvivalCheck {
+		if !s.cfg.SurvivalCheck || !realPath {
 			return ip
 		}
 		if probed < s.cfg.MaxProbeCandidates {
@@ -156,11 +169,12 @@ func (s *Selector) pickClean(pool []string, exclude string, q map[string]int64, 
 	return fallback
 }
 
-// settle returns (ip_in_use, healthy) for one path, repointing it if degraded.
+// settle returns (ip_in_use, healthy) for one path, repointing it if degraded;
+// realPath=false judges it on tcp_loss alone.
 func (s *Selector) settle(name, current string, pool []string, other string,
-	q map[string]int64, now int64, apply func(string),
+	q map[string]int64, now int64, realPath bool, apply func(string),
 ) (string, bool) {
-	if current != "" && s.edgeOK(current, s.cfg.KeepMax, name+" keep", true) {
+	if current != "" && s.edgeOK(current, s.cfg.KeepMax, name+" keep", realPath) {
 		delete(q, current)
 		s.log.Info("path healthy", "path", name, "ip", current)
 		return current, true
@@ -170,31 +184,13 @@ func (s *Selector) settle(name, current string, pool []string, other string,
 		q[current] = now + s.cfg.QuarantineTTL
 		s.log.Info("quarantined", "ip", current, "ttl", s.cfg.QuarantineTTL)
 	}
-	next := s.pickClean(pool, other, q, now)
+	next := s.pickClean(pool, other, q, now, realPath)
 	if next != "" {
 		apply(next)
 		return next, true
 	}
 	s.log.Info("no clean candidate; leaving", "path", name, "ip", current)
 	return current, false
-}
-
-func (s *Selector) applySnispoof(ip string, st *State, now int64) {
-	if err := s.apply.WriteSnispoof(ip); err != nil {
-		s.log.Error("write snispoof config", "err", err)
-		return
-	}
-	s.log.Info("snispoof path ->", "ip", ip)
-	if now-st.LastRestart >= s.cfg.MinRestartGap {
-		if err := s.apply.RestartSnispoof(); err != nil {
-			s.log.Warn("restart snispoof failed; new IP applies on next restart", "err", err)
-		} else {
-			st.LastRestart = now
-			s.log.Info("restarted snispoof")
-		}
-	} else {
-		s.log.Info("snispoof restart rate-limited; config staged for next restart")
-	}
 }
 
 // Tick runs one decision pass and returns the seconds until the next due run.
@@ -221,6 +217,12 @@ func (s *Selector) Tick(now int64) int64 {
 
 	bip, sip := s.apply.CurrentByedpi(), s.apply.CurrentSnispoof()
 	s.log.Info("current", "byedpi", bip, "snispoof", sip, "pool_size", len(pool))
+	switched := s.checkDecoy(&st, now, pool, sip)
+	// byedpi doesn't carry the decoy, so a dead decoy's real-path verdicts say nothing about its edge
+	byedpiRealPath := st.DecoyDead == "" || st.DecoyDead != s.apply.CurrentFakeSNI()
+	if !byedpiRealPath {
+		s.log.Warn("decoy dead; byedpi edge judged on tcp_loss only", "sni", st.DecoyDead)
+	}
 
 	applyB := func(ip string) {
 		if err := s.apply.WriteByedpi(ip); err != nil {
@@ -229,19 +231,37 @@ func (s *Selector) Tick(now int64) int64 {
 			s.log.Info("byedpi path ->", "ip", ip)
 		}
 	}
-	applyS := func(ip string) { s.applySnispoof(ip, &st, now) }
+	applyS := func(ip string) {
+		if err := s.apply.WriteSnispoof(ip); err != nil {
+			s.log.Error("write snispoof config", "err", err)
+			return
+		}
+		st.RestartPending = true
+		s.log.Info("snispoof path ->", "ip", ip)
+	}
 
-	bip, bok := s.settle("byedpi", bip, pool, sip, q, now, applyB)
-	sip, sok := s.settle("snispoof", sip, pool, bip, q, now, applyS)
+	bip, bok := s.settle("byedpi", bip, pool, sip, q, now, byedpiRealPath, applyB)
+	sip, sok := s.settle("snispoof", sip, pool, bip, q, now, true, applyS)
 	healthy := b2i(bok) + b2i(sok)
 
 	// distinct-IP guard: the two paths must not share fate.
 	if bip != "" && bip == sip {
 		s.log.Warn("both paths on same ip; diversifying snispoof", "ip", bip)
-		if next := s.pickClean(pool, bip, q, now); next != "" {
-			s.applySnispoof(next, &st, now)
+		if next := s.pickClean(pool, bip, q, now, true); next != "" {
+			applyS(next)
 		} else {
 			s.log.Warn("pool lacks a 2nd distinct clean IP; leaving both", "ip", bip)
+		}
+	}
+	// one restart carries every staged snispoof edit; a new decoy doesn't wait out MinRestartGap
+	if st.RestartPending {
+		if !switched && now-st.LastRestart < s.cfg.MinRestartGap {
+			s.log.Info("snispoof restart rate-limited; staged config goes live on a later tick")
+		} else if err := s.apply.RestartSnispoof(); err != nil {
+			s.log.Warn("restart snispoof failed; retrying next tick", "err", err)
+		} else {
+			st.RestartPending, st.LastRestart = false, now
+			s.log.Info("restarted snispoof")
 		}
 	}
 
