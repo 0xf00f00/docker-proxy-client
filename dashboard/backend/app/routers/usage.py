@@ -71,8 +71,7 @@ async def usage_top(period: str = "today", limit: int = 20):
     )
     grand = total_down + total_up
     sites = [
-        {"domain": d, "down": down, "up": up, "share": (down + up) / grand if grand else 0.0}
-        for d, down, up in top
+        {"domain": d, "down": down, "up": up, "share": (down + up) / grand if grand else 0.0} for d, down, up in top
     ]
     return {
         "period": period,

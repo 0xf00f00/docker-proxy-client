@@ -122,8 +122,7 @@ def query_usage_total(since_ts: int, until_ts: int) -> tuple[int, int]:
     """Grand (down, up) totals across all domains in [since_ts, until_ts)."""
     with _usage_connect() as conn:
         row = conn.execute(
-            "SELECT COALESCE(SUM(down), 0), COALESCE(SUM(up), 0) FROM usage_hourly "
-            "WHERE hour_ts >= ? AND hour_ts < ?",
+            "SELECT COALESCE(SUM(down), 0), COALESCE(SUM(up), 0) FROM usage_hourly WHERE hour_ts >= ? AND hour_ts < ?",
             (since_ts, until_ts),
         ).fetchone()
     return int(row[0]), int(row[1])
@@ -190,8 +189,7 @@ def init_health() -> None:
 def add_segment(start_ts: int, end_ts: int, status: str, regime: str, detail: str | None = None) -> None:
     with _health_connect() as conn:
         conn.execute(
-            "INSERT OR REPLACE INTO health_segment (start_ts, end_ts, status, regime, detail) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO health_segment (start_ts, end_ts, status, regime, detail) VALUES (?, ?, ?, ?, ?)",
             (start_ts, end_ts, status, regime, detail),
         )
 
@@ -275,8 +273,7 @@ def health_samples(since_ts: int, until_ts: int) -> list[tuple[int, str, int, st
     """(ts, boot_id, uptime_s, data) of clock-synced samples, ascending."""
     with _health_connect() as conn:
         return conn.execute(
-            "SELECT ts, boot_id, uptime_s, data FROM health_sample "
-            "WHERE synced = 1 AND ts >= ? AND ts < ? ORDER BY ts",
+            "SELECT ts, boot_id, uptime_s, data FROM health_sample WHERE synced = 1 AND ts >= ? AND ts < ? ORDER BY ts",
             (since_ts, until_ts),
         ).fetchall()
 

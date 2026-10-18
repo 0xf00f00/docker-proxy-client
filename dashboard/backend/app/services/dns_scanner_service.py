@@ -126,7 +126,6 @@ def _funnel_from_api(raw: object) -> DnsFunnel:
         return DnsFunnel()
 
 
-
 def _managed_resolvers() -> list[str]:
     """Resolver IPs in the scanner-managed block of client_resolvers.txt (the
     degraded source when the control API is unreachable)."""

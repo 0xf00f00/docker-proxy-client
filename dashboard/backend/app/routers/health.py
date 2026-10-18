@@ -29,6 +29,7 @@ async def _connection_tracking() -> bool:
     caps = await asyncio.to_thread(registry.active_capabilities)
     return Capability.CONNECTIONS in caps
 
+
 # window -> (duration_s, bucket_size_s). One storage path serves every window now:
 # the RLE segment timeline. store.health_segments includes the segment straddling
 # `since`, so the state in force when the window opened seeds the first bucket.
