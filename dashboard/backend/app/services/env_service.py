@@ -225,8 +225,8 @@ def _run_compose(service_name: str, action_args: list[str], timeout: int = 60) -
 
 
 def recreate_service(service_name: str) -> tuple[bool, str]:
-    """Run `docker compose up -d --force-recreate <service>` to apply env changes."""
-    return _run_compose(service_name, ["up", "-d", "--force-recreate"], timeout=_BUILD_TIMEOUT_SEC)
+    """Run `docker compose up -d --no-deps --force-recreate <service>` to apply env changes."""
+    return _run_compose(service_name, ["up", "-d", "--no-deps", "--force-recreate"], timeout=_BUILD_TIMEOUT_SEC)
 
 
 def restart_service(service_name: str) -> tuple[bool, str]:
@@ -235,5 +235,5 @@ def restart_service(service_name: str) -> tuple[bool, str]:
 
 
 def start_service(service_name: str) -> tuple[bool, str]:
-    """Run `docker compose up -d <service>` to create-and-start an on-demand service."""
-    return _run_compose(service_name, ["up", "-d"], timeout=_BUILD_TIMEOUT_SEC)
+    """Run `docker compose up -d --no-deps <service>` to create-and-start an on-demand service."""
+    return _run_compose(service_name, ["up", "-d", "--no-deps"], timeout=_BUILD_TIMEOUT_SEC)
