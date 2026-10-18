@@ -1,6 +1,6 @@
 {
   "remarks": "Fallback xray: your-fallback-host.example reached two ways with internal failover",
-  "log": { "loglevel": "warning" },
+  "log": { "loglevel": "warning", "access": "none" },
   "inbounds": [
     {
       "listen": "0.0.0.0",

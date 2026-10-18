@@ -1,5 +1,11 @@
 x-restart-policy: &default-restart unless-stopped
 
+x-logging: &default-logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 x-default-dns: &default-dns
   - ${FALLBACK_DNS:-192.168.1.1}
   - 1.1.1.1
@@ -21,6 +27,7 @@ services:
   coredns:
     image: coredns/coredns:latest
     container_name: coredns
+    logging: *default-logging
     restart: *default-restart
     labels:
       - dashboard.enable=true
@@ -42,6 +49,7 @@ services:
   dnscrypt-proxy-direct:
     image: gists/dnscrypt-proxy:latest
     container_name: dnscrypt-proxy-direct
+    logging: *default-logging
     restart: *default-restart
     labels:
       - dashboard.enable=true
@@ -79,6 +87,7 @@ services:
   dnscrypt-proxy:
     image: gists/dnscrypt-proxy:latest
     container_name: dnscrypt-proxy
+    logging: *default-logging
     restart: *default-restart
     labels:
       - dashboard.enable=true
@@ -107,6 +116,7 @@ services:
   naive:
     image: ghcr.io/0xf00f00/naive_proxy:latest
     container_name: naive
+    logging: *default-logging
     restart: *default-restart
     labels:
       - autoheal=true
@@ -131,6 +141,7 @@ services:
   naive-uot:
     image: ghcr.io/sagernet/sing-box:latest
     container_name: naive-uot
+    logging: *default-logging
     restart: *default-restart
     labels:
       - autoheal=true
@@ -160,6 +171,7 @@ services:
   clash:
     image: metacubex/mihomo:latest
     container_name: clash
+    logging: *default-logging
     restart: *default-restart
     # mihomo can't read from env/CLI, so render it from the placeholder at startup.
     entrypoint: ["/bin/sh", "-c"]
@@ -204,6 +216,7 @@ services:
   singbox-sub:
     image: ghcr.io/sagernet/sing-box:latest
     container_name: singbox-sub
+    logging: *default-logging
     restart: *default-restart
     labels:
       - dashboard.enable=true
@@ -234,6 +247,7 @@ services:
       args:
         GOOSE_VERSION: ${GOOSE_VERSION:-v1.7.1}
     container_name: goose-relay
+    logging: *default-logging
     restart: *default-restart
     profiles: ["on-demand"]
     labels:
@@ -260,6 +274,7 @@ services:
   skirk:
     image: ghcr.io/oiyoa/skirk:${SKIRK_VERSION:-latest}
     container_name: skirk
+    logging: *default-logging
     restart: *default-restart
     profiles: ["on-demand"]
     labels:
@@ -296,6 +311,7 @@ services:
   xray:
     image: ghcr.io/xtls/xray-core:latest
     container_name: xray
+    logging: *default-logging
     restart: *default-restart
     # In-container sysctl: the host's net.ipv4.tcp_notsent_lowat does NOT cross
     # into a bridge netns (only tcp_congestion_control inherits), so the tunnel's
@@ -328,6 +344,7 @@ services:
   coredns-byedpi:
     image: coredns/coredns:latest
     container_name: coredns-byedpi
+    logging: *default-logging
     restart: *default-restart
     labels:
       - dashboard.enable=false
@@ -343,6 +360,7 @@ services:
   byedpi:
     image: tazihad/byedpi:${BYEDPI_VERSION:-v0.17.3}
     container_name: byedpi
+    logging: *default-logging
     restart: *default-restart
     sysctls:  # cap tunnel send-buffer bloat (host sysctl doesn't cross bridge netns) — see xray
       - net.ipv4.tcp_notsent_lowat=16384
@@ -428,6 +446,7 @@ services:
   sni-spoofing:
     image: ghcr.io/aleskxyz/sni-spoofing-go:${SNI_SPOOFING_VERSION:-0.5.1}
     container_name: sni-spoofing
+    logging: *default-logging
     restart: *default-restart
     sysctls:  # cap tunnel send-buffer bloat (host sysctl doesn't cross bridge netns) — see xray
       - net.ipv4.tcp_notsent_lowat=16384
@@ -457,6 +476,7 @@ services:
   sni-spoofing-fallback:
     image: ghcr.io/aleskxyz/sni-spoofing-go:${SNI_SPOOFING_VERSION:-0.5.1}
     container_name: sni-spoofing-fallback
+    logging: *default-logging
     restart: *default-restart
     sysctls:  # cap tunnel send-buffer bloat (host sysctl doesn't cross bridge netns) — see xray
       - net.ipv4.tcp_notsent_lowat=16384
@@ -487,6 +507,7 @@ services:
   xray-fallback:
     image: ghcr.io/xtls/xray-core:latest
     container_name: xray-fallback
+    logging: *default-logging
     restart: *default-restart
     sysctls:  # cap tunnel send-buffer bloat (host sysctl doesn't cross bridge netns) — see xray
       - net.ipv4.tcp_notsent_lowat=16384
@@ -514,6 +535,7 @@ services:
   cf-edge-manager:
     image: ghcr.io/0xf00f00/docker-proxy-client-cf-edge-manager:${CF_MANAGER_VERSION:-latest}
     container_name: cf-edge-manager
+    logging: *default-logging
     restart: *default-restart
     cap_add:
       - NET_ADMIN
@@ -567,6 +589,7 @@ services:
   autoheal:
     image: willfarrell/autoheal:latest
     container_name: autoheal
+    logging: *default-logging
     restart: *default-restart
     environment:
       - AUTOHEAL_CONTAINER_LABEL=autoheal
@@ -582,6 +605,7 @@ services:
       args:
         MDNS_VERSION: ${MDNS_VERSION:-latest}
     container_name: mdns
+    logging: *default-logging
     restart: *default-restart
     profiles: ["on-demand"]
     labels:
@@ -621,6 +645,7 @@ services:
   dns-scanner:
     image: ghcr.io/0xf00f00/docker-proxy-client-dns-scanner:${DNS_SCANNER_VERSION:-latest}
     container_name: dns-scanner
+    logging: *default-logging
     restart: *default-restart
     depends_on:
       - docker-socket-proxy
@@ -669,6 +694,7 @@ services:
   docker-socket-proxy:
     image: tecnativa/docker-socket-proxy:v0.4.2
     container_name: docker-socket-proxy
+    logging: *default-logging
     restart: *default-restart
     environment:
       - CONTAINERS=1
@@ -706,6 +732,7 @@ services:
   dashboard:
     image: ghcr.io/0xf00f00/docker-proxy-client-dashboard:latest
     container_name: dashboard
+    logging: *default-logging
     restart: *default-restart
     labels:
       - dashboard.enable=false
