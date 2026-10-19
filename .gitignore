@@ -6,6 +6,9 @@ docker-compose.override.yml
 dnscrypt-proxy/resolvers-cache/*
 !dnscrypt-proxy/resolvers-cache/.gitkeep
 
+singbox-sub/state/*
+!singbox-sub/state/.gitkeep
+
 stunnel_server/*
 !stunnel_server/README
 !stunnel_server/docker-compose.yml
