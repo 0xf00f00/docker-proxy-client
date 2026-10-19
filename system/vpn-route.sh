@@ -87,6 +87,18 @@ get_gateway() {
     ip route show dev "$interface" | awk '/default/ {print $3}'
 }
 
+# Function to wait for an interface's gateway; at boot the TUN can come up before DHCP finishes
+wait_for_gateway() {
+    local interface=$1
+    local gateway
+    for _ in $(seq 1 30); do
+        gateway=$(get_gateway "$interface")
+        [ -n "$gateway" ] && break
+        sleep 1
+    done
+    echo "$gateway"
+}
+
 # Function to resolve the IP addresses of a domain
 resolve_domain_ips() {
     local domain=$1
@@ -245,7 +257,7 @@ main() {
     apply_cake_ingress
 
     # Get the default gateway for DEFAULT_INTERFACE
-    GATEWAY=$(get_gateway "$DEFAULT_INTERFACE")
+    GATEWAY=$(wait_for_gateway "$DEFAULT_INTERFACE")
     if [ -z "$GATEWAY" ]; then
         echo "Could not find default gateway for interface $DEFAULT_INTERFACE. Exiting."
         exit 1
