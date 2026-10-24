@@ -34,3 +34,16 @@ EVENT_RETENTION_DAYS = 400
 MONITOR_GAP_S = 180
 EDGE_CONTAINERS = _names("HEALTH_EDGE_CONTAINERS", "sni-spoofing,sni-spoofing-fallback")
 CORE_CONTAINERS = _names("HEALTH_CORE_CONTAINERS", "clash,xray,sni-spoofing,xray-fallback,sni-spoofing-fallback")
+
+ACTIVE_PROBES = os.environ.get("HEALTH_ACTIVE_PROBES", "on").strip().lower() not in ("off", "false", "0", "no")
+PROBE_DAILY_BYTES = int(os.environ.get("HEALTH_PROBE_DAILY_BYTES", "2000000"))
+GOODPUT_MAX_PER_DAY = int(os.environ.get("HEALTH_GOODPUT_MAX_PER_DAY", "1"))
+BURST_MAX_PER_DAY = int(os.environ.get("HEALTH_BURST_MAX_PER_DAY", "4"))
+CAPACITY_DOWN_BPS = float(os.environ.get("HEALTH_CAPACITY_DOWN_MBIT", "16")) * 1e6 / 8
+CAPACITY_UP_BPS = float(os.environ.get("HEALTH_CAPACITY_UP_MBIT", "3")) * 1e6 / 8
+# "path=edge,..." — which sni-spoofing instance carries each Clash path
+PATH_EDGES = dict(
+    pair.split("=", 1)
+    for pair in _names("HEALTH_PATH_EDGES", "xray=sni-spoofing,xray-fallback=sni-spoofing-fallback")
+    if "=" in pair
+)

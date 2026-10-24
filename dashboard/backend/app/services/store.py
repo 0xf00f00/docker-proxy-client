@@ -184,6 +184,13 @@ def init_health() -> None:
             "synced INTEGER NOT NULL, kind TEXT NOT NULL, data TEXT)"
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_health_event_ts ON health_event(ts)")
+        # Every active probe; SUM(bytes) over a day is the byte-budget ledger.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS health_probe ("
+            "id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, kind TEXT NOT NULL, path TEXT, "
+            "ok INTEGER NOT NULL, bytes INTEGER NOT NULL, data TEXT)"
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_health_probe_ts ON health_probe(ts)")
 
 
 def add_segment(start_ts: int, end_ts: int, status: str, regime: str, detail: str | None = None) -> None:
@@ -287,9 +294,45 @@ def health_events(since_ts: int, until_ts: int) -> list[tuple[int, str, str, int
         ).fetchall()
 
 
+def add_health_probe(ts: int, kind: str, path: str | None, ok: bool, nbytes: int, data: str | None) -> None:
+    with _health_connect() as conn:
+        conn.execute(
+            "INSERT INTO health_probe (ts, kind, path, ok, bytes, data) VALUES (?, ?, ?, ?, ?, ?)",
+            (ts, kind, path, int(ok), nbytes, data),
+        )
+
+
+def health_probe_usage(since_ts: int) -> dict[str, tuple[int, int]]:
+    """kind -> (runs, bytes) since ``since_ts``."""
+    with _health_connect() as conn:
+        rows = conn.execute(
+            "SELECT kind, COUNT(*), COALESCE(SUM(bytes), 0) FROM health_probe WHERE ts >= ? GROUP BY kind", (since_ts,)
+        ).fetchall()
+    return {kind: (n, b) for kind, n, b in rows}
+
+
+def health_probe_last() -> dict[str, tuple[int, int | None]]:
+    """kind -> (last run ts, last successful run ts)."""
+    with _health_connect() as conn:
+        rows = conn.execute(
+            "SELECT kind, MAX(ts), MAX(CASE WHEN ok = 1 THEN ts END) FROM health_probe GROUP BY kind"
+        ).fetchall()
+    return {kind: (last, last_ok) for kind, last, last_ok in rows}
+
+
+def health_probes(since_ts: int, until_ts: int) -> list[tuple[int, str, str | None, int, int, str | None]]:
+    """(ts, kind, path, ok, bytes, data), ascending."""
+    with _health_connect() as conn:
+        return conn.execute(
+            "SELECT ts, kind, path, ok, bytes, data FROM health_probe WHERE ts >= ? AND ts < ? ORDER BY ts, id",
+            (since_ts, until_ts),
+        ).fetchall()
+
+
 def prune_health_raw(samples_before: int, events_before: int) -> None:
     with _health_connect() as conn:
         conn.execute("DELETE FROM health_sample WHERE ts < ?", (samples_before,))
+        conn.execute("DELETE FROM health_probe WHERE ts < ?", (samples_before,))
         conn.execute("DELETE FROM health_event WHERE ts < ?", (events_before,))
 
 

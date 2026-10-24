@@ -155,9 +155,10 @@ async def health_raw(since: int | None = None, until: int | None = None):
     since = since if since is not None else until - 86400
     if not 0 < until - since <= _RAW_MAX_SPAN_S:
         raise HTTPException(status_code=400, detail="window must be 1s..7d")
-    samples, events = await asyncio.gather(
+    samples, events, probes = await asyncio.gather(
         asyncio.to_thread(store.health_samples, since, until),
         asyncio.to_thread(store.health_events, since, until),
+        asyncio.to_thread(store.health_probes, since, until),
     )
     return {
         "since": since,
@@ -166,6 +167,10 @@ async def health_raw(since: int | None = None, until: int | None = None):
         "events": [
             {"ts": ts, "boot": b, "kind": k, "synced": bool(sy), **({"data": json.loads(d)} if d else {})}
             for ts, b, k, sy, d in events
+        ],
+        "probes": [
+            {"ts": ts, "kind": k, "path": p, "ok": bool(ok), "bytes": n, **({"data": json.loads(d)} if d else {})}
+            for ts, k, p, ok, n, d in probes
         ],
     }
 

@@ -2,10 +2,10 @@ from app.services.health.collectors.feed import FeedAggregator
 from app.services.system_proxy.base import Connection, ConnectionSnapshot
 
 
-def conn(cid, up=0, down=0, *, internal=False, net="tcp", port="443", chain="xray"):
+def conn(cid, up=0, down=0, *, internal=False, net="tcp", port="443", chain="xray", host=""):
     return Connection(
         id=cid,
-        host="",
+        host=host,
         dest_ip="",
         dest_port=port,
         network=net,
@@ -160,3 +160,28 @@ def test_minute_counters_restart_after_drain():
     assert out["user"]["down"] == 0
     assert out["user"]["new"] == 0
     assert out["user"]["conns"] == 1
+
+
+def test_connections_matching_a_running_probe_are_not_user_traffic():
+    agg = aggregator()
+    agg.expect_probe("udp", "19302", frozenset(), 5, now=0)
+    agg.ingest(snap(), now=0)
+    agg.ingest(
+        snap(
+            conn("probe", 100, 100, net="udp", port="19302"),
+            conn("user", 100, 100, net="udp", port="443"),
+            conn("meet-tcp", 100, 100, net="tcp", port="19302"),
+        ),
+        now=1,
+    )
+    assert agg.drain()["user"]["new"] == 2
+
+
+def test_probe_window_expires_and_hosts_narrow_the_match():
+    agg = aggregator()
+    agg.expect_probe("tcp", "443", frozenset({"probe.example"}), 5, now=0)
+    agg.ingest(snap(), now=0)
+    agg.ingest(snap(conn("probe", 10, 10, host="probe.example"), conn("other", 10, 10, host="www.example")), now=1)
+    assert agg.drain()["user"]["new"] == 1
+    agg.ingest(snap(conn("late", 10, 10, host="probe.example")), now=9)
+    assert agg.drain()["user"]["new"] == 1

@@ -44,6 +44,7 @@ class FeedAggregator:
         self._primed = False
         self._totals: tuple[int, int] | None = None
         self._window: deque[tuple[float, int, int]] = deque()
+        self._probe: tuple[str, str, frozenset[str], float] | None = None
         self._new_minute()
 
     def _new_minute(self) -> None:
@@ -59,6 +60,22 @@ class FeedAggregator:
         if ch is None:
             ch = self._chains[name] = {"up": 0, "down": 0, "new": 0, "nores": 0}
         return ch
+
+    def expect_probe(
+        self, network: str, port: str, hosts: frozenset[str], seconds: float, now: float | None = None
+    ) -> None:
+        """Treat new connections matching this target in the next ``seconds`` as the monitor's own."""
+        self._probe = (network, port, hosts, (time.monotonic() if now is None else now) + seconds)
+
+    def _is_probe(self, c, now: float) -> bool:
+        p = self._probe
+        return (
+            p is not None
+            and now <= p[3]
+            and c.network == p[0]
+            and c.dest_port == p[1]
+            and (not c.host or c.host in p[2] or not p[2])
+        )
 
     def reset(self) -> None:
         self._flows.clear()
@@ -113,7 +130,7 @@ class FeedAggregator:
             seen.add(c.id)
             f = self._flows.get(c.id)
             if f is None:
-                user = not c.internal
+                user = not c.internal and not self._is_probe(c, now)
                 f = _Flow(now, user, c.exit, c.network == "tcp", c.dest_port, c.upload, c.download, not self._primed)
                 self._flows[c.id] = f
                 if user and self._primed:

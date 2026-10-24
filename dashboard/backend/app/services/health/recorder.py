@@ -12,6 +12,7 @@ from app.services.health.collectors import host, paths
 from app.services.health.collectors.containers import RestartWatch
 from app.services.health.collectors.edge_logs import EdgeLogFollower
 from app.services.health.collectors.feed import FeedAggregator
+from app.services.health.scheduler import ProbeScheduler
 from app.services.health.settings import (
     CORE_CONTAINERS,
     EDGE_CONTAINERS,
@@ -50,6 +51,7 @@ def start_event(
 class Recorder:
     def __init__(self) -> None:
         self.feed = FeedAggregator()
+        self._probes = ProbeScheduler(self.feed)
         self._edges = EdgeLogFollower(EDGE_CONTAINERS, lambda: docker_service.new_client(_LOG_READ_TIMEOUT_S))
         self._restarts = RestartWatch(CORE_CONTAINERS)
         self._boot = host.boot_id()
@@ -70,6 +72,7 @@ class Recorder:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
             self._task = None
+        await self._probes.stop()
         self._edges.stop()
         with contextlib.suppress(Exception):
             await asyncio.to_thread(self._event, "stop", None)
@@ -144,6 +147,10 @@ class Recorder:
             data["err"] = err
         payload = json.dumps(data, separators=(",", ":"))
         await asyncio.to_thread(store.add_health_sample, self._boot, int(up - (now - ts)), ts, synced, payload)
+        try:
+            await self._probes.on_tick(data, now, synced)
+        except Exception:
+            logger.debug("health probe scheduling failed", exc_info=True)
 
         self._ticks += 1
         if self._ticks % _PRUNE_TICKS == 1:
