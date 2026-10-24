@@ -83,6 +83,6 @@ def test_ticks_write_compact_samples_and_restamp_on_sync(state_dir, monkeypatch)
     assert data["v"] == 1
     assert data["feed"] == {"frames": 0}
     assert data["host"] == {"temp": 61.0}
-    assert data["err"] == ["edge:sni-spoofing", "edge:sni-spoofing-fallback"]
+    assert data["err"] == ["edge:edge-a", "edge:edge-b"]
     kinds = [k for _ts, _b, k, _s, _d in store.health_events(0, 2**31)]
     assert kinds == ["clock_sync"]

@@ -7,9 +7,9 @@ import time
 from itertools import pairwise
 
 from app.services.health.probes import ProbeResult, percentile
+from app.services.health.settings import STUN_HOST as HOST
+from app.services.health.settings import STUN_PORT as PORT
 
-HOST = os.environ.get("HEALTH_STUN_HOST", "stun.l.google.com")
-PORT = 19302
 COUNT = 20
 INTERVAL_S = 0.1
 SETTLE_S = 2.0

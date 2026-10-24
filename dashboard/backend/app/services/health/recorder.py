@@ -9,12 +9,11 @@ import time
 from app.config import settings
 from app.services import docker_service, store
 from app.services.health.collectors import host, paths
-from app.services.health.collectors.containers import RestartWatch
+from app.services.health.collectors.containers import RestartWatch, core_names
 from app.services.health.collectors.edge_logs import EdgeLogFollower
 from app.services.health.collectors.feed import FeedAggregator
 from app.services.health.scheduler import ProbeScheduler
 from app.services.health.settings import (
-    CORE_CONTAINERS,
     EDGE_CONTAINERS,
     EVENT_RETENTION_DAYS,
     MONITOR_GAP_S,
@@ -53,12 +52,15 @@ class Recorder:
         self.feed = FeedAggregator()
         self._probes = ProbeScheduler(self.feed)
         self._edges = EdgeLogFollower(EDGE_CONTAINERS, lambda: docker_service.new_client(_LOG_READ_TIMEOUT_S))
-        self._restarts = RestartWatch(CORE_CONTAINERS)
+        self._restarts = RestartWatch(core_names)
         self._boot = host.boot_id()
         self._synced = False
         self._nic: tuple[int, int] | None = None
         self._ticks = 0
         self._task: asyncio.Task | None = None
+
+    def held(self) -> list[str]:
+        return self._probes.held(self._synced)
 
     def start(self) -> None:
         store.init_health()

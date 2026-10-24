@@ -13,6 +13,9 @@ This is composite system health, not per-proxy. The package is split by concern:
 - ``probe``     — the probe I/O and regime-backed classification.
 - ``monitor``   — the always-on loop + persistence; exposes the ``monitor`` singleton.
 - ``recorder``  — per-minute raw samples from ``collectors``.
+- ``scheduler`` — budgeted active ``probes`` and their ledger.
+- ``verdict``   — v2: minutes folded into states (with ``baseline``, ``attribution``); ``engine``
+  loads rows and caches, ``shadow`` lists where v2 and the monitor above disagree.
 
 This module is the public facade: import what you need from ``app.services.health``.
 """

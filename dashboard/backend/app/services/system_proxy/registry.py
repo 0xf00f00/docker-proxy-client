@@ -5,6 +5,7 @@ from app.services import docker_service
 from app.services.system_proxy.base import (
     Capability,
     SupportsConnectionsStream,
+    SupportsPathProbe,
     SupportsPathStatus,
     SupportsTrafficStream,
     SystemProxyController,
@@ -16,6 +17,7 @@ _CAPABILITIES: dict[Capability, type] = {
     Capability.CONNECTIONS: SupportsConnectionsStream,
     Capability.TRAFFIC: SupportsTrafficStream,
     Capability.PATHS: SupportsPathStatus,
+    Capability.PATH_PROBE: SupportsPathProbe,
 }
 
 # A factory takes the container backing the controller and returns an instance.

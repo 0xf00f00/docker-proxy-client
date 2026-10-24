@@ -16,6 +16,7 @@ from app.auth import RequireAuth
 from app.config import settings
 from app.services import health as hs
 from app.services import store
+from app.services.health import engine
 from app.services.system_proxy import Capability, registry
 
 router = APIRouter(prefix="/health", tags=["health"])
@@ -147,6 +148,28 @@ async def health_incidents(window: str = "24h", min_duration: int = 60):
 
 
 _RAW_MAX_SPAN_S = 7 * 86400
+_SHADOW_WINDOWS = {"24h": 86400, "7d": 7 * 86400}
+
+
+async def _monitor() -> dict:
+    """The monitor's own state: what its probes have cost and why they might be held."""
+    return {"probeBytes": await asyncio.to_thread(engine.probe_bytes, time.time()), "held": hs.recorder.held()}
+
+
+@router.get("/verdict")
+async def health_verdict():
+    """The v2 verdict: state, cause, per-activity grades and the evidence behind them."""
+    out = await asyncio.to_thread(engine.current, time.time())
+    return {"now": int(time.time()), **out, **await _monitor()}
+
+
+@router.get("/shadow", dependencies=[RequireAuth])
+async def health_shadow(window: str = "24h"):
+    """The v2 timeline beside the old monitor's, with every minute they disagree on."""
+    span = _SHADOW_WINDOWS.get(window)
+    if span is None:
+        raise HTTPException(status_code=400, detail=f"unknown window: {window}")
+    return await asyncio.to_thread(engine.compare, window, span, time.time())
 
 
 @router.get("/raw", dependencies=[RequireAuth])
@@ -163,6 +186,7 @@ async def health_raw(since: int | None = None, until: int | None = None):
     return {
         "since": since,
         "until": until,
+        **await _monitor(),
         "samples": [{"ts": ts, "boot": b, "uptime": up, **json.loads(d)} for ts, b, up, d in samples],
         "events": [
             {"ts": ts, "boot": b, "kind": k, "synced": bool(sy), **({"data": json.loads(d)} if d else {})}

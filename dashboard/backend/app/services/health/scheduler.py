@@ -8,22 +8,22 @@ import random
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime
 
 from app.services import store
 from app.services.connectivity_tests import regime as regime_mod
-from app.services.health import rules
+from app.services.health import engine, rules
 from app.services.health.collectors.feed import FeedAggregator
+from app.services.health.engine import day_start
 from app.services.health.probes import ProbeResult, burst, goodput, stun
 from app.services.health.settings import (
     ACTIVE_PROBES,
     BURST_MAX_PER_DAY,
-    CAPACITY_DOWN_BPS,
-    CAPACITY_UP_BPS,
     GOODPUT_MAX_PER_DAY,
     PATH_EDGES,
     PROBE_DAILY_BYTES,
 )
+from app.services.system_proxy import registry
+from app.services.system_proxy.base import SupportsPathProbe
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +39,6 @@ GOODPUT_GAP_S = 12 * 3600.0  # floor that holds even if the ledger can't be writ
 JITTER = 0.2
 GOODPUT_JITTER_S = 7200.0
 LADDER_WIRE = 5000
-CAPACITY_REFRESH_S = 3600.0
-CAPACITY_SPAN_S = 7 * 86400
 PROBE_TIMEOUT_S = 40.0
 EXCLUDE_GRACE_S = 6.0
 
@@ -51,6 +49,7 @@ class Context:
     util: float  # busiest direction's share of capacity; 1.0 when the feed is down
     call: bool
     suspect: bool
+    ledger_ok: bool = True  # false while results can't be written, so the byte cap can't be enforced
 
 
 @dataclass(slots=True)
@@ -80,6 +79,7 @@ def plan(state: State, ctx: Context) -> str | None:
     if (
         ctx.suspect
         and quiet
+        and ctx.ledger_ok
         and spent + burst.ESTIMATE <= PROBE_DAILY_BYTES
         and state.runs(BURST) < BURST_MAX_PER_DAY
         and ctx.now - state.last_run.get(BURST, 0) >= BURST_GAP_S
@@ -87,6 +87,7 @@ def plan(state: State, ctx: Context) -> str | None:
         return BURST
     if (
         quiet
+        and ctx.ledger_ok
         and spent + goodput.ESTIMATE <= PROBE_DAILY_BYTES
         and state.runs(GOODPUT) < GOODPUT_MAX_PER_DAY
         and ctx.now - state.last_run.get(GOODPUT, 0) >= GOODPUT_GAP_S
@@ -117,20 +118,18 @@ def after(state: State, kind: str, ok: bool, now: float, rng: random.Random) -> 
         state.escalate = True
 
 
-def day_start(now: float) -> int:
-    return int(datetime.fromtimestamp(now).astimezone().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
-
-
 class ProbeScheduler:
-    def __init__(self, feed: FeedAggregator, rng: random.Random | None = None) -> None:
+    def __init__(
+        self, feed: FeedAggregator, rng: random.Random | None = None, edges: dict[str, str] | None = None
+    ) -> None:
         self._feed = feed
         self._rng = rng or random.Random()
+        self._routes = dict(PATH_EDGES if edges is None else edges)
         self._state = State()
         self._edges: dict[str, deque[tuple[int, int]]] = {}
-        self._capacity = rules.Capacity(CAPACITY_DOWN_BPS, CAPACITY_UP_BPS)
-        self._capacity_at = 0.0
         self._task: asyncio.Task | None = None
         self._loaded = False
+        self.ledger_failing = False
 
     async def stop(self) -> None:
         if self._task is not None:
@@ -139,27 +138,33 @@ class ProbeScheduler:
                 await self._task
             self._task = None
 
+    def held(self, synced: bool) -> list[str]:
+        """Why active probes aren't running right now. While the ledger can't be written only the
+        byte-capped ones (burst, goodput) wait; the tiny call probe keeps running and clears it."""
+        return [
+            name
+            for name, held in (
+                ("kill_switch", not ACTIVE_PROBES),
+                ("clock_unsynced", not synced),
+                ("ledger_failing", self.ledger_failing),
+            )
+            if held
+        ]
+
     def _suspect(self, data: dict) -> bool:
         paths = data.get("paths") or {}
         alive = paths.get("alive", {})
         active = paths.get("active") or ""
         # a dead standby alone isn't suspect: the burst would only test the healthy active path
-        if alive.get(active) is False or (PATH_EDGES and all(alive.get(p) is False for p in PATH_EDGES)):
+        if alive.get(active) is False or (self._routes and all(alive.get(p) is False for p in self._routes)):
             return True
-        edge = PATH_EDGES.get(active)
+        edge = self._routes.get(active)
         return edge is not None and rules.edge_state(list(self._edges.get(edge, ()))) in ("poor", "fast")
 
     def _track_edges(self, data: dict) -> None:
         for name, counts in (data.get("edge") or {}).items():
             fails = sum(v for k, v in counts.items() if k != "hello")
             self._edges.setdefault(name, deque(maxlen=rules.EDGE_WINDOW_MIN)).append((counts.get("hello", 0), fails))
-
-    def _learn_capacity(self, now: float) -> rules.Capacity:
-        feeds = [
-            json.loads(d).get("feed", {}) for _, _, _, d in store.health_samples(int(now - CAPACITY_SPAN_S), int(now))
-        ]
-        default = rules.Capacity(CAPACITY_DOWN_BPS, CAPACITY_UP_BPS)
-        return rules.learn_capacity([f.get("pk_down", 0) for f in feeds], [f.get("pk_up", 0) for f in feeds], default)
 
     def _load_state(self, now: float) -> None:
         for kind, (last, last_ok) in store.health_probe_last().items():
@@ -176,16 +181,15 @@ class ProbeScheduler:
             return
         if not self._loaded:
             await asyncio.to_thread(self._load_state, now)
-        if now - self._capacity_at >= CAPACITY_REFRESH_S:
-            self._capacity_at = now
-            self._capacity = await asyncio.to_thread(self._learn_capacity, now)
+        capacity = await asyncio.to_thread(engine.capacity, now)
         self._state.usage = await asyncio.to_thread(store.health_probe_usage, day_start(now))
         feed = data.get("feed") or {}
         ctx = Context(
             now=now,
-            util=rules.utilization(feed, self._capacity) if feed.get("frames") else 1.0,
+            util=rules.utilization(feed, capacity) if feed.get("frames") else 1.0,
             call=(feed.get("calls") or {}).get("n", 0) > 0,
             suspect=self._suspect(data),
+            ledger_ok=not self.ledger_failing,
         )
         kind = plan(self._state, ctx)
         if kind is not None:
@@ -208,7 +212,14 @@ class ProbeScheduler:
 
     async def _record(self, kind: str, path: str | None, result: ProbeResult) -> None:
         payload = json.dumps(result.data, separators=(",", ":")) if result.data else None
-        await asyncio.to_thread(store.add_health_probe, int(time.time()), kind, path, result.ok, result.bytes, payload)
+        try:
+            await asyncio.to_thread(
+                store.add_health_probe, int(time.time()), kind, path, result.ok, result.bytes, payload
+            )
+        except Exception:
+            self.ledger_failing = True
+            raise
+        self.ledger_failing = False
 
     async def _run(self, kind: str, path: str | None) -> None:
         try:
@@ -225,10 +236,28 @@ class ProbeScheduler:
         except Exception:
             logger.warning("health probe %s failed to record", kind, exc_info=True)
 
+    async def _standby(self, active: str | None) -> dict[str, int | None] | None:
+        """Would switching help: the backup routes' own delay check, never the active path."""
+        try:
+            controller = await asyncio.to_thread(registry.get_active_controller)
+            names = [p for p in self._routes if p != active]
+            if active is None or not isinstance(controller, SupportsPathProbe) or not names:
+                return None
+            delays = await asyncio.wait_for(
+                asyncio.gather(*(controller.probe_path(n) for n in names), return_exceptions=True), PROBE_TIMEOUT_S
+            )
+        except Exception:
+            return None
+        return {n: d if isinstance(d, int) else None for n, d in zip(names, delays, strict=True)}
+
     async def _ladder(self, path: str | None) -> None:
         try:
             info = await asyncio.wait_for(regime_mod.get_regime(), PROBE_TIMEOUT_S)
-            result = ProbeResult(True, LADDER_WIRE, {"regime": info.regime, "intl_up": info.intl_up})
+            data: dict = {"regime": info.regime, "intl_up": info.intl_up}
+            switch = await self._standby(path)
+            if switch is not None:
+                data["switch"] = switch
+            result = ProbeResult(True, LADDER_WIRE, data)
         except Exception as e:
             result = ProbeResult(False, 0, {"error": type(e).__name__})
         await self._record(LADDER, path, result)

@@ -16,6 +16,7 @@ class Capability(StrEnum):
     CONNECTIONS = "connections"
     TRAFFIC = "traffic"
     PATHS = "paths"
+    PATH_PROBE = "path_probe"
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +68,7 @@ class PathHealth:
 class PathStatus:
     active: str | None
     paths: dict[str, PathHealth]
+    local: frozenset[str] = frozenset()  # proxies the controller itself types as direct/reject, not a route out
 
 
 @runtime_checkable
@@ -133,3 +135,12 @@ class SupportsPathStatus(Protocol):
     """Optional capability: report the failover choice and each route's own last health check."""
 
     async def path_status(self) -> PathStatus: ...
+
+
+@runtime_checkable
+class SupportsPathProbe(Protocol):
+    """Optional capability: run one route's own delay check on demand."""
+
+    async def probe_path(self, name: str) -> int | None:
+        """Delay in ms through that route, or None when it failed."""
+        ...

@@ -26,14 +26,22 @@ STATUSES: tuple[Status, ...] = get_args(Status)
 
 
 def _names(env: str, default: str) -> tuple[str, ...]:
-    return tuple(n.strip() for n in os.environ.get(env, default).split(",") if n.strip())
+    return tuple(n.strip() for n in (os.environ.get(env) or default).split(",") if n.strip())
 
 
 SAMPLE_RETENTION_DAYS = 35
 EVENT_RETENTION_DAYS = 400
 MONITOR_GAP_S = 180
-EDGE_CONTAINERS = _names("HEALTH_EDGE_CONTAINERS", "sni-spoofing,sni-spoofing-fallback")
-CORE_CONTAINERS = _names("HEALTH_CORE_CONTAINERS", "clash,xray,sni-spoofing,xray-fallback,sni-spoofing-fallback")
+
+# "route=edge,..." — the one place that says which sni-spoofing instance carries each Clash
+# route; the edge and core container lists below derive from it unless overridden.
+PATH_EDGES = dict(
+    pair.split("=", 1)
+    for pair in _names("HEALTH_PATH_EDGES", "xray=sni-spoofing,xray-fallback=sni-spoofing-fallback")
+    if "=" in pair
+)
+EDGE_CONTAINERS = _names("HEALTH_EDGE_CONTAINERS", "") or tuple(dict.fromkeys(PATH_EDGES.values()))
+CORE_CONTAINERS = _names("HEALTH_CORE_CONTAINERS", "")  # empty: the controller plus every route and edge
 
 ACTIVE_PROBES = os.environ.get("HEALTH_ACTIVE_PROBES", "on").strip().lower() not in ("off", "false", "0", "no")
 PROBE_DAILY_BYTES = int(os.environ.get("HEALTH_PROBE_DAILY_BYTES", "2000000"))
@@ -41,9 +49,7 @@ GOODPUT_MAX_PER_DAY = int(os.environ.get("HEALTH_GOODPUT_MAX_PER_DAY", "1"))
 BURST_MAX_PER_DAY = int(os.environ.get("HEALTH_BURST_MAX_PER_DAY", "4"))
 CAPACITY_DOWN_BPS = float(os.environ.get("HEALTH_CAPACITY_DOWN_MBIT", "16")) * 1e6 / 8
 CAPACITY_UP_BPS = float(os.environ.get("HEALTH_CAPACITY_UP_MBIT", "3")) * 1e6 / 8
-# "path=edge,..." — which sni-spoofing instance carries each Clash path
-PATH_EDGES = dict(
-    pair.split("=", 1)
-    for pair in _names("HEALTH_PATH_EDGES", "xray=sni-spoofing,xray-fallback=sni-spoofing-fallback")
-    if "=" in pair
-)
+
+SPEED_HOST = os.environ.get("HEALTH_SPEED_HOST", "speed.cloudflare.com")  # burst + goodput target
+STUN_HOST = os.environ.get("HEALTH_STUN_HOST", "stun.l.google.com")
+STUN_PORT = int(os.environ.get("HEALTH_STUN_PORT", "19302"))

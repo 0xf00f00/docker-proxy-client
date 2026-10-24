@@ -9,6 +9,7 @@ def summarize(status: PathStatus) -> dict:
         "active": status.active,
         "alive": {n: p.alive for n, p in status.paths.items()},
         "delay": {n: p.delay_ms for n, p in status.paths.items()},
+        "local": sorted(status.local),
     }
 
 

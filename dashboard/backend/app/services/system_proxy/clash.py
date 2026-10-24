@@ -35,6 +35,8 @@ from app.services.system_proxy.base import (
 
 # Names Clash exposes that aren't user-selectable routes.
 HIDDEN_ROUTES = frozenset({"REJECT", "DIRECT", "auto", "direct_interface"})
+LOCAL_TYPES = frozenset({"direct", "reject", "rejectdrop"})
+DELAY_TEST_URL = "http://www.gstatic.com/generate_204"
 
 _CLASH_CONFIG_CANDIDATES = [
     Path(settings.configs_base_path) / "clash" / "config.yaml",
@@ -162,6 +164,16 @@ class ClashController(SystemProxyController):
             r.raise_for_status()
             return _to_path_status(r.json().get("proxies") or {})
 
+    async def probe_path(self, name: str) -> int | None:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get(
+                f"{settings.clash_api_url}/proxies/{name}/delay",
+                params={"timeout": 5000, "url": DELAY_TEST_URL},
+                headers=self._headers(),
+            )
+        delay = r.json().get("delay") if r.status_code == 200 else None
+        return delay if isinstance(delay, int) and delay > 0 else None
+
     async def test_latencies(self) -> dict[str, int]:
         state = await self.get_state()
         names = [r.name for r in state.routes]
@@ -173,7 +185,7 @@ class ClashController(SystemProxyController):
             tasks = [
                 c.get(
                     f"{settings.clash_api_url}/proxies/{n}/delay",
-                    params={"timeout": timeout_ms, "url": "http://www.gstatic.com/generate_204"},
+                    params={"timeout": timeout_ms, "url": DELAY_TEST_URL},
                     headers=self._headers(),
                 )
                 for n in names
@@ -232,7 +244,8 @@ def _to_path_status(proxies: dict, group: str = "auto") -> PathStatus:
             alive=alive if isinstance(alive, bool) else None,
             delay_ms=delay if isinstance(delay, int) and delay > 0 else None,
         )
-    return PathStatus(active=grp.get("now") or None, paths=paths)
+    local = frozenset(n for n, p in proxies.items() if str(p.get("type") or "").lower() in LOCAL_TYPES)
+    return PathStatus(active=grp.get("now") or None, paths=paths, local=local)
 
 
 def _find_clash_config() -> Path | None:
@@ -302,7 +315,7 @@ async def _trigger_group_test(group: str, headers: dict[str, str], timeout_ms: i
         tasks = [
             c.get(
                 f"{settings.clash_api_url}/proxies/{n}/delay",
-                params={"timeout": timeout_ms, "url": "http://www.gstatic.com/generate_204"},
+                params={"timeout": timeout_ms, "url": DELAY_TEST_URL},
                 headers=headers,
             )
             for n in names

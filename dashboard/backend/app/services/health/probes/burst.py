@@ -6,9 +6,9 @@ import time
 import httpx
 
 from app.services.health.probes import ProbeResult, percentile
+from app.services.health.settings import SPEED_HOST as HOST
 
-URL = "https://speed.cloudflare.com/__down?bytes=0"
-HOST = "speed.cloudflare.com"
+URL = f"https://{HOST}/__down?bytes=0"
 COUNT = 8
 TIMEOUT_S = 10.0
 MAX_FAILED = 1

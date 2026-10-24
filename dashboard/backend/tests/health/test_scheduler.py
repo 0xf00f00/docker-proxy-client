@@ -104,11 +104,11 @@ def test_goodput_reschedules_about_a_day_out():
     assert 79_000 <= st.interval[GOODPUT] <= 94_000
 
 
-def sample(*, frames=47, down=0, up=0, calls=0, active="xray", alive=None, edge=None):
+def sample(*, frames=47, down=0, up=0, calls=0, active="route-a", alive=None, edge=None):
     return {
         "feed": {"frames": frames, "down": down, "up": up, "calls": {"n": calls}},
-        "paths": {"active": active, "alive": alive or {"xray": True, "xray-fallback": True}},
-        "edge": edge or {"sni-spoofing": {"hello": 3, "ack_to": 0}},
+        "paths": {"active": active, "alive": alive or {"route-a": True, "route-b": True}},
+        "edge": edge or {"edge-a": {"hello": 3, "ack_to": 0}},
     }
 
 
@@ -116,6 +116,7 @@ def sample(*, frames=47, down=0, up=0, calls=0, active="xray", alive=None, edge=
 def fakes(monkeypatch, state_dir):
     calls = []
     monkeypatch.setattr(sch, "ACTIVE_PROBES", True)
+    monkeypatch.setattr(sch.registry, "get_active_controller", lambda: None)
 
     def fake(name, result):
         async def run(*a, **k):
@@ -152,12 +153,12 @@ def rows(kind=None):
 
 
 def seed_goodput_ok(now):
-    store.add_health_probe(int(now - 100), GOODPUT, "xray", True, 690_000, None)
+    store.add_health_probe(int(now - 100), GOODPUT, "route-a", True, 690_000, None)
 
 
 def test_kill_switch_runs_nothing(fakes, monkeypatch):
     monkeypatch.setattr(sch, "ACTIVE_PROBES", False)
-    drive(ProbeScheduler(FeedAggregator(), random.Random(0)), (sample(alive={"xray": False}), time.time(), True))
+    drive(ProbeScheduler(FeedAggregator(), random.Random(0)), (sample(alive={"route-a": False}), time.time(), True))
     assert fakes.calls == [] and rows() == []
 
 
@@ -186,7 +187,7 @@ def test_first_stun_comes_a_minute_or_three_after_start(fakes):
     assert rows() == [r for r in rows() if r[1] == GOODPUT]
     drive(sched, (sample(), now + 200, True))
     stun_rows = rows(STUN)
-    assert len(stun_rows) == 1 and stun_rows[0][2] == "xray" and stun_rows[0][3] == 1
+    assert len(stun_rows) == 1 and stun_rows[0][2] == "route-a" and stun_rows[0][3] == 1
     assert json.loads(stun_rows[0][5])["recv"] == 20
 
 
@@ -200,7 +201,7 @@ def test_results_feed_the_ledger(fakes):
 def test_byte_cap_stops_everything_but_stun(fakes, monkeypatch):
     monkeypatch.setattr(sch, "PROBE_DAILY_BYTES", 1000)
     now = time.time()
-    drive(ProbeScheduler(FeedAggregator(), random.Random(0)), (sample(alive={"xray": False}), now, True))
+    drive(ProbeScheduler(FeedAggregator(), random.Random(0)), (sample(alive={"route-a": False}), now, True))
     drive(ProbeScheduler(FeedAggregator(), random.Random(0)), (sample(), now + 400, True))
     assert {r[1] for r in rows()} <= {STUN}
 
@@ -214,7 +215,7 @@ def test_dead_path_triggers_a_burst_and_a_failed_one_runs_the_ladder(fakes, monk
     monkeypatch.setattr(sch.regime_mod, "get_regime", regime)
     now = time.time()
     seed_goodput_ok(now)
-    drive(ProbeScheduler(FeedAggregator(), random.Random(0)), (sample(alive={"xray": False}), now, True))
+    drive(ProbeScheduler(FeedAggregator(), random.Random(0)), (sample(alive={"route-a": False}), now, True))
     assert fakes.calls[:1] == ["burst"]
     ladder = rows("ladder")
     assert len(ladder) == 1 and json.loads(ladder[0][5]) == {"regime": "normal", "intl_up": True}
@@ -224,7 +225,7 @@ def test_sustained_edge_failures_on_the_active_path_trigger_a_burst(fakes):
     now = time.time()
     seed_goodput_ok(now)
     sched = ProbeScheduler(FeedAggregator(), random.Random(0))
-    bad = {"sni-spoofing": {"hello": 3, "ack_to": 1}}
+    bad = {"edge-a": {"hello": 3, "ack_to": 1}}
     drive(sched, *[(sample(edge=bad), now + 60 * i, True) for i in range(30)])
     assert BURST in fakes.calls
 
@@ -233,10 +234,10 @@ def test_a_dead_standby_does_not_trigger_a_burst_but_all_paths_dead_does(fakes):
     now = time.time()
     seed_goodput_ok(now)
     sched = ProbeScheduler(FeedAggregator(), random.Random(0))
-    drive(sched, (sample(alive={"xray": True, "xray-fallback": False}), now, True))
-    drive(sched, (sample(active="xray-fallback", alive={"xray": False, "xray-fallback": True}), now + 60, True))
+    drive(sched, (sample(alive={"route-a": True, "route-b": False}), now, True))
+    drive(sched, (sample(active="route-b", alive={"route-a": False, "route-b": True}), now + 60, True))
     assert BURST not in fakes.calls
-    drive(sched, (sample(active="naive", alive={"xray": False, "xray-fallback": False}), now + 120, True))
+    drive(sched, (sample(active="naive", alive={"route-a": False, "route-b": False}), now + 120, True))
     assert BURST in fakes.calls
 
 
@@ -244,7 +245,7 @@ def test_a_degraded_standby_edge_does_not_trigger_a_burst(fakes):
     now = time.time()
     seed_goodput_ok(now)
     sched = ProbeScheduler(FeedAggregator(), random.Random(0))
-    bad = {"sni-spoofing": {"hello": 3, "ack_to": 0}, "sni-spoofing-fallback": {"hello": 2, "ack_to": 1}}
+    bad = {"edge-a": {"hello": 3, "ack_to": 0}, "edge-b": {"hello": 2, "ack_to": 1}}
     drive(sched, *[(sample(edge=bad), now + 60 * i, True) for i in range(30)])
     assert BURST not in fakes.calls
 
@@ -272,3 +273,94 @@ def test_probe_connections_are_not_counted_as_user_traffic(fakes):
     sched = ProbeScheduler(feed, random.Random(0))
     sched._expect(STUN)
     assert feed._probe is not None and feed._probe[:2] == ("udp", "19302")
+
+
+class FakeController:
+    def __init__(self, delays):
+        self.delays, self.asked = delays, []
+
+    async def probe_path(self, name):
+        self.asked.append(name)
+        if isinstance(self.delays[name], Exception):
+            raise self.delays[name]
+        return self.delays[name]
+
+
+def run_ladder(monkeypatch, controller):
+    async def regime(*a, **k):
+        return SimpleNamespace(regime="normal", intl_up=True)
+
+    monkeypatch.setattr(sch.regime_mod, "get_regime", regime)
+    monkeypatch.setattr(sch.registry, "get_active_controller", lambda: controller)
+    asyncio.run(ProbeScheduler(FeedAggregator(), random.Random(0))._ladder("route-a"))
+    return json.loads(rows("ladder")[0][5])
+
+
+def test_the_ladder_checks_only_the_backup_routes_never_the_active_one(fakes, monkeypatch):
+    controller = FakeController({"route-a": 1, "route-b": 140})
+    assert run_ladder(monkeypatch, controller)["switch"] == {"route-b": 140}
+    assert controller.asked == ["route-b"]
+
+
+def test_a_backup_route_that_fails_or_errors_is_recorded_as_not_working(fakes, monkeypatch):
+    controller = FakeController({"route-a": 1, "route-b": RuntimeError("boom")})
+    assert run_ladder(monkeypatch, controller)["switch"] == {"route-b": None}
+
+
+def test_without_the_capability_the_ladder_still_records_the_regime(fakes, monkeypatch):
+    data = run_ladder(monkeypatch, object())
+    assert data == {"regime": "normal", "intl_up": True}
+
+
+def test_a_ledger_that_cannot_be_written_holds_the_byte_capped_probes_but_not_the_call_probe():
+    st = settled(last_ok={}, last_run={STUN: NOW - 1900})
+    assert plan(st, ctx(suspect=True, ledger_ok=False)) == STUN
+    assert plan(settled(last_ok={}), ctx(ledger_ok=False)) is None
+    assert plan(settled(last_ok={}), ctx(ledger_ok=True)) == GOODPUT
+    assert plan(settled(), ctx(suspect=True, ledger_ok=False)) is None
+    assert plan(settled(), ctx(suspect=True)) == BURST
+
+
+def test_a_failing_ledger_keeps_a_suspect_link_from_bursting_all_day(fakes, monkeypatch):
+    def locked(*a, **k):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(store, "add_health_probe", locked)
+    fakes.install(goodput_r=ProbeResult(False, 7800, {"bytes": 0}), burst_r=ProbeResult(False, 62_000, {"failed": 8}))
+    now = time.time()
+    sched = ProbeScheduler(FeedAggregator(), random.Random(0))
+    dead = sample(alive={"route-a": False, "route-b": False})
+    drive(sched, *[(dead, now + 60 * 40 * i, True) for i in range(40)])
+    assert fakes.calls.count(BURST) + fakes.calls.count(GOODPUT) <= 2
+
+
+def test_the_topology_comes_from_the_caller_not_from_names_in_the_code(fakes, monkeypatch):
+    sched = ProbeScheduler(FeedAggregator(), random.Random(0), edges={"north": "edge-n", "south": "edge-s"})
+    assert sched._suspect(sample(active="north", alive={"north": False, "south": True}))
+    assert not sched._suspect(sample(active="north", alive={"north": True, "south": False}))
+    assert sched._suspect(sample(active="route-a", alive={"route-a": False}))
+
+
+def test_held_names_why_probes_are_not_running(monkeypatch):
+    sched = ProbeScheduler(FeedAggregator())
+    monkeypatch.setattr(sch, "ACTIVE_PROBES", True)
+    assert sched.held(True) == []
+    sched.ledger_failing = True
+    assert sched.held(False) == ["clock_unsynced", "ledger_failing"]
+    monkeypatch.setattr(sch, "ACTIVE_PROBES", False)
+    assert sched.held(True) == ["kill_switch", "ledger_failing"]
+
+
+def test_the_ledger_flag_follows_the_write(fakes, monkeypatch):
+    sched = ProbeScheduler(FeedAggregator(), random.Random(0))
+    real = store.add_health_probe
+
+    def locked(*a, **k):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(store, "add_health_probe", locked)
+    drive(sched, (sample(), time.time(), True))
+    assert sched.ledger_failing
+    monkeypatch.setattr(store, "add_health_probe", real)
+    drive(sched, (sample(), time.time() + 7 * 3600, True), (sample(), time.time() + 7 * 3600 + 400, True))
+    assert not sched.ledger_failing

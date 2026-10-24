@@ -6,10 +6,10 @@ import time
 import httpx
 
 from app.services.health.probes import ProbeResult
+from app.services.health.settings import SPEED_HOST as HOST
 
 BYTES = 524_288
-URL = f"https://speed.cloudflare.com/__down?bytes={BYTES}"
-HOST = "speed.cloudflare.com"
+URL = f"https://{HOST}/__down?bytes={BYTES}"
 TIMEOUT_S = 20.0
 _HANDSHAKE_WIRE = 6000
 ESTIMATE = round((BYTES + _HANDSHAKE_WIRE) * 1.3)
