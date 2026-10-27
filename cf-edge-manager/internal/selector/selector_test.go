@@ -61,6 +61,7 @@ func testCfg() Config {
 		KeepMax: 0.20, PickMax: 0.10, MaxCandidates: 5, MaxProbeCandidates: 2,
 		BaseInterval: 600, MaxBackoff: 21600, MinRestartGap: 300, QuarantineTTL: 3600,
 		SurvivalCheck: true,
+		ConfirmTicks:  1, HoldInterval: 300,
 	}
 }
 
@@ -74,7 +75,7 @@ func newSel(t *testing.T, cfg Config, loss map[string]float64, surv map[string]*
 		}
 		return 0.0
 	}
-	survFn := func(ip string) *bool {
+	survFn := func(ip string, _ bool) *bool {
 		if v, ok := surv[ip]; ok {
 			return v
 		}
@@ -89,7 +90,7 @@ func TestEdgeOK(t *testing.T) {
 	loss := map[string]float64{"dead": 0.9, "clean": 0.0}
 	surv := map[string]*bool{"failbad": bptr(false), "nosig": nil}
 	s := newSel(t, cfg, loss, surv, nil, &fakeApplier{})
-	s.survival = func(ip string) *bool {
+	s.survival = func(ip string, _ bool) *bool {
 		probed++
 		if v, ok := surv[ip]; ok {
 			return v
@@ -117,7 +118,7 @@ func TestEdgeOK(t *testing.T) {
 	cfg2.SurvivalCheck = false
 	s2 := newSel(t, cfg2, loss, surv, nil, &fakeApplier{})
 	called := false
-	s2.survival = func(string) *bool { called = true; return bptr(false) }
+	s2.survival = func(string, bool) *bool { called = true; return bptr(false) }
 	if !s2.edgeOK("clean", cfg2.KeepMax, "t", true) || called {
 		t.Error("with SurvivalCheck off, accept on tcp_loss and never probe")
 	}
@@ -130,7 +131,7 @@ func TestPickCleanBudgetAndFallback(t *testing.T) {
 	surv := map[string]*bool{"a": bptr(false), "b": bptr(false), "c": bptr(false), "d": bptr(false), "e": bptr(false)}
 	probes := []string{}
 	s := newSel(t, cfg, nil, surv, pool, &fakeApplier{})
-	s.survival = func(ip string) *bool { probes = append(probes, ip); return surv[ip] }
+	s.survival = func(ip string, _ bool) *bool { probes = append(probes, ip); return surv[ip] }
 	got := s.pickClean(pool, "", map[string]int64{}, 0, true)
 	if len(probes) != 2 {
 		t.Errorf("probe budget = %d, want 2", len(probes))
@@ -146,7 +147,7 @@ func TestPickCleanReturnsSurvivor(t *testing.T) {
 	surv := map[string]*bool{"a": bptr(false), "b": bptr(true)}
 	probes := []string{}
 	s := newSel(t, cfg, nil, surv, pool, &fakeApplier{})
-	s.survival = func(ip string) *bool {
+	s.survival = func(ip string, _ bool) *bool {
 		probes = append(probes, ip)
 		if v, ok := surv[ip]; ok {
 			return v

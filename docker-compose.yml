@@ -557,18 +557,10 @@ services:
       - SCAN_CRON=${CF_SCAN_CRON:-}
       - TZ=${TZ:-UTC}
       - SELECT_ENABLE=${CF_SELECT_ENABLE:-false}
-      - TLS_GATE_ENABLE=${CF_TLS_GATE_ENABLE:-false}
-      - PROBE_ENABLE=${CF_PROBE_ENABLE:-true}
-      - SCAN_PREFLIGHT=${CF_SCAN_PREFLIGHT:-true}
-      - SCAN_THREADS=${CF_SCAN_THREADS:-100}
-      - POOL_SIZE=${CF_POOL_SIZE:-40}
       - FALLBACK_FRONT_HOST=${FALLBACK_HOST:?set FALLBACK_HOST in .env}
       - PROBE_UUID=${CF_PROBE_UUID:-}
       - PROBE_PATH=${CF_PROBE_PATH:-/}
       - PROBE_ORIGIN_HOST=${CF_PROBE_ORIGIN_HOST:-}
-      - PROBE_FAKE_UTLS=${CF_PROBE_FAKE_UTLS:-firefox}
-      - PROBE_REAL_UTLS=${CF_PROBE_REAL_UTLS:-chrome}
-      - PROBE_FRAGMENT=${CF_PROBE_FRAGMENT:-false}
       # sni-spoofing containers the manager rewrites + restarts, in priority order; each
       # needs its directory mounted at /instances/<name> below. The last owns byedpi.
       - SNISPOOF_INSTANCES=${CF_SNISPOOF_INSTANCES:-sni-spoofing,sni-spoofing-fallback}

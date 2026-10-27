@@ -74,6 +74,16 @@ type Result struct {
 	Err      string  `json:"error,omitempty"`
 }
 
+// OK reports whether at most maxFail of the probes failed (nil while inconclusive).
+// Survived only says the edge is not dead; an edge where every probe failed is never OK.
+func (r Result) OK(maxFail float64) *bool {
+	if r.Survived == nil {
+		return nil
+	}
+	ok := r.FailRate <= maxFail && r.Fails < r.Probes
+	return &ok
+}
+
 // failedVerdict is the verdict for an edge that demonstrably failed the probe.
 func failedVerdict(ip string, count int, err error) Result {
 	survived := false

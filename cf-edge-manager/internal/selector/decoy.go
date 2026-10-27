@@ -68,7 +68,7 @@ func (s *Selector) checkDecoy(st *State, now int64, pool []string, sip string) b
 		s.log.Info("decoy: works on real path; keeping", "sni", cur)
 		return false
 	}
-	_, peerDecoys := s.peerSets()
+	_, peerDecoys := s.Peers()
 	var cands []string
 	for _, c := range s.decoys {
 		if c != cur && !slices.Contains(peerDecoys, c) {

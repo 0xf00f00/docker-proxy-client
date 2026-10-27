@@ -1,134 +1,94 @@
 # cf-edge-manager
 
 One Go service that unifies what used to be three: **discovery** (cfst scans &
-ranks Cloudflare edges), **runtime selection** (the in-process picker that
-rotates the in-use edge), and **real-path survival probing** (embedded
-sni-spoofing-go + a bundled xray binary). It exposes a small control API the
-dashboard talks to, plus `GET /manager/status`.
+ranks Cloudflare edges), **runtime selection** (rotates the in-use edge of each
+sni-spoofing instance), and **real-path probing** (embedded sni-spoofing-go + a
+bundled xray binary). It exposes a small control API the dashboard talks to, plus
+`GET /manager/status`.
 
-## Default behavior: nothing runs on its own
+## Nothing runs on its own
 
-> **Out of the box, this container does no automated work.** It boots, serves its
-> control API, and then waits. No scan runs until the dashboard (or you) triggers
-> one; no edge gets probed, rotated, or quarantined; `sni-spoofing` and
-> `sni-spoofing-fallback` are never rewritten or restarted.
+Out of the box this container only serves its control API. Every autonomous
+behavior is opt-in:
 
-Every autonomous behavior is **opt-in**.
+| Behavior | Switch | What it does when on |
+|----------|--------|----------------------|
+| **Scheduled scan** | `CF_SCAN_ENABLE` | Runs a cfst scan on `CF_SCAN_CRON` (default daily) and refreshes the edge pool. Never touches live routing. The dashboard can always scan on demand. |
+| **Edge selection** | `CF_SELECT_ENABLE` | Health-checks each instance's edge, rotates off bad ones, and **rewrites + restarts** the sni-spoofing containers. This is the one that changes live routing. |
 
-## The two automated behaviors
+## Configuration
 
-| Behavior | Switch (`.env` / internal) | Default | What it does when ON | Blast radius |
-|----------|---------------------------|---------|----------------------|--------------|
-| **Scheduled discovery scan** | `CF_SCAN_CRON` / `SCAN_CRON` | *empty (off)* | Runs a full cfst scan on a cron schedule and rewrites the edge pool. | Saturates probe traffic on the uplink for its duration; does **not** touch live routing. The dashboard can always scan on demand regardless. |
-| **Runtime edge selection** | `CF_SELECT_ENABLE` / `SELECT_ENABLE` | `false` | Health-checks the in-use edge, probes candidates, rotates off degraded edges, quarantines bad ones, and **rewrites + restarts `sni-spoofing` and `sni-spoofing-fallback`**. | The one that changes live routing; restarts an edge container when it repoints (rate-limited per instance by `RESTART_MIN_GAP_S`). |
-
-`SELECT_ENABLE` gates *all* runtime autonomy: the select loop, the real-path
-probe (`PROBE_ENABLE`), quarantine, config rewrites, and container restarts. With
-it off, none of those code paths run, no matter what the other knobs say.
-
-### Enabling them
-
-In `.env` (consumed by `docker-compose.yml`):
-
-```bash
-# Enable scheduled scans, Mondays 05:00 in TZ:
-CF_SCAN_CRON=0 0 5 * * 1
-TZ=America/New_York
-
-# Enable automatic edge rotation (requires the wire params below to be set):
-CF_SELECT_ENABLE=true
-CF_PROBE_UUID=...          # vless id of the main xray "proxy" outbound
-CF_PROBE_PATH=...          # xHTTP path of that outbound
-CF_PROBE_ORIGIN_HOST=...   # the fronted origin host
-```
-
-`CF_SCAN_CRON` is a 6-field cron with a **leading seconds column**
-(robfig/cron), evaluated in the container `TZ`. Empty disables it. If you set
-`CF_SELECT_ENABLE=true` without `CF_PROBE_UUID`/`CF_PROBE_ORIGIN_HOST`, the
-manager **fails loudly at startup** rather than silently mis-rotating.
-
-## Config reference
-
-Read from environment once at startup (no hot reload; restart to apply). Defaults
-live in [`internal/config/config.go`](internal/config/config.go). Names below are
-the internal `<NAME>`; prefix with `CF_` for the `.env` form.
-
-### Tier 1 — automation switches (the only thing most deployments set)
+Everything an operator is expected to set, in `.env`:
 
 | `.env` | Default | Purpose |
 |--------|---------|---------|
-| `CF_SCAN_CRON` | *empty* | Cron for scheduled scans. Empty = off. |
-| `TZ` | `UTC` | Timezone for `CF_SCAN_CRON`. |
-| `CF_SELECT_ENABLE` | `false` | Master switch for all runtime autonomy. |
-
-### Tier 2 — required when `CF_SELECT_ENABLE=true`
-
-Must match the live main xray `proxy` outbound + sni-spoofing config, or the
-real-path probe reads every edge as a false failure.
-
-| `.env` | Default | Purpose |
-|--------|---------|---------|
-| `CF_PROBE_UUID` | *(required)* | VLESS id of the main xray outbound. |
+| `CF_SCAN_ENABLE` | `false` | Scheduled scans. |
+| `CF_SCAN_CRON` | daily | 6-field cron with a **leading seconds column** (`0 0 5 * * 1` = Mondays 05:00), evaluated in `TZ`. |
+| `TZ` | `UTC` | Timezone for the cron and the dashboard's day boundaries. |
+| `CF_SELECT_ENABLE` | `false` | Edge selection. Needs the probe values below. |
+| `CF_SNISPOOF_INSTANCES` | `sni-spoofing,sni-spoofing-fallback` | Containers to manage, in priority order. Each name is the container and the directory holding its `config.ini`, mounted at `/instances/<name>` in `docker-compose.yml`. Add a name and a mount to manage another. |
+| `FALLBACK_HOST` | required | Fronted host of the fallback edge path. |
+| `CF_PROBE_UUID` | required with selection | VLESS id of the main xray outbound. |
 | `CF_PROBE_PATH` | `/` | xHTTP path of that outbound. |
-| `CF_PROBE_ORIGIN_HOST` | *(required)* | Fronted origin host. |
-| `FALLBACK_HOST` | *(required)* | Fallback edge-path fronted host (→ internal `FALLBACK_FRONT_HOST`). |
-| `CF_PROBE_FAKE_UTLS` | `firefox` | sni-spoofing decoy-hello uTLS fingerprint (the hello DPI inspects). |
-| `CF_PROBE_REAL_UTLS` | `chrome` | xray real-hello uTLS fingerprint (the hello that reaches CF/origin). |
-| `CF_PROBE_FRAGMENT` | `false` | Real-ClientHello fragmentation. Keep `false` — A/B showed fragment-on is *worse* here. |
+| `CF_PROBE_ORIGIN_HOST` | required with selection | Fronted origin host. |
 
-### sni-spoofing instances
+The probe values must match the live xray `proxy` outbound, or every edge reads as
+a failure; the manager refuses to start with selection on and no `CF_PROBE_UUID`
+or `CF_PROBE_ORIGIN_HOST`.
 
-`CF_SNISPOOF_INSTANCES` lists the sni-spoofing containers to manage (default
-`sni-spoofing,sni-spoofing-fallback`), in priority order. Each name is the
-container name and the directory holding its `config.ini`, which
-`docker-compose.yml` mounts at `/instances/<name>`. To manage another instance,
-add its name to the list and mount its directory.
+Everything else (thresholds, cadences, timeouts, pool size) is deliberately fixed:
+see `Defaults` in [`internal/config/config.go`](internal/config/config.go). To
+return to the inert state, unset both switches.
 
-### Decoy SNI
+## How an edge is judged
 
-`fake-sni` in each sni-spoofing config is kept working automatically (needs
-`PROBE_ENABLE`): when it stops working on the real path, the manager switches to a
-name from `internal/decoy/seeds.txt` that does, rewrites the config and restarts
-sni-spoofing. `POST /manager/decoys/screen` shows which names pass plain TLS now.
+Three signals, each covering what the one before cannot see:
 
-### Tier 3 — tuning knobs (defaults are fine; override only with a measured reason)
+1. **First-attempt TCP loss.** Connects with a timeout under the kernel's 1 s SYN
+   retransmit. With a longer timeout a retry rescues a lost SYN, which squares the
+   measured loss and hides most of an impaired path.
+2. **Real-path probe** (embedded sni-spoofing + xray). Graded: a running edge is
+   kept while at most half the probes fail, a candidate must pass every one.
+3. **Passive handshake signal.** sni-spoofing logs every proxied connection and
+   every one the edge never ACKed. The manager reads that share from the container
+   logs, so it measures real traffic under real load with no probe traffic. An edge
+   is bad when the lower 95% confidence bound of its failure share exceeds 8%.
+   Lines from before the container's last start or the network's last recovery are
+   ignored, and nothing is concluded while a restart is staged or when every busy
+   instance fails at once (that points at the decoy or the network, not one edge).
 
-Not wired into `docker-compose.yml`; the container reads them if set in the env.
+The probes only see a brief, low-load sample, so an edge that fails a fifth of real
+connections some of the time can pass them. Signal 3 is what catches it.
 
-**Discovery / cfst:** `SCAN_THREADS` (5), `SCAN_CONNECTS` (10), `EDGE_PORT`
-(443), `SCAN_LOSS_MAX` (0.10), `SCAN_LAT_MAX_MS` (1000), `POOL_SIZE` (10),
-`SCAN_TIMEOUT_S` (21600), `SCAN_PREFLIGHT` (true — skip a scan when no upstream is
-reachable at all), `RANGES_FILE` (`/cf-ranges.txt`), `OUT_DIR` (`/out`),
-`CFST_BIN` (`cfst`).
+## Not crying wolf
 
-**Interactive single-IP test:** `TEST_CONNECTS` (30), `TEST_CONCURRENCY` (3),
-`TEST_COOLDOWN_S` (30), `TEST_QUEUE_MAX` (64), `TEST_TIMEOUT_S` (180).
+The network this runs on can be down for hours to months, so acting on a bad
+reading is the exception:
 
-**Fake-SNI pre-rank gate** (`TLS_GATE_ENABLE`, false — measured *not* to match
-production, prefer the real-path probe; its SNI is the fallback config's `fake-sni`):
-`TLS_HOLD_S`, `TLS_TIMEOUT_S`, `TLS_GAP_S`, `TLS_BURST` (12), `TLS_FAIL_MAX` (0.10).
+- **Network gate.** Each cycle the manager measures control edges unrelated to the
+  instance being judged: the instances' own plus a random sample of the pool. If
+  most are unreachable (*blackout*) or lossy (*degraded*), no edge reading means
+  anything and it takes **no action**: no rotation, quarantine, restart, decoy
+  change, real-path probe or scheduled scan. One throttled edge among healthy
+  controls is not an outage and is judged on its own. A hold costs a few dozen SYNs
+  every five minutes and logs only when it changes.
+- **Hysteresis.** A hold starts at the first bad reading and ends only after three
+  consecutive good ones, so a flapping network never looks recovered. Evidence
+  gathered before the recovery is discarded.
+- **Confirmation.** A bad reading must repeat on three consecutive checks (about
+  twenty minutes); one good check starts the count over.
+- **Circuit breaker.** An instance changes edge at most four times a day.
+- **Strict adoption.** A replacement must pass every probe with near-zero loss.
+- **Scans.** A scan that finds under a quarter of the pool size keeps the previous
+  pool, since it ran in a bad window.
 
-**Selection loop cadence/thresholds** (active only when `SELECT_ENABLE=true`):
-`SELECT_INTERVAL_S` (600), `SELECT_MAX_BACKOFF_S` (21600), `SELECT_SLEEP_CAP_S`
-(300), `KEEP_LOSS_MAX` (0.20), `PICK_LOSS_MAX` (0.10), `SELECT_MAX_CANDIDATES`
-(3), `PROBE_MAX_CANDIDATES` (2), `RESTART_MIN_GAP_S` (300), `QUARANTINE_TTL_S`
-(3600), `LOSS_CONNECTS` (10), `LOSS_TIMEOUT_S` (2).
+`GET /manager/status` shows the network state and each instance's edge, decoy and
+current handshake failure share.
 
-**Real-path survival probe** (`PROBE_ENABLE`, true — gated by `SELECT_ENABLE`;
-false reverts the picker to loss-only): `PROBE_URL`
-(`http://www.gstatic.com/generate_204`), `XRAY_BIN`, `PROBE_COUNT` (4),
-`PROBE_CONCURRENCY` (2), `PROBE_MIN_GAP_S` (10), `PROBE_MAX_GAP_S` (300),
-`PROBE_CACHE_TTL_S` (1800).
+## Decoy SNI
 
-**Apply targets / wiring:** `API_ADDR` (`:8088`), `COREDNS_HOSTS`,
-`INSTANCE_DIR` (`/instances`), `STATE_DIR` (`/state`), `DOCKER_SOCK`.
-
-## Disabling everything (return to inert state)
-
-```bash
-CF_SCAN_CRON=          # no scheduled scans
-CF_SELECT_ENABLE=false # no rotation, probing, quarantine, or container restarts
-```
-
-The dashboard's on-demand scan/test endpoints keep working — those are explicit
-user actions, not automation.
+`fake-sni` in each sni-spoofing config is kept working automatically: when it stops
+working on the real path the manager switches to a name from
+`internal/decoy/seeds.txt` that does (never one another instance uses), rewrites the
+config and restarts the container. `POST /manager/decoys/screen` shows which names
+pass plain TLS now.

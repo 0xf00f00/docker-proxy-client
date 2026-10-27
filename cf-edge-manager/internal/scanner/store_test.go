@@ -121,3 +121,19 @@ func TestTestResultEviction(t *testing.T) {
 		t.Error("newest result (4.4.4.4) should be retained")
 	}
 }
+
+func TestThinScan(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		prev, n, size int
+		keep          bool
+	}{
+		{"healthy scan replaces", 40, 38, 40, false},
+		{"a handful of edges does not replace a full pool", 40, 3, 40, true},
+		{"nothing to protect on the first run", 0, 3, 40, false},
+	} {
+		if got := thinScan(tc.prev, tc.n, tc.size, 0.25); got != tc.keep {
+			t.Errorf("%s: thinScan = %v, want %v", tc.name, got, tc.keep)
+		}
+	}
+}

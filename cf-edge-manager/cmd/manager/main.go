@@ -44,26 +44,6 @@ func main() {
 
 	svc.Start(ctx)
 
-	// Scheduled discovery scan, gated by the on/off switch (SCAN_ENABLE, off by
-	// default, editable from the dashboard). Cadence from SCAN_CRON, or a daily
-	// default when unset. The dashboard can still POST /scans on demand either way.
-	if cfg.ScanEnable {
-		schedule := cfg.ScanCron
-		if schedule == "" {
-			schedule = defaultScanCron
-		}
-		c := cron.New(cron.WithSeconds(), cron.WithLocation(time.Local))
-		if _, err := c.AddFunc(schedule, func() {
-			log.Info("scheduled scan enqueued", "job", svc.EnqueueScan(), "cron", schedule)
-		}); err != nil {
-			log.Error("invalid SCAN_CRON; no scheduled scans", "cron", schedule, "err", err)
-		} else {
-			c.Start()
-			defer c.Stop()
-			log.Info("scan scheduler started", "cron", schedule, "tz", time.Local.String())
-		}
-	}
-
 	// Runtime edge selection (the in-process picker+prober). Optional: off keeps
 	// this a pure scanner. When on, it runs its select loop and exposes
 	// GET /manager/status alongside the scanner's control API. Constructed before
@@ -74,6 +54,32 @@ func main() {
 		if err := mgr.Start(ctx); err != nil {
 			log.Error("manager start failed; continuing as scanner-only", "err", err)
 			mgr = nil
+		}
+	}
+
+	// Scheduled discovery scan, gated by the on/off switch (SCAN_ENABLE, off by
+	// default, editable from the dashboard). Cadence from SCAN_CRON, or a daily
+	// default when unset. The dashboard can still POST /scans on demand either way.
+	if cfg.ScanEnable {
+		schedule := cfg.ScanCron
+		if schedule == "" {
+			schedule = defaultScanCron
+		}
+		c := cron.New(cron.WithSeconds(), cron.WithLocation(time.Local))
+		if _, err := c.AddFunc(schedule, func() {
+			if mgr != nil {
+				if why := mgr.Hold(); why != "" {
+					log.Info("scheduled scan skipped: network not trusted", "state", why)
+					return
+				}
+			}
+			log.Info("scheduled scan enqueued", "job", svc.EnqueueScan(), "cron", schedule)
+		}); err != nil {
+			log.Error("invalid SCAN_CRON; no scheduled scans", "cron", schedule, "err", err)
+		} else {
+			c.Start()
+			defer c.Stop()
+			log.Info("scan scheduler started", "cron", schedule, "tz", time.Local.String())
 		}
 	}
 
@@ -134,7 +140,7 @@ func buildSurvivalProbe(cfg config.Config, mgr *manager.Manager, log *slog.Logge
 	if mgr != nil {
 		log.Info("real-path test tier: reusing manager prober")
 		return func(ctx context.Context, ip string) scanner.SurvivalResult {
-			return toSurvival(mgr.ProbeSurvival(ctx, ip))
+			return toSurvival(mgr.ProbeSurvival(ctx, ip), cfg.ProbePickFailMax)
 		}
 	}
 	log.Info("real-path test tier: ephemeral per-test prober")
@@ -144,13 +150,14 @@ func buildSurvivalProbe(cfg config.Config, mgr *manager.Manager, log *slog.Logge
 			return scanner.SurvivalResult{Err: "xray start: " + err.Error()}
 		}
 		defer p.Stop()
-		return toSurvival(p.Probe(ctx, ip, realpath.Options{Force: true, Interactive: true}))
+		return toSurvival(p.Probe(ctx, ip, realpath.Options{Force: true, Interactive: true}), cfg.ProbePickFailMax)
 	}
 }
 
-func toSurvival(r realpath.Result) scanner.SurvivalResult {
+// toSurvival grades a probe like a candidate, so the dashboard never calls a flaky edge good.
+func toSurvival(r realpath.Result, maxFail float64) scanner.SurvivalResult {
 	return scanner.SurvivalResult{
-		Survived: r.Survived, FailRate: r.FailRate,
+		Survived: r.OK(maxFail), FailRate: r.FailRate,
 		Fails: r.Fails, Probes: r.Probes, Err: r.Err,
 	}
 }

@@ -2,32 +2,62 @@
 // (coredns hosts) and sni-spoofing (.ini connect=, fake-sni=) configs, and restarting
 // the sni-spoofing container. It is the "apply half" of the old picker — pure
 // I/O, no policy. The selector owns WHEN to restart (rate-limit); this owns HOW.
-//
-// Docker restart talks to the engine over the unix socket directly (a one-line
-// POST), avoiding the heavy docker SDK dependency.
 package apply
 
 import (
 	"cmp"
 	"context"
 	"fmt"
-	"net"
-	"net/http"
 	"net/netip"
 	"os"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/0xf00f00/cf-edge-manager/internal/decoy"
+	"github.com/0xf00f00/cf-edge-manager/internal/dockerapi"
 )
 
+type iniKey struct {
+	label string
+	line  *regexp.Regexp // the whole line, group 1 being everything before the value
+	val   *regexp.Regexp // group 1 being the value
+}
+
+func newIniKey(label, key, valueChars string) iniKey {
+	return iniKey{
+		label: label,
+		line:  regexp.MustCompile(`(?m)^([ \t]*` + key + `[ \t]*=[ \t]*).*$`),
+		val:   regexp.MustCompile(`(?m)^[ \t]*` + key + `[ \t]*=[ \t]*(` + valueChars + `+)`),
+	}
+}
+
 var (
-	connectRe    = regexp.MustCompile(`(?m)^([ \t]*connect[ \t]*=[ \t]*).*$`)
-	connectValRe = regexp.MustCompile(`(?m)^[ \t]*connect[ \t]*=[ \t]*([^:\s#;]+)`)
-	fakeSNIRe    = regexp.MustCompile(`(?m)^([ \t]*fake[-_]sni[ \t]*=[ \t]*).*$`)
-	fakeSNIValRe = regexp.MustCompile(`(?m)^[ \t]*fake[-_]sni[ \t]*=[ \t]*([^\s#;]+)`)
+	connectKey = newIniKey("connect", `connect`, `[^:\s#;]`) // the host part of host:port
+	fakeSNIKey = newIniKey("fake-sni", `fake[-_]sni`, `[^\s#;]`)
 )
+
+func (k iniKey) get(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	if m := k.val.FindStringSubmatch(string(b)); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+// value is spliced into a regexp replacement: callers must keep `$` and newlines out of it.
+func (k iniKey) set(path, value string) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if !k.line.Match(b) {
+		return fmt.Errorf("%s has no %s line", path, k.label)
+	}
+	return os.WriteFile(path, k.line.ReplaceAll(b, []byte("${1}"+value)), 0o644) //nolint:gosec
+}
 
 // Applier rewrites the two edge-path configs and restarts the snispoof container.
 type Applier struct {
@@ -55,16 +85,7 @@ func (a *Applier) CurrentByedpi() string {
 }
 
 // CurrentSnispoof returns the edge IP currently in the sni-spoofing .ini connect=.
-func (a *Applier) CurrentSnispoof() string {
-	b, err := os.ReadFile(a.SnispoofConf)
-	if err != nil {
-		return ""
-	}
-	if m := connectValRe.FindStringSubmatch(string(b)); m != nil {
-		return m[1]
-	}
-	return ""
-}
+func (a *Applier) CurrentSnispoof() string { return connectKey.get(a.SnispoofConf) }
 
 // WriteByedpi rewrites the coredns hosts file to point the front domain at ip
 // (no restart needed — coredns re-reads the hosts file).
@@ -80,36 +101,15 @@ func (a *Applier) WriteByedpi(ip string) error {
 
 // WriteSnispoof rewrites the .ini connect= line to ip:Port (no restart).
 func (a *Applier) WriteSnispoof(ip string) error {
-	if _, err := netip.ParseAddr(ip); err != nil { // also keeps $ and newlines out of the replacement
+	if _, err := netip.ParseAddr(ip); err != nil {
 		return fmt.Errorf("refusing edge %q: %w", ip, err)
 	}
-	b, err := os.ReadFile(a.SnispoofConf)
-	if err != nil {
-		return err
-	}
-	if !connectRe.Match(b) {
-		return fmt.Errorf("%s has no connect line", a.SnispoofConf)
-	}
-	out := connectRe.ReplaceAll(b, []byte(fmt.Sprintf("${1}%s:%d", ip, a.Port)))
-	return os.WriteFile(a.SnispoofConf, out, 0o644) //nolint:gosec
+	return connectKey.set(a.SnispoofConf, fmt.Sprintf("%s:%d", ip, a.Port))
 }
 
 // RestartSnispoof restarts the sni-spoofing container via the docker engine API.
 func (a *Applier) RestartSnispoof() error {
-	tr := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "unix", a.DockerSock)
-	}}
-	cl := &http.Client{Transport: tr, Timeout: 30 * time.Second}
-	url := fmt.Sprintf("http://docker/containers/%s/restart?t=10", a.SnispoofName)
-	resp, err := cl.Post(url, "application/json", nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("docker restart %s: status %d", a.SnispoofName, resp.StatusCode)
-	}
-	return nil
+	return dockerapi.New(a.DockerSock).Restart(context.Background(), a.SnispoofName)
 }
 
 // LiveFakeSNI is the decoy in the sni-spoofing .ini at path, else decoy.Default.
@@ -118,28 +118,12 @@ func LiveFakeSNI(path string) string {
 }
 
 // CurrentFakeSNI returns the decoy SNI in the sni-spoofing .ini fake-sni= line.
-func (a *Applier) CurrentFakeSNI() string {
-	b, err := os.ReadFile(a.SnispoofConf)
-	if err != nil {
-		return ""
-	}
-	if m := fakeSNIValRe.FindStringSubmatch(string(b)); m != nil {
-		return m[1]
-	}
-	return ""
-}
+func (a *Applier) CurrentFakeSNI() string { return fakeSNIKey.get(a.SnispoofConf) }
 
 // WriteFakeSNI rewrites the .ini fake-sni= line (no restart).
 func (a *Applier) WriteFakeSNI(sni string) error {
-	if !decoy.Valid(sni) { // also keeps $ and newlines out of the replacement
+	if !decoy.Valid(sni) {
 		return fmt.Errorf("refusing invalid decoy %q", sni)
 	}
-	b, err := os.ReadFile(a.SnispoofConf)
-	if err != nil {
-		return err
-	}
-	if !fakeSNIRe.Match(b) {
-		return fmt.Errorf("%s has no fake-sni line", a.SnispoofConf)
-	}
-	return os.WriteFile(a.SnispoofConf, fakeSNIRe.ReplaceAll(b, []byte("${1}"+sni)), 0o644) //nolint:gosec
+	return fakeSNIKey.set(a.SnispoofConf, sni)
 }

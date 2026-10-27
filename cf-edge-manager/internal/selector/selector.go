@@ -10,6 +10,7 @@ package selector
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"slices"
@@ -40,6 +41,18 @@ type Config struct {
 	QuarantineTTL      int64   // skip a confirmed-bad in-use IP this long (s)
 	SurvivalCheck      bool    // gate the real-path tier (false = loss-only)
 	NoByedpi           bool    // manage the snispoof path only
+
+	ConfirmTicks int   // consecutive bad checks before an edge is replaced; a good check resets the count
+	MaxRotations int   // edge changes per path per 24h before the circuit breaker stops further ones (0 = unlimited)
+	HoldInterval int64 // recheck cadence while the network isn't trusted (s)
+}
+
+// Ack is the passive verdict on an instance's running edge.
+type Ack struct {
+	Ratio    float64 // share of recent connections that hit an ACK timeout
+	Samples  int     // connections in that window
+	Bad      bool    // credibly above the limit
+	Systemic bool    // every instance with enough traffic is bad: not one edge's fault
 }
 
 // Peers reports the edges and decoys the other sni-spoofing instances are on, so
@@ -56,40 +69,61 @@ type State struct {
 
 	DecoyCheckAfter int64  `json:"decoy_check_after,omitempty"`
 	DecoyDead       string `json:"decoy_dead,omitempty"` // live decoy judged blocked by name
+
+	Hold      string             `json:"hold,omitempty"`      // why the last tick took no action (network not trusted)
+	Bad       map[string]int     `json:"bad,omitempty"`       // per path: consecutive checks that found the edge bad
+	Rotations map[string][]int64 `json:"rotations,omitempty"` // per path: when the edge was last changed (24h)
 }
 
 // Selector holds policy + injected probes/IO.
 type Selector struct {
 	cfg       Config
 	log       *slog.Logger
-	loss      func(ip string) float64 // tcp_loss tier
-	survival  func(ip string) *bool   // real-path tier; nil == no signal
-	pool      func() []string         // best-first scanned pool
+	loss      func(ip string) float64            // tcp_loss tier
+	survival  func(ip string, strict bool) *bool // real-path tier (strict: adopting a candidate); nil == no signal
+	pool      func() []string                    // best-first scanned pool
 	apply     Applier
 	statePath string
 
 	hello  decoy.Check                // plain TLS hello; nil == decoy self-healing off
 	trial  func(ip, sni string) *bool // real-path probe with decoy sni
 	decoys []string                   // candidate decoys, preferred first
-	peers  Peers                      // nil == the only instance
+	Hooks
 }
 
-// SetPeers makes this selector keep clear of the other instances' edges and decoys.
-func (s *Selector) SetPeers(p Peers) { s.peers = p }
+// Hooks are the optional collaborators; the zero value is a lone, ungated selector.
+type Hooks struct {
+	Peers Peers         // other instances' edges and decoys to stay clear of
+	Ack   func() Ack    // passive handshake signal for this instance
+	Hold  func() string // why nothing should change right now ("" = go ahead)
+}
 
-func (s *Selector) peerSets() (edges, decoys []string) {
-	if s.peers == nil {
-		return nil, nil
+// Use installs hooks; unset fields keep their defaults.
+func (s *Selector) Use(h Hooks) {
+	if h.Peers != nil {
+		s.Peers = h.Peers
 	}
-	return s.peers()
+	if h.Ack != nil {
+		s.Ack = h.Ack
+	}
+	if h.Hold != nil {
+		s.Hold = h.Hold
+	}
 }
 
 // New builds a Selector from config, injected probes (loss/survival), a pool
 // reader, and an Applier for side-effects.
 func New(cfg Config, log *slog.Logger, statePath string,
-	loss func(string) float64, survival func(string) *bool, pool func() []string, apply Applier,
+	loss func(string) float64, survival func(string, bool) *bool, pool func() []string, apply Applier,
 ) *Selector {
-	return &Selector{cfg: cfg, log: log, statePath: statePath, loss: loss, survival: survival, pool: pool, apply: apply}
+	return &Selector{
+		cfg: cfg, log: log, statePath: statePath, loss: loss, survival: survival, pool: pool, apply: apply,
+		Hooks: Hooks{
+			Peers: func() ([]string, []string) { return nil, nil },
+			Ack:   func() Ack { return Ack{} },
+			Hold:  func() string { return "" },
+		},
+	}
 }
 
 func (s *Selector) loadState() State {
@@ -99,6 +133,12 @@ func (s *Selector) loadState() State {
 	}
 	if st.Quarantine == nil {
 		st.Quarantine = map[string]int64{}
+	}
+	if st.Bad == nil {
+		st.Bad = map[string]int{}
+	}
+	if st.Rotations == nil {
+		st.Rotations = map[string][]int64{}
 	}
 	return st
 }
@@ -110,23 +150,24 @@ func (s *Selector) saveState(st State) {
 }
 
 // edgeOK is the tiered health check: cheap tcp_loss first (a dead edge is
-// rejected without paying for the probe), then the real-path survival probe.
-// survived==false rotates the edge; survived==nil (no signal) keeps it (we never
-// blame an edge for the prober being unavailable).
+// condemned without paying for the probe), then the real-path probe. A nil survival
+// (no signal) keeps the edge: never blame an edge for the prober being unavailable.
 func (s *Selector) edgeOK(ip string, lossMax float64, label string, useSurvival bool) bool {
 	loss := s.loss(ip)
 	if loss > lossMax {
-		s.log.Info("edge rejected: tcp_loss", "label", label, "ip", ip, "loss", loss, "max", lossMax)
+		s.log.Info("edge bad: tcp_loss", "label", label, "ip", ip, "loss", loss, "max", lossMax)
 		return false
 	}
 	if !s.cfg.SurvivalCheck || !useSurvival {
+		s.log.Info("edge ok", "label", label, "ip", ip, "loss", loss)
 		return true
 	}
-	survived := s.survival(ip)
+	survived := s.survival(ip, false)
 	if survived != nil && !*survived {
-		s.log.Info("edge rejected: real-path FAILED (loss-blind case)", "label", label, "ip", ip, "loss", loss)
+		s.log.Info("edge bad: real-path FAILED (loss-blind case)", "label", label, "ip", ip, "loss", loss)
 		return false
 	}
+	s.log.Info("edge ok", "label", label, "ip", ip, "loss", loss, "real_path", survStr(survived))
 	return true
 }
 
@@ -168,7 +209,7 @@ func (s *Selector) pickClean(pool []string, exclude string, q map[string]int64, 
 		}
 		if probed < s.cfg.MaxProbeCandidates {
 			probed++
-			survived := s.survival(ip)
+			survived := s.survival(ip, true)
 			if survived != nil && !*survived {
 				s.log.Info("candidate rejected: real-path FAILED", "ip", ip, "loss", loss)
 				continue
@@ -186,28 +227,52 @@ func (s *Selector) pickClean(pool []string, exclude string, q map[string]int64, 
 	return fallback
 }
 
-// settle returns (ip_in_use, healthy) for one path, repointing it if degraded;
-// realPath=false judges it on tcp_loss alone.
+// settle returns (ip_in_use, healthy) for one path, repointing it if bad. A bad reading
+// from any source must persist for ConfirmTicks checks; a good check resets the count.
 func (s *Selector) settle(name, current string, pool []string, other string,
-	q map[string]int64, now int64, realPath bool, apply func(string),
+	q map[string]int64, now int64, realPath bool, degraded string, st *State, apply func(string),
 ) (string, bool) {
-	if current != "" && s.edgeOK(current, s.cfg.KeepMax, name+" keep", realPath) {
-		delete(q, current)
-		s.log.Info("path healthy", "path", name, "ip", current)
-		return current, true
+	if current != "" {
+		if degraded != "" {
+			s.log.Info("edge bad: "+degraded, "path", name, "ip", current)
+		}
+		if degraded == "" && s.edgeOK(current, s.cfg.KeepMax, name+" keep", realPath) {
+			delete(st.Bad, name)
+			delete(q, current)
+			s.log.Info("path healthy", "path", name, "ip", current)
+			return current, true
+		}
+		if st.Bad[name]++; st.Bad[name] < s.cfg.ConfirmTicks {
+			s.log.Info("path bad; replacing it only if that persists", "path", name, "ip", current, "checks", st.Bad[name], "need", s.cfg.ConfirmTicks)
+			return current, true
+		}
 	}
 	s.log.Info("path degraded/unset; seeking replacement", "path", name, "ip", current)
+	if current != "" && !s.rotationAllowed(st, name, now) {
+		s.log.Warn("rotation budget spent; keeping the edge", "path", name, "ip", current, "max_per_day", s.cfg.MaxRotations)
+		return current, false
+	}
 	if current != "" {
 		q[current] = now + s.cfg.QuarantineTTL
 		s.log.Info("quarantined", "ip", current, "ttl", s.cfg.QuarantineTTL)
 	}
 	next := s.pickClean(pool, other, q, now, realPath)
-	if next != "" {
-		apply(next)
-		return next, true
+	if next == "" {
+		s.log.Info("no clean candidate; leaving", "path", name, "ip", current)
+		return current, false
 	}
-	s.log.Info("no clean candidate; leaving", "path", name, "ip", current)
-	return current, false
+	apply(next)
+	delete(st.Bad, name)
+	st.Rotations[name] = append(st.Rotations[name], now)
+	return next, true
+}
+
+// rotationAllowed is the circuit breaker: each change costs a restart, and frequent
+// swaps mean the edge is not the problem.
+func (s *Selector) rotationAllowed(st *State, name string, now int64) bool {
+	recent := slices.DeleteFunc(slices.Clone(st.Rotations[name]), func(t int64) bool { return t <= now-86400 })
+	st.Rotations[name] = recent
+	return s.cfg.MaxRotations <= 0 || len(recent) < s.cfg.MaxRotations
 }
 
 // Tick runs one decision pass and returns the seconds until the next due run.
@@ -216,7 +281,14 @@ func (s *Selector) Tick(now int64) int64 {
 	if now < st.NextRun {
 		return st.NextRun - now
 	}
-	peerEdges, _ := s.peerSets()
+	if why := s.Hold(); why != "" {
+		return s.hold(&st, now, why)
+	}
+	if st.Hold != "" {
+		s.log.Info("network trusted again; resuming", "was", st.Hold)
+		st.Hold = ""
+	}
+	peerEdges, _ := s.Peers()
 	pool := slices.DeleteFunc(slices.Clone(s.pool()), func(ip string) bool { return slices.Contains(peerEdges, ip) })
 	if len(pool) == 0 {
 		s.log.Info("pool empty/missing; keeping current edges")
@@ -265,10 +337,10 @@ func (s *Selector) Tick(now int64) int64 {
 	paths, healthy := 1, 0
 	if !s.cfg.NoByedpi {
 		var bok bool
-		bip, bok = s.settle("byedpi", bip, pool, sip, q, now, byedpiRealPath, applyB)
+		bip, bok = s.settle("byedpi", bip, pool, sip, q, now, byedpiRealPath, "", &st, applyB)
 		paths, healthy = 2, b2i(bok)
 	}
-	sip, sok := s.settle("snispoof", sip, pool, bip, q, now, true, applyS)
+	sip, sok := s.settle("snispoof", sip, pool, bip, q, now, true, s.ackDegraded(st), &st, applyS)
 	healthy += b2i(sok)
 
 	// distinct-IP guard: the paths must not share fate.
@@ -312,6 +384,35 @@ func (s *Selector) Tick(now int64) int64 {
 	st.NextRun = now + delay
 	s.saveState(st)
 	return delay
+}
+
+// hold takes no action: with the network down or lossy no edge reading means anything.
+func (s *Selector) hold(st *State, now int64, why string) int64 {
+	if st.Hold == "" {
+		s.log.Warn("network not trusted; taking no action until it settles", "state", why)
+	}
+	st.Hold, st.Bad = why, map[string]int{}
+	st.NextRun = now + s.cfg.HoldInterval
+	s.saveState(*st)
+	return s.cfg.HoldInterval
+}
+
+// ackDegraded is why the running edge should go despite passing its probes. Empty when
+// there is no signal, when every instance fails alike (not this edge's fault), or while a
+// staged restart means the log still describes the previous edge.
+func (s *Selector) ackDegraded(st State) string {
+	if st.RestartPending {
+		return ""
+	}
+	a := s.Ack()
+	switch {
+	case !a.Bad:
+		return ""
+	case a.Systemic:
+		s.log.Warn("every instance is failing handshakes; not rotating on that signal", "ratio", a.Ratio, "samples", a.Samples)
+		return ""
+	}
+	return fmt.Sprintf("%.0f%% of %d recent connections hit an ACK timeout", a.Ratio*100, a.Samples)
 }
 
 func b2i(b bool) int {

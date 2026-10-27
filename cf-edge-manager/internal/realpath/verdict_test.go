@@ -27,3 +27,23 @@ func TestFailedVerdictIsNotSurvived(t *testing.T) {
 		t.Error("Err is empty: the cause should survive into the result")
 	}
 }
+
+func TestResultOK(t *testing.T) {
+	yes := true
+	for _, tc := range []struct {
+		name string
+		r    Result
+		max  float64
+		want *bool
+	}{
+		{"inconclusive stays inconclusive", Result{}, 0.5, nil},
+		{"one failure fails the strict bar", Result{Survived: &yes, Fails: 1, Probes: 8, FailRate: 0.125}, 0, new(bool)},
+		{"one failure passes the keep bar", Result{Survived: &yes, Fails: 1, Probes: 8, FailRate: 0.125}, 0.5, &yes},
+		{"all failed is never OK", Result{Survived: new(bool), Fails: 8, Probes: 8, FailRate: 1}, 1, new(bool)},
+	} {
+		got := tc.r.OK(tc.max)
+		if (got == nil) != (tc.want == nil) || (got != nil && *got != *tc.want) {
+			t.Errorf("%s: OK(%v) = %v, want %v", tc.name, tc.max, got, tc.want)
+		}
+	}
+}

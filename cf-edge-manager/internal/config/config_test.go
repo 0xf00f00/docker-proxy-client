@@ -28,12 +28,31 @@ func TestParseInstancesRejects(t *testing.T) {
 	}
 }
 
-func TestPrimaryConf(t *testing.T) {
-	c := Config{Instances: []Instance{{Name: "a", Conf: "/i/a/config.ini"}, {Name: "b", Conf: "/i/b/config.ini"}}}
-	if got := c.PrimaryConf(); got != "/i/a/config.ini" {
-		t.Errorf("PrimaryConf = %q, want the first instance", got)
+func TestLoadOnlyTakesTheOperatorsSettings(t *testing.T) {
+	t.Setenv("SCAN_ENABLE", "true")
+	t.Setenv("SCAN_CRON", "0 0 5 * * 1")
+	t.Setenv("SELECT_ENABLE", "true")
+	t.Setenv("PROBE_UUID", "id")
+	t.Setenv("PROBE_ORIGIN_HOST", "origin.example")
+	t.Setenv("SNISPOOF_INSTANCES", "solo")
+	// fixed behavior must not be steerable from the environment
+	t.Setenv("KEEP_LOSS_MAX", "0.99")
+	t.Setenv("POOL_SIZE", "1")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if (Config{}).PrimaryConf() != "" {
-		t.Error("no instances must give an empty path")
+	if !c.ScanEnable || c.ScanCron != "0 0 5 * * 1" || !c.SelectEnable || c.ProbeUUID != "id" || len(c.Instances) != 1 || c.ProbePath != "/" {
+		t.Errorf("operator settings not applied: %+v", c)
+	}
+	if d := Defaults(); c.KeepMax != d.KeepMax || c.PoolSize != d.PoolSize {
+		t.Errorf("keep=%v pool=%d: fixed behavior leaked from the environment", c.KeepMax, c.PoolSize)
+	}
+}
+
+func TestSelectNeedsTheWireIdentity(t *testing.T) {
+	t.Setenv("SELECT_ENABLE", "true")
+	if _, err := Load(); err == nil {
+		t.Error("selection without PROBE_UUID would read every edge as failed: refuse to start")
 	}
 }
