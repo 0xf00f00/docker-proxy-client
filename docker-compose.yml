@@ -23,6 +23,23 @@ x-dns-healthcheck: &dns-healthcheck
   retries: 3
   start_period: 120s
 
+# The host's tcp_notsent_lowat doesn't cross into a bridge netns; capping it per container keeps a
+# saturated tunnel from bloating call latency by seconds (~halves loaded latency, validated A/B).
+x-lowat-sysctls: &lowat-sysctls
+  - net.ipv4.tcp_notsent_lowat=16384
+
+x-sni-spoofing: &sni-spoofing
+  image: ghcr.io/aleskxyz/sni-spoofing-go:0.5.1
+  logging: *default-logging
+  restart: *default-restart
+  sysctls: *lowat-sysctls
+  cap_add:
+    - NET_ADMIN
+    - NET_RAW
+  healthcheck:
+    test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/40443'"]
+    <<: *proxy-healthcheck
+
 services:
   coredns:
     image: coredns/coredns:latest
@@ -112,63 +129,6 @@ services:
     depends_on:
       - clash
 
-  # Disabled: Uncomment these services and the matching clash entries to re-enable.
-  # Legacy klzgrad naive client. TCP only.
-  # naive:
-  #   image: ghcr.io/0xf00f00/naive_proxy:latest
-  #   container_name: naive
-  #   logging: *default-logging
-  #   restart: *default-restart
-  #   labels:
-  #     - autoheal=true
-  #     - dashboard.enable=true
-  #     - dashboard.category=proxy
-  #     - dashboard.name=NaiveProxy (TCP)
-  #     - dashboard.protocol=socks5
-  #     - dashboard.port=1080
-  #     - dashboard.env=NAIVE_SERVER,NAIVE_USER,NAIVE_PASSWORD
-  #   network_mode: host
-  #   dns: *default-dns
-  #   ulimits:
-  #     nofile:
-  #       soft: 65536
-  #       hard: 1048576
-  #   healthcheck:
-  #     test: ["CMD", "bash", "-c", "< /dev/tcp/127.0.0.1/1080 || exit 1"]
-  #     <<: *proxy-healthcheck
-  #   command: naive --listen=socks://0.0.0.0:1080 --proxy=https://${NAIVE_USER}:${NAIVE_PASSWORD}@${NAIVE_SERVER}
-
-  # sing-box naive client with UDP-over-TCP (UoT v2).
-  # naive-uot:
-  #   image: ghcr.io/sagernet/sing-box:latest
-  #   container_name: naive-uot
-  #   logging: *default-logging
-  #   restart: *default-restart
-  #   labels:
-  #     - autoheal=true
-  #     - dashboard.enable=true
-  #     - dashboard.category=proxy
-  #     - dashboard.name=NaiveProxy (UoT)
-  #     - dashboard.protocol=socks5
-  #     - dashboard.port=1081
-  #     - dashboard.env=NAIVE_SERVER,NAIVE_USER,NAIVE_PASSWORD
-  #   network_mode: host
-  #   dns: *default-dns
-  #   ulimits:
-  #     nofile:
-  #       soft: 65536
-  #       hard: 1048576
-  #   healthcheck:
-  #     test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 1081 || exit 1"]
-  #     <<: *proxy-healthcheck
-  #   environment:
-  #     - NAIVE_SERVER=${NAIVE_SERVER}
-  #     - NAIVE_USER=${NAIVE_USER}
-  #     - NAIVE_PASSWORD=${NAIVE_PASSWORD}
-  #   volumes:
-  #     - ./naive-uot/entrypoint.sh:/entrypoint.sh:ro
-  #   entrypoint: ["/bin/sh", "/entrypoint.sh"]
-
   clash:
     image: metacubex/mihomo:latest
     container_name: clash
@@ -202,16 +162,12 @@ services:
       - ./clash/geoip.metadb:/root/.config/clash/geoip.metadb
     dns: *default-dns
     extra_hosts:
-      # - "naive:127.0.0.1"
-      # - "naive-uot:127.0.0.1"
       - "psiphon:10.20.0.14"
       - "frpc-proxy:10.20.0.15"
       - "xray:10.20.0.18"
       - "xray-fallback:10.20.0.24"
       - "byedpi:10.20.0.20"
     depends_on:
-      # - naive
-      # - naive-uot
       - frpc-proxy
 
   singbox-sub:
@@ -244,10 +200,7 @@ services:
     command: -D /var/lib/sing-box -C /etc/sing-box/ run
 
   goose-relay:
-    build:
-      context: ./goose-relay
-      args:
-        GOOSE_VERSION: ${GOOSE_VERSION:-v1.7.1}
+    build: ./goose-relay
     container_name: goose-relay
     logging: *default-logging
     restart: *default-restart
@@ -274,7 +227,7 @@ services:
       - ./goose-relay/client_config.json:/etc/goose-relay/client_config.json:ro
 
   skirk:
-    image: ghcr.io/oiyoa/skirk:${SKIRK_VERSION:-latest}
+    image: ghcr.io/oiyoa/skirk:latest
     container_name: skirk
     logging: *default-logging
     restart: *default-restart
@@ -285,7 +238,7 @@ services:
       - dashboard.name=Skirk
       - dashboard.protocol=socks5
       - dashboard.port=18080
-      - dashboard.env=SKIRK_CLIENT_CONFIG,SKIRK_POLL_MS,SKIRK_UPLOAD_CONCURRENCY,SKIRK_DOWNLOAD_CONCURRENCY
+      - dashboard.env=SKIRK_CLIENT_CONFIG
     dns: *default-dns
     networks:
       direct_internet:
@@ -304,23 +257,18 @@ services:
       - --route-mode
       - google_front_pinned
       - --poll-ms
-      - ${SKIRK_POLL_MS:-1000}
+      - "1000"
       - --upload-concurrency
-      - ${SKIRK_UPLOAD_CONCURRENCY:-0}
+      - "0"
       - --download-concurrency
-      - ${SKIRK_DOWNLOAD_CONCURRENCY:-0}
+      - "0"
 
   xray:
     image: ghcr.io/xtls/xray-core:latest
     container_name: xray
     logging: *default-logging
     restart: *default-restart
-    # In-container sysctl: the host's net.ipv4.tcp_notsent_lowat does NOT cross
-    # into a bridge netns (only tcp_congestion_control inherits), so the tunnel's
-    # TCP send buffer stays unbounded and a saturated upload bloats real-time/call
-    # latency by seconds. Capping it here ~halves loaded latency (validated A/B).
-    sysctls:
-      - net.ipv4.tcp_notsent_lowat=16384
+    sysctls: *lowat-sysctls
     labels:
       - dashboard.enable=true
       - dashboard.category=proxy
@@ -360,12 +308,11 @@ services:
       - coredns
 
   byedpi:
-    image: tazihad/byedpi:${BYEDPI_VERSION:-v0.17.3}
+    image: tazihad/byedpi:v0.17.3
     container_name: byedpi
     logging: *default-logging
     restart: *default-restart
-    sysctls:  # cap tunnel send-buffer bloat (host sysctl doesn't cross bridge netns) — see xray
-      - net.ipv4.tcp_notsent_lowat=16384
+    sysctls: *lowat-sysctls
     labels:
       - dashboard.enable=true
       - dashboard.category=proxy
@@ -446,12 +393,8 @@ services:
     command: -c /frpc.toml
 
   sni-spoofing:
-    image: ghcr.io/aleskxyz/sni-spoofing-go:${SNI_SPOOFING_VERSION:-0.5.1}
+    <<: *sni-spoofing
     container_name: sni-spoofing
-    logging: *default-logging
-    restart: *default-restart
-    sysctls:  # cap tunnel send-buffer bloat (host sysctl doesn't cross bridge netns) — see xray
-      - net.ipv4.tcp_notsent_lowat=16384
     labels:
       - dashboard.enable=true
       - dashboard.category=proxy
@@ -459,12 +402,6 @@ services:
       - dashboard.protocol=tls
       - dashboard.port=40443
       - dashboard.config=/sni-spoofing/config.ini
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
-    healthcheck:
-      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/40443'"]
-      <<: *proxy-healthcheck
     networks:
       direct_internet:
         ipv4_address: 192.168.88.245
@@ -476,12 +413,8 @@ services:
     command: ["-config", "/etc/sni-spoofing/config.ini"]
 
   sni-spoofing-fallback:
-    image: ghcr.io/aleskxyz/sni-spoofing-go:${SNI_SPOOFING_VERSION:-0.5.1}
+    <<: *sni-spoofing
     container_name: sni-spoofing-fallback
-    logging: *default-logging
-    restart: *default-restart
-    sysctls:  # cap tunnel send-buffer bloat (host sysctl doesn't cross bridge netns) — see xray
-      - net.ipv4.tcp_notsent_lowat=16384
     labels:
       - autoheal=true
       - dashboard.enable=true
@@ -490,12 +423,6 @@ services:
       - dashboard.protocol=tls
       - dashboard.port=40443
       - dashboard.config=/sni-spoofing-fallback/config.ini
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
-    healthcheck:
-      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/40443'"]
-      <<: *proxy-healthcheck
     networks:
       direct_internet:
         ipv4_address: 192.168.88.251
@@ -511,8 +438,7 @@ services:
     container_name: xray-fallback
     logging: *default-logging
     restart: *default-restart
-    sysctls:  # cap tunnel send-buffer bloat (host sysctl doesn't cross bridge netns) — see xray
-      - net.ipv4.tcp_notsent_lowat=16384
+    sysctls: *lowat-sysctls
     labels:
       - dashboard.enable=true
       - dashboard.category=proxy
@@ -535,7 +461,7 @@ services:
       - byedpi
 
   cf-edge-manager:
-    image: ghcr.io/0xf00f00/docker-proxy-client-cf-edge-manager:${CF_MANAGER_VERSION:-latest}
+    image: ghcr.io/0xf00f00/docker-proxy-client-cf-edge-manager:latest
     container_name: cf-edge-manager
     logging: *default-logging
     restart: *default-restart
@@ -561,9 +487,6 @@ services:
       - PROBE_UUID=${CF_PROBE_UUID:-}
       - PROBE_PATH=${CF_PROBE_PATH:-/}
       - PROBE_ORIGIN_HOST=${CF_PROBE_ORIGIN_HOST:-}
-      # sni-spoofing containers the manager rewrites + restarts, in priority order; each
-      # needs its directory mounted at /instances/<name> below. The last owns byedpi.
-      - SNISPOOF_INSTANCES=${CF_SNISPOOF_INSTANCES:-sni-spoofing,sni-spoofing-fallback}
     networks:
       direct_internet:
         ipv4_address: 192.168.88.250
@@ -592,15 +515,11 @@ services:
       - AUTOHEAL_CONTAINER_LABEL=autoheal
       - AUTOHEAL_INTERVAL=30
       - AUTOHEAL_START_PERIOD=120
-      - AUTOHEAL_DEFAULT_STOP_TIMEOUT=10
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
 
   mdns:
-    build:
-      context: ./mdns
-      args:
-        MDNS_VERSION: ${MDNS_VERSION:-latest}
+    build: ./mdns
     container_name: mdns
     logging: *default-logging
     restart: *default-restart
@@ -613,7 +532,7 @@ services:
       - dashboard.protocol=socks5
       - dashboard.port=18000
       - dashboard.config=/mdns/client_resolvers.txt
-      - dashboard.env=MDNS_DOMAIN,MDNS_ENCRYPTION_KEY,MDNS_DATA_ENCRYPTION_METHOD,MDNS_MIN_UPLOAD_MTU,MDNS_MAX_UPLOAD_MTU,MDNS_MIN_DOWNLOAD_MTU,MDNS_MAX_DOWNLOAD_MTU
+      - dashboard.env=MDNS_DOMAIN,MDNS_ENCRYPTION_KEY,MDNS_DATA_ENCRYPTION_METHOD
     dns: *default-dns
     healthcheck:
       test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 18000 || exit 1"]
@@ -622,10 +541,6 @@ services:
       - MDNS_DOMAIN=${MDNS_DOMAIN}
       - MDNS_ENCRYPTION_KEY=${MDNS_ENCRYPTION_KEY}
       - MDNS_DATA_ENCRYPTION_METHOD=${MDNS_DATA_ENCRYPTION_METHOD:-1}
-      - MDNS_MIN_UPLOAD_MTU=${MDNS_MIN_UPLOAD_MTU:-38}
-      - MDNS_MAX_UPLOAD_MTU=${MDNS_MAX_UPLOAD_MTU:-150}
-      - MDNS_MIN_DOWNLOAD_MTU=${MDNS_MIN_DOWNLOAD_MTU:-200}
-      - MDNS_MAX_DOWNLOAD_MTU=${MDNS_MAX_DOWNLOAD_MTU:-4000}
     volumes:
       - ./mdns/client_resolvers.txt:/etc/mdns/client_resolvers.txt:rw
     networks:
@@ -640,7 +555,7 @@ services:
   # fresh. Egresses via direct_internet (eth0). Reloads mdns through the socket
   # proxy (no raw docker socket). Status/manual-trigger API on :8088.
   dns-scanner:
-    image: ghcr.io/0xf00f00/docker-proxy-client-dns-scanner:${DNS_SCANNER_VERSION:-latest}
+    image: ghcr.io/0xf00f00/docker-proxy-client-dns-scanner:latest
     container_name: dns-scanner
     logging: *default-logging
     restart: *default-restart
@@ -655,24 +570,10 @@ services:
       - MDNS_DOMAIN=${MDNS_DOMAIN}
       - MDNS_ENCRYPTION_KEY=${MDNS_ENCRYPTION_KEY}
       - MDNS_DATA_ENCRYPTION_METHOD=${MDNS_DATA_ENCRYPTION_METHOD:-1}
-      - MDNS_MIN_UPLOAD_MTU=${MDNS_MIN_UPLOAD_MTU:-38}
-      - MDNS_MAX_UPLOAD_MTU=${MDNS_MAX_UPLOAD_MTU:-150}
-      - MDNS_MIN_DOWNLOAD_MTU=${MDNS_MIN_DOWNLOAD_MTU:-200}
-      - MDNS_MAX_DOWNLOAD_MTU=${MDNS_MAX_DOWNLOAD_MTU:-4000}
-      - SCANNER_DAEMON=1
       - SCANNER_AUTO_SCAN=${SCANNER_AUTO_SCAN:-0}
-      - SCANNER_RESOLVERS_PATH=/hostmdns/client_resolvers.txt
-      - SCANNER_STATE_FILE=/state/scanner-state.json
       - SCANNER_BIND_IP=192.168.88.252
       - SCANNER_API_ADDR=10.20.0.25:8088
       - SCANNER_API_SECRET=${SCANNER_API_SECRET}
-      - SCANNER_RELOAD_URL=http://docker-socket-proxy:2375/containers/mdns/restart
-      - SCANNER_TARGET_N=${SCANNER_TARGET_N:-15}
-      - SCANNER_WATERMARK=${SCANNER_WATERMARK:-8}
-      - SCANNER_FLUSH_COOLDOWN_S=${SCANNER_FLUSH_COOLDOWN_S:-180}
-      - SCANNER_QPS=${SCANNER_QPS:-30}
-      - SCANNER_BASE_INTERVAL_DAYS=${SCANNER_BASE_INTERVAL_DAYS:-1}
-      - SCANNER_MAX_INTERVAL_DAYS=${SCANNER_MAX_INTERVAL_DAYS:-7}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://10.20.0.25:8088/healthz"]
       interval: 60s
@@ -748,19 +649,14 @@ services:
       - DASHBOARD_HOST_LAN_INTERFACE=${MACVLAN_PARENT:-eth0}
       - DASHBOARD_PORT=${DASHBOARD_PORT:-8080}
       - DASHBOARD_BIND=${DASHBOARD_BIND:-0.0.0.0}
-      - DASHBOARD_CLASH_API_URL=http://127.0.0.1:9697
       - DASHBOARD_CLASH_API_SECRET=${CLASH_API_SECRET:-}
       - DASHBOARD_SCANNER_API_URL=http://10.20.0.12:8088
       - DASHBOARD_DNS_SCANNER_API_URL=http://10.20.0.25:8088
       - DASHBOARD_DNS_SCANNER_SECRET=${SCANNER_API_SECRET}
-      - DASHBOARD_COMPOSE_PROJECT_PATH=/compose
-      - DASHBOARD_STATE_DIR=/state
       - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-}
       - DASHBOARD_CONNECTION_TRACKING=${CONNECTION_TRACKING:-false}
       - TZ=${TZ:-UTC}
       - HEALTH_ACTIVE_PROBES=${HEALTH_ACTIVE_PROBES:-on}
-      - HEALTH_PROBE_DAILY_BYTES=${HEALTH_PROBE_DAILY_BYTES:-2000000}
-      - DASHBOARD_DOCKER_HOST=tcp://127.0.0.1:2375
       - DOCKER_HOST=tcp://127.0.0.1:2375
     volumes:
       - ./xray/config.json:/configs/xray/config.json

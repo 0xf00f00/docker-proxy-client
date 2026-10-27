@@ -1,13 +1,7 @@
-"""Overall network-health-over-time monitor.
+"""Composite network health over time (not per-proxy): one always-on probe through the active system proxy,
+tagged with a cause by the regime classifier and stored as a time series. Public facade for the package.
 
-A single always-on probe samples whether the user can actually reach the open
-internet *through the active system proxy* and how fast, tags the cause via the
-regime classifier, and records a time series so the dashboard can show outages
-and quality degradation over time — and answer "how was the network today?".
-
-This is composite system health, not per-proxy. The package is split by concern:
-
-- ``settings``  — env-overridable tunables and the shared ``Status`` type.
+- ``settings``  — constants and the shared ``Status`` type.
 - ``cause``     — map a (status, regime) pair to plain language for the UI.
 - ``timeline``  — pure analytics over stored segments (buckets, summary, incidents).
 - ``probe``     — the probe I/O and regime-backed classification.
@@ -16,8 +10,6 @@ This is composite system health, not per-proxy. The package is split by concern:
 - ``scheduler`` — budgeted active ``probes`` and their ledger.
 - ``verdict``   — v2: minutes folded into states (with ``baseline``, ``attribution``); ``engine``
   loads rows and caches, ``shadow`` lists where v2 and the monitor above disagree.
-
-This module is the public facade: import what you need from ``app.services.health``.
 """
 
 from app.services.health.cause import cause_for, snapshot_from_segment

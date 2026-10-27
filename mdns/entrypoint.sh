@@ -31,19 +31,11 @@ sed_escape() { printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'; }
 DOMAIN_ESC=$(sed_escape "${MDNS_DOMAIN}")
 KEY_ESC=$(sed_escape "${MDNS_ENCRYPTION_KEY}")
 METHOD="${MDNS_DATA_ENCRYPTION_METHOD:-1}"
-MIN_UP_MTU="${MDNS_MIN_UPLOAD_MTU:-38}"
-MAX_UP_MTU="${MDNS_MAX_UPLOAD_MTU:-150}"
-MIN_DOWN_MTU="${MDNS_MIN_DOWNLOAD_MTU:-200}"
-MAX_DOWN_MTU="${MDNS_MAX_DOWNLOAD_MTU:-4000}"
 
 sed \
     -e "s|@@DOMAIN@@|${DOMAIN_ESC}|g" \
     -e "s|@@ENCRYPTION_KEY@@|${KEY_ESC}|g" \
     -e "s|@@DATA_ENCRYPTION_METHOD@@|${METHOD}|g" \
-    -e "s|@@MIN_UPLOAD_MTU@@|${MIN_UP_MTU}|g" \
-    -e "s|@@MAX_UPLOAD_MTU@@|${MAX_UP_MTU}|g" \
-    -e "s|@@MIN_DOWNLOAD_MTU@@|${MIN_DOWN_MTU}|g" \
-    -e "s|@@MAX_DOWNLOAD_MTU@@|${MAX_DOWN_MTU}|g" \
     "${TEMPLATE}" > "${CONFIG}"
 
 cd "${CFG_DIR}"

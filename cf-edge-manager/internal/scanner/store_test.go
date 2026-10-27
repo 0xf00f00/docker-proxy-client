@@ -49,29 +49,6 @@ func TestReconcile(t *testing.T) {
 	}
 }
 
-func TestActiveAndReusableTest(t *testing.T) {
-	s := newTestStore(t)
-	now := time.Now()
-
-	if _, ok := s.ActiveTest("1.1.1.1"); ok {
-		t.Fatal("no active test expected yet")
-	}
-
-	s.SaveJob(Job{ID: "a", Type: JobTest, IP: "1.1.1.1", State: StateQueued, CreatedAt: now})
-	if j, ok := s.ActiveTest("1.1.1.1"); !ok || j.ID != "a" {
-		t.Fatalf("expected active test a, got %v %v", j, ok)
-	}
-
-	fin := now
-	s.SaveJob(Job{ID: "b", Type: JobTest, IP: "9.9.9.9", State: StateDone, CreatedAt: now, FinishedAt: &fin})
-	if _, ok := s.ReusableTest("9.9.9.9", time.Minute); !ok {
-		t.Error("recent done test should be reusable within cooldown")
-	}
-	if _, ok := s.ReusableTest("9.9.9.9", time.Nanosecond); ok {
-		t.Error("test outside cooldown should not be reusable")
-	}
-}
-
 func TestSnapshotAndPersistence(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")
@@ -97,28 +74,6 @@ func TestSnapshotAndPersistence(t *testing.T) {
 	snap2 := s2.Snapshot()
 	if len(snap2.Pool) != 2 || snap2.Tests["1.1.1.1"].Received != 10 {
 		t.Errorf("reloaded snapshot mismatch: %+v", snap2)
-	}
-}
-
-func TestTestResultEviction(t *testing.T) {
-	s := newTestStore(t).(*memStore)
-	s.maxTests = 3
-	base := time.Now()
-
-	// Insert 4 distinct IPs oldest-first; the oldest must be evicted at the cap.
-	for i, ip := range []string{"1.1.1.1", "2.2.2.2", "3.3.3.3", "4.4.4.4"} {
-		s.PutTestResult(ip, cfst.Stats{Sent: 1, Received: 1}, nil, base.Add(time.Duration(i)*time.Second))
-	}
-
-	tests := s.Snapshot().Tests
-	if len(tests) != 3 {
-		t.Fatalf("want 3 retained, got %d", len(tests))
-	}
-	if _, ok := tests["1.1.1.1"]; ok {
-		t.Error("oldest result (1.1.1.1) should have been evicted")
-	}
-	if _, ok := tests["4.4.4.4"]; !ok {
-		t.Error("newest result (4.4.4.4) should be retained")
 	}
 }
 

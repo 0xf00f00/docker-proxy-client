@@ -1,12 +1,6 @@
 import { lazy, type ComponentType, type LazyExoticComponent } from "react";
 
-/**
- * Maps the `dashboard.widget` label value to a React component. Adding a
- * service-specific widget is one entry in this map.
- *
- * Each entry is a lazy import so widget bundles only load when the matching
- * service is actually present.
- */
+/** Maps the `dashboard.widget` label to a lazily imported component, so a widget loads only when its service exists. */
 
 export interface WidgetEntry {
   Component: LazyExoticComponent<ComponentType>;

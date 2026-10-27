@@ -12,11 +12,7 @@ interface AuthControls {
 
 export const AuthContext = createContext<AuthControls>({ showLogin: () => {} });
 
-/**
- * Auth status + controls. Components reach for this when they need to
- * render conditionally on login state (e.g. show a sign-in button) or
- * proactively prompt the user to log in.
- */
+/** Auth status and controls, for components that render on login state or prompt a login. */
 export function useAuth() {
   const query = useQuery<AuthStatus>({
     queryKey: AUTH_STATUS_KEY,

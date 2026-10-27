@@ -2,14 +2,9 @@ package probe
 
 import "net"
 
-// DefaultInterfaceIPv4 returns the local IPv4 source address the kernel would
-// use to reach remoteAddr, via the UDP-connect trick: connecting a UDP socket
-// reveals the chosen source IP without sending a single packet. Returns "" if
-// the lookup fails. Borrowed from sni-spoofing-go's network helper.
-//
-// We use it to assert the probe path egresses on the macvlan eth0 IP and not the
-// VPN default route — a survival probe that leaks onto the tunnel measures the
-// wrong path and false-fails (see the probe-fidelity rule: probe from eth0).
+// DefaultInterfaceIPv4 returns the local source IPv4 the kernel would use to reach remoteAddr (UDP
+// connect, no packet sent), or "" on failure. It asserts probes egress on eth0 and not the VPN default
+// route, where a survival probe would measure the wrong path and false-fail.
 func DefaultInterfaceIPv4(remoteAddr string) string {
 	if remoteAddr == "" {
 		remoteAddr = "8.8.8.8"

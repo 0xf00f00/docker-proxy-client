@@ -1,11 +1,5 @@
-"""Persistent per-domain data-usage accounting.
-
-Runs its own always-on consumer of the active controller's live-connections feed
-(independent of the modal). Diffs each connection's cumulative byte counters into
-per-registrable-domain hourly buckets and flushes them to a small, separately-
-deletable SQLite file. Gated entirely by ``settings.connection_tracking`` — nothing
-here runs unless the operator opted in at deploy time.
-"""
+"""Per-domain hourly data-usage tally from the live-connections feed, flushed to a separate SQLite file.
+Runs only when the operator opted in via ``settings.connection_tracking``."""
 
 import asyncio
 import contextlib
@@ -110,12 +104,7 @@ class UsageRecorder:
                 logger.debug("usage flush loop error; retrying", exc_info=True)
 
     def start(self) -> None:
-        """Start the periodic flush (lifespan-managed).
-
-        The connections collector owns the single always-on ``/connections``
-        feed and calls :meth:`ingest`, so usage accrues whether or not anyone's
-        watching the live-connections modal.
-        """
+        """Start the periodic flush; the connections collector calls :meth:`ingest`."""
         store.init_usage()
         self._prev.clear()
         self._buf.clear()

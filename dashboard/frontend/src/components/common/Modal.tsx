@@ -16,11 +16,7 @@ interface ModalProps {
   children: ReactNode;
 }
 
-/**
- * Standard modal shell built on Radix Dialog: focus trap, scroll lock, Escape
- * handler, ARIA wiring, and safe-area insets are handled here so callers can
- * focus on the body content.
- */
+/** Standard modal shell on Radix Dialog: focus trap, scroll lock, Escape, ARIA and safe-area insets. */
 export default function Modal({
   open,
   onOpenChange,
@@ -74,11 +70,7 @@ export default function Modal({
   );
 }
 
-/**
- * Rendered as the Suspense fallback for lazy-loaded modals so the click feels
- * instant — the modal frame appears with the right title, then the real body
- * swaps in once the chunk arrives.
- */
+/** Suspense fallback for lazy modals: the frame and title appear at once, the body swaps in when its chunk loads. */
 export function ModalLoadingShell({ title, onClose }: { title: string; onClose: () => void }) {
   return (
     <Modal open onOpenChange={(o) => !o && onClose()} title={title} size="auto">

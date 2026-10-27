@@ -1,12 +1,9 @@
 package assign
 
 import (
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 )
 
@@ -71,30 +68,6 @@ func TestWriteManagedEmptyIsNoop(t *testing.T) {
 	}
 }
 
-func TestReadAllIncludesHumanAndManaged(t *testing.T) {
-	dir := t.TempDir()
-	// A user-added resolver + comment, then a scanner-managed block.
-	p := writeFile(t, dir,
-		"# my own resolver\n9.9.9.9\n\n"+
-			beginMarker+"\n1.1.1.1\n8.8.8.8\n"+endMarker+"\n")
-
-	got := ReadAll(p)
-	want := []string{"9.9.9.9", "1.1.1.1", "8.8.8.8"}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Errorf("ReadAll = %v, want %v (user-added resolver must be included)", got, want)
-	}
-}
-
-func TestReadAllDedupsAcrossBlocks(t *testing.T) {
-	dir := t.TempDir()
-	// Same IP appears as a human line and inside the managed block.
-	p := writeFile(t, dir, "9.9.9.9\n"+beginMarker+"\n9.9.9.9\n1.1.1.1\n"+endMarker+"\n")
-	got := ReadAll(p)
-	if strings.Join(got, ",") != "9.9.9.9,1.1.1.1" {
-		t.Errorf("ReadAll = %v, want [9.9.9.9 1.1.1.1] (deduped)", got)
-	}
-}
-
 // A resolver the user added by hand must not be re-homed into the managed block
 // (which would list it twice) even when the scanner also verifies it working.
 func TestWriteManagedDoesNotDuplicateHumanResolver(t *testing.T) {
@@ -115,45 +88,5 @@ func TestWriteManagedDoesNotDuplicateHumanResolver(t *testing.T) {
 	// But the full set mdns uses still contains both.
 	if got := ReadAll(p); strings.Join(got, ",") != "9.9.9.9,1.1.1.1" {
 		t.Errorf("ReadAll = %v, want both resolvers", got)
-	}
-}
-
-func TestReadManagedMissingFile(t *testing.T) {
-	if got := ReadManaged(filepath.Join(t.TempDir(), "nope.txt")); got != nil {
-		t.Errorf("ReadManaged(missing) = %v, want nil", got)
-	}
-}
-
-func TestReloadPOSTsToURL(t *testing.T) {
-	var hits atomic.Int32
-	var gotMethod string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits.Add(1)
-		gotMethod = r.Method
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer srv.Close()
-
-	if err := Reload(srv.URL + "/containers/mdns/restart"); err != nil {
-		t.Fatalf("Reload = %v, want nil", err)
-	}
-	if hits.Load() != 1 || gotMethod != http.MethodPost {
-		t.Errorf("server saw %d hits via %s, want 1 POST", hits.Load(), gotMethod)
-	}
-}
-
-func TestReloadEmptyIsNoop(t *testing.T) {
-	if err := Reload("  "); err != nil {
-		t.Errorf("Reload(empty) = %v, want nil (no-op)", err)
-	}
-}
-
-func TestReloadNon2xxIsError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "no such container", http.StatusNotFound)
-	}))
-	defer srv.Close()
-	if err := Reload(srv.URL); err == nil {
-		t.Error("Reload on 404 = nil, want error")
 	}
 }

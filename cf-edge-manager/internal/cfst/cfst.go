@@ -1,7 +1,5 @@
-// Package cfst is a thin, stateless wrapper around the CloudflareSpeedTest
-// (cfst) binary. Each call runs cfst as an isolated subprocess, so a long scan
-// and short single-IP tests run concurrently without sharing cfst's
-// package-level global state.
+// Package cfst wraps the CloudflareSpeedTest binary. Each call is an isolated subprocess, so a long scan
+// and short single-IP tests run concurrently without sharing cfst's global state.
 package cfst
 
 import (
@@ -33,9 +31,8 @@ type Client struct {
 	TestPings int
 }
 
-// Scan ranks the configured CIDR ranges and returns the top edges, best-first.
-// An empty result (no row survived the loss/latency filters) is returned as an
-// empty slice with a nil error — the caller decides whether to keep a prior pool.
+// Scan ranks the configured CIDR ranges and returns the top edges, best-first. An empty result is a nil
+// error; the caller decides whether to keep the prior pool.
 func (c Client) Scan(ctx context.Context) ([]Edge, error) {
 	cidrFile, cleanup, err := c.writeCIDRFile()
 	if err != nil {
@@ -61,9 +58,8 @@ func (c Client) Scan(ctx context.Context) ([]Edge, error) {
 	return readEdges(out)
 }
 
-// Ping measures a single edge. ip must already be validated/canonical. When
-// cfst produces no row (host unreachable or timed out) the bash-era "fully
-// lost" sentinel is returned so the dashboard renders it identically.
+// Ping measures a single edge (ip must be validated). With no cfst row (unreachable or timed out) it
+// returns the "fully lost" sentinel.
 func (c Client) Ping(ctx context.Context, ip netip.Addr) (Stats, error) {
 	out, err := os.CreateTemp(c.OutDir, "test-*.csv")
 	if err != nil {

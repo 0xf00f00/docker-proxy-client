@@ -1,7 +1,5 @@
-// Package pool reads the ranked edge pool the discovery scan publishes
-// (pool.txt, best-first, one IP per line). The selector consumes it; keeping it
-// a tiny file-reader preserves the existing on-disk contract the dashboard and
-// fallback chain already depend on.
+// Package pool reads the ranked edge pool the discovery scan publishes (pool.txt, best-first, one IP
+// per line); the dashboard and fallback chain depend on that on-disk contract.
 package pool
 
 import (

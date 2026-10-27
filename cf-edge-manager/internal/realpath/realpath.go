@@ -1,10 +1,7 @@
-// Package realpath probes whether a Cloudflare edge survives DPI on the real
-// production path: local socks -> xray (vless/xHTTP) -> in-process sni-spoofing
-// (fake-SNI) -> edge -> fronted origin. A fake-SNI-only check was measured to
-// disagree with production, so this is the only survival signal we trust. xray
-// and sni-spoofing are BOTH restarted per edge: sni's connect varies, and xray
-// must not carry a pooled xHTTP tunnel from the previous edge into this probe.
-// Expensive: single-flight, backoff on inconclusive runs, per-edge cache.
+// Package realpath probes whether an edge survives DPI on the real production path: local socks ->
+// xray (vless/xHTTP) -> in-process sni-spoofing -> edge -> fronted origin. A fake-SNI-only check
+// disagrees with production. Both xray and sni-spoofing restart per edge so no pooled xHTTP tunnel
+// carries over. Expensive: single-flight, backoff on inconclusive runs, per-edge cache.
 package realpath
 
 import (
@@ -101,10 +98,8 @@ type cacheEntry struct {
 // cacheKey: a verdict holds only for the decoy it was probed with.
 type cacheKey struct{ ip, sni string }
 
-// Options tunes a Probe. Force bypasses the cache; Interactive (on-demand, e.g. a
-// dashboard test) skips the inter-probe backoff and leaves the selector's
-// cadence/cache untouched, while still single-flighting on the lock. FakeSNI is
-// the decoy to probe with ("" = Config.FakeSNI).
+// Options tunes a Probe. Force bypasses the cache; Interactive (an on-demand dashboard test) skips the
+// backoff and leaves the selector's cadence and cache untouched. FakeSNI is the decoy ("" = Config.FakeSNI).
 type Options struct {
 	Force       bool
 	Interactive bool
@@ -253,10 +248,8 @@ func (p *Prober) run(parent context.Context, ip, fakeSNI string) Result {
 		return Result{IP: ip, Err: "xray socks not ready"}
 	}
 
-	// Cheap pre-gate: one DoH-JSON query through the tunnel. It's opaque to DPI
-	// (just xHTTP bytes to a CF edge), so success means the whole method works
-	// end-to-end. A clean reset/timeout here means this edge isn't usable — fail
-	// fast and skip the (Count-request) burst rather than spend it on a dead edge.
+	// Cheap pre-gate: one DoH query through the tunnel. A reset or timeout means a dead edge; fail fast
+	// rather than spend the burst on it.
 	if p.cfg.PreGate {
 		if err := p.dohPreGate(ctx); err != nil {
 			p.log.Info("realpath: pre-gate failed; skipping burst", "ip", ip, "err", errStr(err))
@@ -335,12 +328,9 @@ func (p *Prober) oneRequest(ctx context.Context, socksAddr string) bool {
 	return strings.Contains(line, " 204") || strings.Contains(line, " 200")
 }
 
-// dohPreGate performs one DoH-JSON request through the SOCKS tunnel and requires
-// a 200 with a well-formed JSON body. Unlike oneRequest (plaintext to a 0-byte
-// endpoint), this does a real TLS handshake to the DoH host THROUGH the tunnel —
-// the same shape as live traffic — and validates a parseable answer, so a CF
-// challenge page or truncated reply can't false-pass it. The cert IS verified
-// here (real hostname, system roots): we want to know real DoH works end-to-end.
+// dohPreGate does one DoH-JSON request through the tunnel and requires a 200 with a parseable body, so a
+// challenge page or truncated reply can't false-pass. Unlike oneRequest it does a real, cert-verified TLS
+// handshake, the same shape as live traffic.
 func (p *Prober) dohPreGate(ctx context.Context) error {
 	socks := net.JoinHostPort("127.0.0.1", strconv.Itoa(p.cfg.SocksPort))
 	dialer, err := xproxy.SOCKS5("tcp", socks, nil, &net.Dialer{Timeout: 15 * time.Second})

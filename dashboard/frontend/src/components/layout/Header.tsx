@@ -107,11 +107,8 @@ function SkeletonBar({ className }: { className?: string }) {
 }
 
 /**
- * Always-on "how busy is the network right now" readout: the system-proxy
- * total up/down with a 60s sparkline. Three states, so it never reads as broken:
- * a skeleton until the first sample arrives, an explicit "0" when genuinely idle
- * (with a flat line), and live numbers when active. Desktop only — the mobile
- * readout lives in TrafficStrip. Per-proxy detail lives on the cards.
+ * Desktop "how busy is the network" readout: system-proxy up/down with a 60s sparkline. A skeleton until the
+ * first sample and an explicit "0" when idle, so it never reads as broken.
  */
 function TrafficPill({ onOpen }: { onOpen?: () => void }) {
   const { system, systemHistory, status } = useTraffic();
@@ -173,12 +170,7 @@ function TrafficPill({ onOpen }: { onOpen?: () => void }) {
   );
 }
 
-/**
- * Mobile counterpart to TrafficPill: a slim full-width strip below the top
- * header row (sm:hidden). Phones have no spare width in the top row, but plenty
- * across a dedicated line — so this gets a wider sparkline and full-precision
- * rates ("1.2 MB/s"), plus an explicit "0 B/s" idle state and a loading skeleton.
- */
+/** Mobile TrafficPill: a full-width strip below the header with a wider sparkline and full-precision rates. */
 function TrafficStrip({ onOpen }: { onOpen?: () => void }) {
   const { system, systemHistory, status } = useTraffic();
   const loading = status === "connecting";

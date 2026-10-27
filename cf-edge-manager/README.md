@@ -26,7 +26,6 @@ Everything an operator is expected to set, in `.env`:
 | `CF_SCAN_CRON` | daily | 6-field cron with a **leading seconds column** (`0 0 5 * * 1` = Mondays 05:00), evaluated in `TZ`. |
 | `TZ` | `UTC` | Timezone for the cron and the dashboard's day boundaries. |
 | `CF_SELECT_ENABLE` | `false` | Edge selection. Needs the probe values below. |
-| `CF_SNISPOOF_INSTANCES` | `sni-spoofing,sni-spoofing-fallback` | Containers to manage, in priority order. Each name is the container and the directory holding its `config.ini`, mounted at `/instances/<name>` in `docker-compose.yml`. Add a name and a mount to manage another. |
 | `FALLBACK_HOST` | required | Fronted host of the fallback edge path. |
 | `CF_PROBE_UUID` | required with selection | VLESS id of the main xray outbound. |
 | `CF_PROBE_PATH` | `/` | xHTTP path of that outbound. |
@@ -36,7 +35,7 @@ The probe values must match the live xray `proxy` outbound, or every edge reads 
 a failure; the manager refuses to start with selection on and no `CF_PROBE_UUID`
 or `CF_PROBE_ORIGIN_HOST`.
 
-Everything else (thresholds, cadences, timeouts, pool size) is deliberately fixed:
+Everything else (thresholds, cadences, timeouts, pool size, the managed `sni-spoofing` instances) is deliberately fixed:
 see `Defaults` in [`internal/config/config.go`](internal/config/config.go). To
 return to the inert state, unset both switches.
 

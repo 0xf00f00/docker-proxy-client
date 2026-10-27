@@ -1,15 +1,12 @@
 from collections.abc import Callable, Iterable
 
 from app.services import docker_service
-from app.services.health.settings import CORE_CONTAINERS, PATH_EDGES
+from app.services.health.settings import PATH_EDGES
 from app.services.system_proxy import registry
 
 
 def core_names() -> tuple[str, ...]:
-    """Containers whose restarts matter: the override, else the proxy controller (found by its
-    label) plus every declared route and edge."""
-    if CORE_CONTAINERS:
-        return CORE_CONTAINERS
+    """Containers whose restarts matter: the proxy controller (found by its label) plus every route and edge."""
     try:
         controller = registry.get_active_container()
     except Exception:

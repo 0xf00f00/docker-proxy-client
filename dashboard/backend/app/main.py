@@ -42,20 +42,14 @@ async def lifespan(app: FastAPI):
         usage_service.recorder.start()
     else:
         store.wipe_usage()
-    if settings.health_monitoring:
-        health_service.monitor.start()
-        health_service.recorder.start()
+    health_service.monitor.start()
+    health_service.recorder.start()
     # One /connections feed; usage and the live view only when tracking is opted in.
-    taps = (health_service.recorder.feed,) if settings.health_monitoring else ()
-    feed_on = settings.connection_tracking or bool(taps)
-    if feed_on:
-        connections_service.collector.start(track=settings.connection_tracking, taps=taps)
+    connections_service.collector.start(track=settings.connection_tracking, taps=(health_service.recorder.feed,))
     yield
-    if settings.health_monitoring:
-        await health_service.recorder.stop()
-        await health_service.monitor.stop()
-    if feed_on:
-        await connections_service.collector.stop()
+    await health_service.recorder.stop()
+    await health_service.monitor.stop()
+    await connections_service.collector.stop()
     if settings.connection_tracking:
         await usage_service.recorder.flush_and_stop()
     docker_service.close_client()

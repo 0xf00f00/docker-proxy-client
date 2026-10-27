@@ -19,11 +19,7 @@ function path(values: number[], max: number, width: number, height: number): str
   return values.map((v, i) => `${i === 0 ? "M" : "L"}${(i * step).toFixed(1)},${scaleY(v).toFixed(1)}`).join(" ");
 }
 
-/**
- * A tiny dual-line sparkline for the header traffic readout. Download (sky) and
- * upload (emerald) share a scale so their relative magnitude reads true. Purely
- * decorative — the numbers carry the precise values — so it's aria-hidden.
- */
+/** Dual-line header sparkline; download and upload share a scale. Decorative, so aria-hidden. */
 export default function Sparkline({ down, up, className, width = 52, height = 22 }: Props) {
   const max = Math.max(1, ...down, ...up);
   return (

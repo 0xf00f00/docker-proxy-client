@@ -153,9 +153,8 @@ func survivedStr(s *Survival) string {
 	}
 }
 
-// preflightTargets are diverse, widely-reachable anycast addresses (two
-// Cloudflare, one Google, one Quad9). The scan proceeds if any one answers, so
-// this only trips on a real outage -- not when specific edges are censored.
+// preflightTargets are diverse anycast addresses; the scan proceeds if any one answers, so this only trips
+// on a real outage, not when specific edges are censored.
 func preflightTargets(port int) []string {
 	p := strconv.Itoa(port)
 	return []string{
@@ -177,11 +176,8 @@ func topIPs(edges []cfst.Edge, n int) []string {
 	return out
 }
 
-// writePool publishes the ranked pool to the files the picker consumes:
-// pool.txt (all, best-first) and clean_ip.txt (the single best). The last-scan
-// time is taken from pool.txt's mtime, so no separate marker is written. Writes
-// are atomic and fsync'd -- this is the operational output the fallback chain
-// depends on, and it changes rarely (only on a successful scan).
+// writePool publishes the ranked pool atomically: pool.txt (best-first) and clean_ip.txt (the best one).
+// The last-scan time is pool.txt's mtime.
 func (s *Service) writePool(pool []string) error {
 	if err := writeAtomic(filepath.Join(s.cfg.OutDir, "pool.txt"), strings.Join(pool, "\n")+"\n"); err != nil {
 		return err

@@ -2,7 +2,7 @@
 
 from app.services.health import verdict
 from app.services.health.baseline import Baseline
-from app.services.health.model import Event, Probe, Sample
+from app.services.health.model import Probe, Sample
 from app.services.health.rules import Capacity
 
 T0 = 1_800_000_000 // 60 * 60
@@ -97,14 +97,6 @@ def ladder(i, regime="normal", switch=None):
         intl_up=regime == "normal",
         **({"switch": switch} if switch else {}),
     )
-
-
-def boot_event(i, boot="b2", prev="b", graceful=False):
-    return Event(T0 + 60 * i, boot, "boot", {"prev_boot": prev, "last_ts": T0, "graceful": graceful})
-
-
-def container_event(i, name="route-a"):
-    return Event(T0 + 60 * i, "b", "container", {"name": name, "running": True})
 
 
 def run(samples, probes=(), events=(), base=LEARNING, cap=CAP):

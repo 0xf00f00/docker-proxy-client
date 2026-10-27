@@ -171,10 +171,8 @@ func runResolver(ctx context.Context, d Deps, certSem chan struct{}, ip string) 
 	return r
 }
 
-// Anchors reports whether any of ips still recursively resolves domain
-// (Dial → Alive → Forwarding). It is the outage-recovery canary's probe:
-// trigger-only — it promotes nothing and writes nothing. domain must be
-// neutral (never the secret tunnel zone).
+// Anchors reports whether any of ips still recursively resolves domain: the outage-recovery canary.
+// It promotes and writes nothing, and domain must be neutral (never the secret tunnel zone).
 func Anchors(ctx context.Context, d Deps, ips []string, domain string) bool {
 	for _, ip := range ips {
 		if ctx.Err() != nil {

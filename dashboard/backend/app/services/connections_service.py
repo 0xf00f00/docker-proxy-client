@@ -186,13 +186,8 @@ class ConnectionsCollector:
         self._rate.clear()
 
     def start(self, *, track: bool = True, taps: tuple[FeedTap, ...] = ()) -> None:
-        """Start the always-on unified feed (lifespan-managed).
-
-        One ``/connections`` WebSocket drives the live snapshot and usage
-        accounting (when ``track``) plus any ``taps``. Keeping rate state warm even
-        while the modal's closed means the first frame a viewer gets already carries
-        live rates — the list moves the instant it opens instead of sitting frozen.
-        """
+        """Start the one always-on ``/connections`` feed for the live view, usage (if ``track``) and ``taps``.
+        Staying warm means the first frame a viewer gets already carries live rates."""
         if self._task is not None and not self._task.done():
             return
         from app.services import usage_service

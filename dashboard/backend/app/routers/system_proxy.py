@@ -5,7 +5,6 @@ requires implementing the SystemProxyController interface."""
 
 import asyncio
 import logging
-from collections.abc import AsyncGenerator
 
 from fastapi import APIRouter, HTTPException
 
@@ -20,7 +19,7 @@ from app.models.schemas import (
 )
 from app.services import ip_lookup, system_proxy
 from app.services.system_proxy.base import SystemProxyController
-from app.sse import event, sse_response
+from app.sse import snapshot_stream
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/system-proxy", tags=["system-proxy"])
@@ -50,30 +49,13 @@ async def get_state():
 
 @router.get("/state/stream")
 async def stream_state():
-    """Push system-proxy state live over SSE.
-
-    Samples ``get_state()`` every ``STREAM_POLL_SEC`` and emits a ``state``
-    event only on change, so auto-mode failover (active proxy switching without
-    user action) shows up promptly without the client polling.
-    """
+    """Push system-proxy state on change, so auto-mode failover shows up without client polling."""
     controller = _require_controller()
 
-    async def gen() -> AsyncGenerator[str]:
-        last: str | None = None
-        while True:
-            try:
-                state = await controller.get_state()
-                payload = state.model_dump_json()
-                if payload != last:
-                    yield f"event: state\ndata: {payload}\n\n"
-                    last = payload
-                else:
-                    yield ": ping\n\n"
-            except Exception as e:
-                yield event("stream-error", {"detail": str(e)})
-            await asyncio.sleep(STREAM_POLL_SEC)
+    async def read() -> str:
+        return (await controller.get_state()).model_dump_json()
 
-    return sse_response(gen())
+    return snapshot_stream("state", read, interval=STREAM_POLL_SEC)
 
 
 @router.put("/mode", dependencies=[RequireAuth])

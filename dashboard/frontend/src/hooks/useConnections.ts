@@ -20,11 +20,7 @@ export interface DisplaySite extends ConnectionSite {
 export interface ConnectionsState {
   status: ConnectionsStatus;
   snapshot: ConnectionsSnapshot | null;
-  /**
-   * Sites to render: live ones merged with recently-closed ones still in their
-   * linger window, held in stable *arrival* order so live rate swings never
-   * reorder the list under the user's eyes.
-   */
+  /** Live sites merged with recently-closed ones in their linger window, in stable arrival order so rate swings never reorder the list. */
   sites: DisplaySite[];
   /** Rolling combined-rate history for the summary sparkline. */
   rateHistory: { down: number; up: number }[];

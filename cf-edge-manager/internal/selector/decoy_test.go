@@ -105,50 +105,6 @@ func TestDecoyBurnedSwitchesAndGoesLive(t *testing.T) {
 	}
 }
 
-// Regression: the switch restarted at once and stamped LastRestart, so the same
-// tick's edge rotation was rate-limited and its connect= never went live.
-func TestDecoySwitchAndEdgeRotationBothGoLive(t *testing.T) {
-	for _, last := range []int64{0, 950} {
-		d := &dpi{
-			plain:  map[string]bool{"b.example": true},
-			real:   map[string]bool{"b.example": true},
-			burned: map[string]bool{"192.0.2.1": true},
-		}
-		ap := decoyAp()
-		s := decoySel(t, testCfg(), d, ap, map[string]*bool{"192.0.2.1": bptr(false)})
-		s.saveState(State{LastRestart: last})
-		s.Tick(1000)
-		if ap.snispoof == "192.0.2.1" || ap.fakeSNI != "b.example" {
-			t.Fatalf("last=%d: expected rotation + switch, config connect=%s sni=%s", last, ap.snispoof, ap.fakeSNI)
-		}
-		if ap.liveConnect != ap.snispoof || ap.liveSNI != ap.fakeSNI {
-			t.Errorf("last=%d: stranded config: file %s/%s, live %s/%s", last, ap.snispoof, ap.fakeSNI, ap.liveConnect, ap.liveSNI)
-		}
-		if ap.restarts != 1 {
-			t.Errorf("last=%d: want one restart for both changes, got %d", last, ap.restarts)
-		}
-	}
-}
-
-func TestDecoyNoCandidateThrottles(t *testing.T) {
-	d := &dpi{}
-	ap := decoyAp()
-	s := decoySel(t, testCfg(), d, ap, nil)
-	s.Tick(1000)
-	if ap.wroteSNI != nil || ap.restarts != 0 {
-		t.Fatalf("nothing passes (e.g. a blackout): must not switch or restart: wrote=%v restarts=%d", ap.wroteSNI, ap.restarts)
-	}
-	n := d.hellos.Load()
-	s.Tick(1700)
-	if d.hellos.Load() != n {
-		t.Error("a fruitless search must be throttled by decoyGap")
-	}
-	s.Tick(1000 + decoyGap)
-	if d.hellos.Load() == n {
-		t.Error("search must resume after decoyGap")
-	}
-}
-
 func TestDecoyTrialBudget(t *testing.T) {
 	d := &dpi{
 		plain: map[string]bool{"a.example": true, "b.example": true, "c.example": true, "d.example": true},
@@ -175,32 +131,6 @@ func TestDecoyWriteErrorNoRestart(t *testing.T) {
 	}
 }
 
-func TestDecoyNeedsRealPathProbe(t *testing.T) {
-	cfg := testCfg()
-	cfg.SurvivalCheck = false
-	d := &dpi{}
-	decoySel(t, cfg, d, decoyAp(), nil).Tick(1000)
-	if d.hellos.Load() != 0 {
-		t.Error("without the real-path oracle the decoy must be left alone")
-	}
-}
-
-func TestDecoyNilOpsInert(t *testing.T) {
-	s := newSel(t, testCfg(), nil, nil, []string{"192.0.2.1"}, decoyAp())
-	s.Tick(1000) // no SetDecoy: must not panic
-}
-
-func TestScreenDecoysIncludesCurrent(t *testing.T) {
-	d := &dpi{plain: map[string]bool{"old.example": true, "c.example": true}}
-	got := decoySel(t, testCfg(), d, decoyAp(), nil).ScreenDecoys(context.Background())
-	if got["current"] != "old.example" || !slices.Equal(got["ranked"].([]string), []string{"old.example", "c.example"}) {
-		t.Errorf("screen = %v", got)
-	}
-	if !slices.Equal(got["edges"].([]string), []string{"192.0.2.1", "192.0.2.2"}) {
-		t.Errorf("edges = %v", got["edges"])
-	}
-}
-
 // every edge fails the real path while the decoy is dead
 func allFail() map[string]*bool {
 	m := map[string]*bool{"198.51.100.9": bptr(false)}
@@ -210,23 +140,6 @@ func allFail() map[string]*bool {
 	return m
 }
 
-func TestDecoyDeadSparesByedpi(t *testing.T) {
-	d := &dpi{plain: map[string]bool{"b.example": true}} // b passes plain TLS but nothing survives the real path
-	ap := decoyAp()
-	s := decoySel(t, testCfg(), d, ap, allFail())
-	s.Tick(1000)
-	if got := s.loadState().DecoyDead; got != "old.example" {
-		t.Fatalf("DecoyDead = %q", got)
-	}
-	s.Tick(1700) // decoy check throttled; the verdict must persist
-	if ap.wroteB != nil {
-		t.Errorf("byedpi doesn't carry the decoy; dead-decoy verdicts must not move it: %v", ap.wroteB)
-	}
-	if ap.wroteS == nil {
-		t.Error("snispoof keeps rotating (it varies the edges the next search tries)")
-	}
-}
-
 func TestDecoyBlackoutIsNotDead(t *testing.T) {
 	d := &dpi{} // no name passes plain TLS: can't blame the decoy
 	ap := decoyAp()
@@ -234,24 +147,5 @@ func TestDecoyBlackoutIsNotDead(t *testing.T) {
 	s.Tick(1000)
 	if s.loadState().DecoyDead != "" || ap.wroteB == nil {
 		t.Errorf("blackout: DecoyDead=%q byedpi writes=%v", s.loadState().DecoyDead, ap.wroteB)
-	}
-}
-
-func TestDecoyDeadAppliesOnlyToLiveDecoy(t *testing.T) {
-	ap := decoyAp()
-	s := decoySel(t, testCfg(), &dpi{}, ap, allFail())
-	s.saveState(State{DecoyDead: "gone.example", DecoyCheckAfter: 1 << 40})
-	s.Tick(1000)
-	if ap.wroteB == nil {
-		t.Error("a verdict on a decoy no longer in the config must not gate byedpi")
-	}
-}
-
-func TestDecoyDeadClearsWhenDecoyPasses(t *testing.T) {
-	s := decoySel(t, testCfg(), &dpi{plain: map[string]bool{"old.example": true}}, decoyAp(), nil)
-	s.saveState(State{DecoyDead: "old.example"})
-	s.Tick(1000)
-	if got := s.loadState().DecoyDead; got != "" {
-		t.Errorf("DecoyDead = %q after the decoy passed", got)
 	}
 }

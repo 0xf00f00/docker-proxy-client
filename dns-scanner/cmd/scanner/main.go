@@ -35,7 +35,6 @@ const (
 	cidrSampleMax               = 5000           // cap on IPs the CIDR tier contributes
 	historyRetry                = 30             // recent history IPs retried first each cycle
 	historyCap                  = 200            // resolver history pool size
-	maxProbes                   = 0              // 0 = unbounded sweep
 
 	canaryAnchors                = 5                  // history IPs the outage-recovery canary probes
 	canaryInterval time.Duration = time.Hour          // recovery-canary poll cadence while in outage
@@ -43,39 +42,40 @@ const (
 	certFailCap                  = 5000               // max cert-failure entries kept (oldest evicted)
 
 	nearMissCap = 200 // max backup candidates (gate-failures) kept for the backup tier
+
+	targetN       = 15
+	watermark     = 8 // restart mdns only when live survivors are at/below this
+	flushCooldown = 3 * time.Minute
+	baseDays      = 1
+	maxDays       = 7
+	qps           = 30
+	prefixPause   = 200 * time.Millisecond
+	stageTimeout  = 1500 * time.Millisecond
+	probeDomain   = "cloudflare.com"
+	probeBin      = "mdns-client"
+	dataDir       = "data"
+
+	resolversPath = "/hostmdns/client_resolvers.txt"
+	statePath     = "/state/scanner-state.json"
+	reloadURL     = "http://docker-socket-proxy:2375/containers/mdns/restart"
+)
+
+// MTU bounds must match mdns/client_config.toml.template.
+const (
+	minUploadMTU   = 38
+	maxUploadMTU   = 150
+	minDownloadMTU = 200
+	maxDownloadMTU = 4000
 )
 
 type config struct {
-	domain       string
-	probeDomain  string
-	key          string
-	method       int
-	baseEncode   bool
-	probeBin     string
-	clientConfig string
-	minUp        int
-	maxUp        int
-	minDown      int
-	maxDown      int
-
-	bindIP        string
-	qps           int
-	cooldown      time.Duration
-	targetN       int
-	watermark     int
-	flushCooldown time.Duration // min gap between mid-cycle mdns restarts while starving
-	dataDir       string
-	stageTimeout  time.Duration
-
-	daemon        bool
-	baseDays      int
-	maxDays       int
-	resolversPath string
-	statePath     string
-	autoScan      bool
-	reloadURL     string
-	apiAddr       string
-	apiSecret     string
+	domain    string
+	key       string
+	method    int
+	bindIP    string
+	autoScan  bool
+	apiAddr   string
+	apiSecret string
 }
 
 func main() {
@@ -83,14 +83,14 @@ func main() {
 	cfg := loadConfig()
 	ctx := signalContext()
 
-	p := pacer.New(cfg.qps, cfg.cooldown)
+	p := pacer.New(qps, prefixPause)
 	defer p.Close()
 	deps := scan.Deps{
 		Prober:       buildProber(cfg),
 		Pacer:        p,
 		BindIP:       cfg.bindIP,
-		ProbeDomain:  cfg.probeDomain,
-		StageTimeout: cfg.stageTimeout,
+		ProbeDomain:  probeDomain,
+		StageTimeout: stageTimeout,
 		LossSamples:  lossSamples,
 		Workers:      deepWorkers,
 		CertifyConc:  certifyConc,
@@ -99,67 +99,57 @@ func main() {
 	// Ad-hoc mode: scan exactly the given IPs once, no assignment/daemon.
 	if args := os.Args[1:]; len(args) > 0 {
 		deps.OnAccept = func(r score.Result, n int) {
-			fmt.Printf("  [+] %-15s accepted (%d/%d)\n", r.IP, n, cfg.targetN)
+			fmt.Printf("  [+] %-15s accepted (%d/%d)\n", r.IP, n, targetN)
 		}
-		res, _ := scan.Run(ctx, deps, args, cfg.targetN, true)
-		report(cfg, deps.Prober != nil, score.RankWorking(res))
+		res, _ := scan.Run(ctx, deps, args, targetN, true)
+		report(deps.Prober != nil, score.RankWorking(res))
 		return
 	}
 
 	srv := api.NewServer(cfg.apiSecret)
-	srv.SetTarget(cfg.targetN) // surface "accepted of target" progress to the dashboard
-	// Pause/resume the worker pool through the control API without losing progress.
+	srv.SetTarget(targetN)
 	deps.Gate = srv.Wait
-	if cfg.daemon && cfg.apiAddr != "" {
-		if !srv.AuthEnabled() {
-			slog.Warn("control API is UNAUTHENTICATED — set SCANNER_API_SECRET (dev only)")
-		}
-		go func() {
-			slog.Info("control API listening", "addr", cfg.apiAddr)
-			if err := srv.Run(ctx, cfg.apiAddr); err != nil {
-				slog.Error("api server exited", "err", err)
-			}
-		}()
+	if !srv.AuthEnabled() {
+		slog.Warn("control API is UNAUTHENTICATED — set SCANNER_API_SECRET (dev only)")
 	}
+	go func() {
+		slog.Info("control API listening", "addr", cfg.apiAddr)
+		if err := srv.Run(ctx, cfg.apiAddr); err != nil {
+			slog.Error("api server exited", "err", err)
+		}
+	}()
 
-	st, err := state.Load(cfg.statePath)
+	st, err := state.Load(statePath)
 	if err != nil {
 		slog.Error("state load failed", "err", err)
 	}
-	if st.BackoffDays < cfg.baseDays {
-		st.BackoffDays = cfg.baseDays
+	if st.BackoffDays < baseDays {
+		st.BackoffDays = baseDays
 	}
-	// Surface the persisted resolvers immediately, so the dashboard shows the
-	// known set even when auto-scan is off and no cycle has run this boot.
 	srv.SeedFromState(seedResolvers(st.Working), st.UpdatedUnix, len(st.History))
 
 	for {
-		if cfg.daemon {
-			if cfg.autoScan {
-				interval := time.Duration(st.BackoffDays) * dayUnit
-				next := time.Now().Add(interval) // never-run: bootstrap a full interval out
-				if st.UpdatedUnix > 0 {
-					next = time.Unix(st.UpdatedUnix, 0).Add(interval)
-				}
-				srv.SetSchedule(next.Unix(), st.BackoffDays)
-				slog.Info("scan scheduled", "interval_days", st.BackoffDays, "next", next.Format(time.RFC3339))
-				inOutage := len(st.Working) == 0
-				anchors := st.RecentHistoryIPs(canaryAnchors, nil)
-				if !waitNext(ctx, cfg, deps, srv, anchors, time.Until(next), inOutage) {
-					return
-				}
-			} else {
-				srv.SetSchedule(0, st.BackoffDays)
-				if !waitManual(ctx, srv) {
-					return
-				}
+		if cfg.autoScan {
+			interval := time.Duration(st.BackoffDays) * dayUnit
+			next := time.Now().Add(interval) // never-run: bootstrap a full interval out
+			if st.UpdatedUnix > 0 {
+				next = time.Unix(st.UpdatedUnix, 0).Add(interval)
+			}
+			srv.SetSchedule(next.Unix(), st.BackoffDays)
+			slog.Info("scan scheduled", "interval_days", st.BackoffDays, "next", next.Format(time.RFC3339))
+			inOutage := len(st.Working) == 0
+			anchors := st.RecentHistoryIPs(canaryAnchors, nil)
+			if !waitNext(ctx, deps, srv, anchors, time.Until(next), inOutage) {
+				return
+			}
+		} else {
+			srv.SetSchedule(0, st.BackoffDays)
+			if !waitManual(ctx, srv) {
+				return
 			}
 		}
 
 		runCycle(ctx, cfg, deps, srv, &st)
-		if !cfg.daemon {
-			return
-		}
 	}
 }
 
@@ -173,7 +163,7 @@ func waitManual(ctx context.Context, srv *api.Server) bool {
 	}
 }
 
-func waitNext(ctx context.Context, cfg config, deps scan.Deps, srv *api.Server, anchors []string, interval time.Duration, inOutage bool) bool {
+func waitNext(ctx context.Context, deps scan.Deps, srv *api.Server, anchors []string, interval time.Duration, inOutage bool) bool {
 	if !inOutage || len(anchors) == 0 {
 		select {
 		case <-ctx.Done():
@@ -202,7 +192,7 @@ func waitNext(ctx context.Context, cfg config, deps scan.Deps, srv *api.Server, 
 			return true
 		case <-time.After(wait):
 		}
-		if scan.Anchors(ctx, deps, anchors, cfg.probeDomain) {
+		if scan.Anchors(ctx, deps, anchors, probeDomain) {
 			slog.Info("recovery canary tripped — intl recursion reachable, scanning early", "anchors", len(anchors))
 			return true
 		}
@@ -228,9 +218,8 @@ func runCycle(ctx context.Context, cfg config, base scan.Deps, srv *api.Server, 
 	slog.Info("scan cycle started", "time", start.Format(time.RFC3339))
 
 	prog := newProgress(srv)
-	existing := assign.ReadAll(cfg.resolversPath)
+	existing := assign.ReadAll(resolversPath)
 	l := &liveSet{
-		cfg:         cfg,
 		srv:         srv,
 		history:     st.History,
 		backoffDays: st.BackoffDays,
@@ -280,13 +269,13 @@ func runCycle(ctx context.Context, cfg config, base scan.Deps, srv *api.Server, 
 	}
 
 	// 2) Sweep the priority tiers only if still short of target.
-	if l.count() < cfg.targetN {
+	if l.count() < targetN {
 		seed := time.Now().UnixNano()
-		if tiers, err := targets.Load(cfg.dataDir, seed, cidrSampleMax); err != nil {
+		if tiers, err := targets.Load(dataDir, seed, cidrSampleMax); err != nil {
 			slog.Error("load targets failed", "err", err)
 		} else {
-			need := cfg.targetN - l.count()
-			sweep := flatten(tiers, l.ipsSet(), st.CertFailed, start.Unix(), certFailTTL, maxProbes)
+			need := targetN - l.count()
+			sweep := flatten(tiers, l.ipsSet(), st.CertFailed, start.Unix(), certFailTTL)
 			prog.beginPhase("sweep", len(sweep))
 			slog.Info("sweeping tiers", "need", need, "candidates", len(sweep), "seed", seed)
 			scan.Run(scanCtx, sweepDeps, sweep, need, true)
@@ -301,7 +290,7 @@ func runCycle(ctx context.Context, cfg config, base scan.Deps, srv *api.Server, 
 	// (resolvers that proved real recursion but failed a cheap capacity gate). A
 	// strict gate must not strand a resolver that actually carries the tunnel.
 	backupCount := 0
-	if l.certifyOn && l.count() < cfg.targetN && scanCtx.Err() == nil {
+	if l.certifyOn && l.count() < targetN && scanCtx.Err() == nil {
 		if cand := nm.ips(); len(cand) > 0 {
 			before := l.count()
 			l.setBackup(true)
@@ -309,8 +298,8 @@ func runCycle(ctx context.Context, cfg config, base scan.Deps, srv *api.Server, 
 			backupDeps.CertifyAnyway = true
 			backupDeps.OnCertResult = func(_ string, accepted bool, reason string) { rep.note(accepted, reason) }
 			prog.beginPhase("backup", len(cand))
-			slog.Info("backup tier — certifying gate-failures", "candidates", len(cand), "need", cfg.targetN-before)
-			scan.Run(scanCtx, backupDeps, cand, cfg.targetN-before, true)
+			slog.Info("backup tier — certifying gate-failures", "candidates", len(cand), "need", targetN-before)
+			scan.Run(scanCtx, backupDeps, cand, targetN-before, true)
 			prog.flush()
 			l.setBackup(false)
 			backupCount = l.count() - before
@@ -324,7 +313,7 @@ func runCycle(ctx context.Context, cfg config, base scan.Deps, srv *api.Server, 
 		// Preserve the partial funnel/diagnostics gathered up to the stop point.
 		srv.SetCycleStats(fn.snapshot(), backupCount)
 		srv.EndRun(start.Unix(), int(time.Since(start).Seconds()), "stopped", toResolverInfo(working), len(st.History))
-		report(cfg, base.Prober != nil, working)
+		report(base.Prober != nil, working)
 		return
 	}
 
@@ -332,17 +321,17 @@ func runCycle(ctx context.Context, cfg config, base scan.Deps, srv *api.Server, 
 	if !l.certifyOn {
 		slog.Warn("certification disabled — NOT assigning; live resolvers left untouched",
 			"gate_survivors", len(working), "current", len(existing))
-	} else if changed, err := assign.WriteManaged(cfg.resolversPath, ipsOf(working)); err != nil {
+	} else if changed, err := assign.WriteManaged(resolversPath, ipsOf(working)); err != nil {
 		slog.Error("assign failed", "err", err)
 	} else if changed {
 		survivors := intersectCount(existing, working)
-		if survivors <= cfg.watermark {
+		if survivors <= watermark {
 			slog.Info("client_resolvers.txt updated — reloading mdns (live survivors at/below watermark)",
-				"resolvers", len(working), "live_survivors", survivors, "watermark", cfg.watermark)
-			reload(cfg.reloadURL)
+				"resolvers", len(working), "live_survivors", survivors, "watermark", watermark)
+			reload(reloadURL)
 		} else {
 			slog.Info("client_resolvers.txt updated — reload deferred (healthy: live survivors above watermark)",
-				"resolvers", len(working), "live_survivors", survivors, "watermark", cfg.watermark)
+				"resolvers", len(working), "live_survivors", survivors, "watermark", watermark)
 		}
 	} else if len(working) == 0 {
 		slog.Warn("0 working found — keeping previous resolvers (no clobber)", "previous", len(existing))
@@ -353,9 +342,9 @@ func runCycle(ctx context.Context, cfg config, base scan.Deps, srv *api.Server, 
 	// 4) Update history, backoff, cert-failure skip-list, persist.
 	st.History = mergeHistory(st.History, working, start.Unix(), historyCap)
 	if len(working) == 0 {
-		st.BackoffDays = nextBackoff(st.BackoffDays, cfg)
+		st.BackoffDays = nextBackoff(st.BackoffDays)
 	} else {
-		st.BackoffDays = cfg.baseDays
+		st.BackoffDays = baseDays
 	}
 	// Record this sweep's cert failures
 	cf := st.CertFailed
@@ -371,7 +360,7 @@ func runCycle(ctx context.Context, cfg config, base scan.Deps, srv *api.Server, 
 	st.CertFailed = state.PruneCertFailed(cf, start.Unix(), certFailTTL, certFailCap)
 	st.Working = toWorking(working)
 	st.UpdatedUnix = start.Unix()
-	if err := state.Save(cfg.statePath, *st); err != nil {
+	if err := state.Save(statePath, *st); err != nil {
 		slog.Error("state save failed", "err", err)
 	}
 
@@ -393,7 +382,7 @@ func runCycle(ctx context.Context, cfg config, base scan.Deps, srv *api.Server, 
 	srv.SetCycleStats(fstat, backupCount)
 
 	srv.EndRun(start.Unix(), int(time.Since(start).Seconds()), outcome, toResolverInfo(working), len(st.History))
-	report(cfg, base.Prober != nil, working)
+	report(base.Prober != nil, working)
 }
 
 type certReport struct {
@@ -605,7 +594,6 @@ func (p *progress) total() int { return int(p.probed.Load()) }
 // liveSet accumulates accepted resolvers during a cycle.
 type liveSet struct {
 	mu          sync.Mutex
-	cfg         config
 	srv         *api.Server
 	history     []state.Historic
 	backoffDays int
@@ -627,7 +615,7 @@ func (l *liveSet) onAccept(r score.Result, _ int) {
 	l.working = upsertResult(l.working, r)
 	l.srv.SetAccepted(len(l.working))
 	// Crash-safe incremental persist (preserve history/backoff for cycle-end).
-	if err := state.Save(l.cfg.statePath, state.State{
+	if err := state.Save(statePath, state.State{
 		UpdatedUnix: time.Now().Unix(),
 		BackoffDays: l.backoffDays,
 		Working:     toWorking(l.working),
@@ -649,7 +637,7 @@ func (l *liveSet) onAccept(r score.Result, _ int) {
 	if ips == nil {
 		return // gates-only mode: nothing goes live
 	}
-	changed, err := assign.WriteManaged(l.cfg.resolversPath, ips)
+	changed, err := assign.WriteManaged(resolversPath, ips)
 	if err != nil {
 		slog.Error("incremental assign failed", "err", err)
 		return
@@ -659,14 +647,14 @@ func (l *liveSet) onAccept(r score.Result, _ int) {
 	}
 	// Restart to adopt only below the watermark, once per cooldown.
 	l.mu.Lock()
-	wantRestart := have <= l.cfg.watermark && time.Since(l.lastFlush) >= l.cfg.flushCooldown
+	wantRestart := have <= watermark && time.Since(l.lastFlush) >= flushCooldown
 	if wantRestart {
 		l.lastFlush = time.Now()
 	}
 	l.mu.Unlock()
 	if wantRestart {
 		slog.Info("fed new resolvers to mdns (below watermark)", "resolvers", len(ips), "have", have)
-		reload(l.cfg.reloadURL)
+		reload(reloadURL)
 	}
 }
 
@@ -683,14 +671,14 @@ func (l *liveSet) ipsSet() map[string]struct{} {
 }
 
 // nextBackoff doubles the interval, capped at maxDays.
-func nextBackoff(days int, cfg config) int {
-	if days < cfg.baseDays {
-		return cfg.baseDays
+func nextBackoff(days int) int {
+	if days < baseDays {
+		return baseDays
 	}
-	if n := days * 2; n < cfg.maxDays {
+	if n := days * 2; n < maxDays {
 		return n
 	}
-	return cfg.maxDays
+	return maxDays
 }
 
 // mergeHistory upserts the just-worked resolvers (stamped now), then keeps the
@@ -716,7 +704,7 @@ func mergeHistory(history []state.Historic, working []score.Result, now int64, c
 	return history
 }
 
-func flatten(tiers []targets.Tier, exclude map[string]struct{}, certFailed map[string]int64, now int64, ttl time.Duration, maxProbes int) []string {
+func flatten(tiers []targets.Tier, exclude map[string]struct{}, certFailed map[string]int64, now int64, ttl time.Duration) []string {
 	ttlSec := int64(ttl / time.Second)
 	var out []string
 	for _, t := range tiers {
@@ -728,9 +716,6 @@ func flatten(tiers []targets.Tier, exclude map[string]struct{}, certFailed map[s
 				continue // recently failed certification — skip until the TTL expires
 			}
 			out = append(out, ip)
-			if maxProbes > 0 && len(out) >= maxProbes {
-				return out
-			}
 		}
 	}
 	return out
@@ -831,7 +816,7 @@ func reload(url string) {
 	}
 }
 
-func report(cfg config, certified bool, working []score.Result) {
+func report(certified bool, working []score.Result) {
 	fmt.Printf("\n=== %d working resolvers ===\n", len(working))
 	for i, r := range working {
 		if certified {
@@ -844,62 +829,39 @@ func report(cfg config, certified bool, working []score.Result) {
 	}
 }
 
-// buildProber wires the out-of-process certifier
 func buildProber(cfg config) *certify.Prober {
 	pr, err := certify.New(certify.Config{
-		Bin:        cfg.probeBin,
-		ConfigPath: cfg.clientConfig,
-		Domain:     cfg.domain,
-		Key:        cfg.key,
-		Method:     cfg.method,
-		BaseEncode: cfg.baseEncode,
-		MinUp:      cfg.minUp,
-		MaxUp:      cfg.maxUp,
-		MinDown:    cfg.minDown,
-		MaxDown:    cfg.maxDown,
+		Bin:     probeBin,
+		Domain:  cfg.domain,
+		Key:     cfg.key,
+		Method:  cfg.method,
+		MinUp:   minUploadMTU,
+		MaxUp:   maxUploadMTU,
+		MinDown: minDownloadMTU,
+		MaxDown: maxDownloadMTU,
 	})
 	switch {
 	case errors.Is(err, certify.ErrNoBinary):
 		slog.Warn("probe binary missing — running gates only, certification disabled; "+
-			"uncertified resolvers will NOT be assigned to the tunnel",
-			"MDNS_PROBE_BIN", cfg.probeBin, "err", err)
+			"uncertified resolvers will NOT be assigned to the tunnel", "bin", probeBin, "err", err)
 		return nil
 	case err != nil:
 		slog.Error("prober init failed", "err", err)
 		os.Exit(1)
 	case pr == nil:
-		slog.Warn("no probe config (set MDNS_CLIENT_CONFIG, or MDNS_DOMAIN+MDNS_ENCRYPTION_KEY) — gates only, skipping certification")
+		slog.Warn("no tunnel identity (set MDNS_DOMAIN + MDNS_ENCRYPTION_KEY) — gates only, skipping certification")
 		return nil
 	}
-	attrs := []any{"bin", cfg.probeBin, "client_config", configSource(cfg)}
-	if v := certify.ProbeVersion(cfg.probeBin); v != "" {
+	attrs := []any{"bin", probeBin}
+	if v := certify.ProbeVersion(probeBin); v != "" {
 		attrs = append(attrs, "version", v)
 	}
 	slog.Info("prober ready", attrs...)
 	return pr
 }
 
-// configSource reports where the probe's tunnel config comes from, for logging.
-func configSource(cfg config) string {
-	if cfg.clientConfig != "" {
-		return cfg.clientConfig
-	}
-	return "generated from env"
-}
-
-// setupLogging installs the default slog logger. SCANNER_LOG_FORMAT=json picks
-// the JSON handler (else text); SCANNER_LOG_LEVEL sets the minimum level.
 func setupLogging() {
-	lvl := slog.LevelInfo
-	if err := lvl.UnmarshalText([]byte(strings.ToLower(os.Getenv("SCANNER_LOG_LEVEL")))); err != nil {
-		lvl = slog.LevelInfo
-	}
-	opts := &slog.HandlerOptions{Level: lvl}
-	var h slog.Handler = slog.NewTextHandler(os.Stderr, opts)
-	if strings.EqualFold(os.Getenv("SCANNER_LOG_FORMAT"), "json") {
-		h = slog.NewJSONHandler(os.Stderr, opts)
-	}
-	slog.SetDefault(slog.New(h))
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
 }
 
 func signalContext() context.Context {
@@ -908,55 +870,28 @@ func signalContext() context.Context {
 }
 
 func loadConfig() config {
-	domain := os.Getenv("MDNS_DOMAIN")
-	probeDomain := "cloudflare.com"
 	cfg := config{
-		domain:        domain,
-		probeDomain:   probeDomain,
-		key:           os.Getenv("MDNS_ENCRYPTION_KEY"),
-		method:        atoiEnv("MDNS_DATA_ENCRYPTION_METHOD", 1),
-		baseEncode:    atoiEnv("MDNS_BASE_ENCODE_DATA", 0) == 1,
-		probeBin:      envOr("MDNS_PROBE_BIN", "mdns-client"),
-		clientConfig:  os.Getenv("MDNS_CLIENT_CONFIG"),
-		minUp:         atoiEnv("MDNS_MIN_UPLOAD_MTU", 0),
-		maxUp:         atoiEnv("MDNS_MAX_UPLOAD_MTU", 0),
-		minDown:       atoiEnv("MDNS_MIN_DOWNLOAD_MTU", 0),
-		maxDown:       atoiEnv("MDNS_MAX_DOWNLOAD_MTU", 0),
-		bindIP:        os.Getenv("SCANNER_BIND_IP"),
-		qps:           atoiEnv("SCANNER_QPS", 30),
-		cooldown:      time.Duration(atoiEnv("SCANNER_PER24_COOLDOWN_MS", 200)) * time.Millisecond,
-		targetN:       atoiEnv("SCANNER_TARGET_N", 15),
-		watermark:     atoiEnv("SCANNER_WATERMARK", 8),
-		flushCooldown: time.Duration(atoiEnv("SCANNER_FLUSH_COOLDOWN_S", 180)) * time.Second,
-		dataDir:       envOr("SCANNER_DATA_DIR", "data"),
-		stageTimeout:  time.Duration(atoiEnv("SCANNER_STAGE_TIMEOUT_MS", 1500)) * time.Millisecond,
-		daemon:        atoiEnv("SCANNER_DAEMON", 0) == 1,
-		baseDays:      atoiEnv("SCANNER_BASE_INTERVAL_DAYS", 1),
-		maxDays:       atoiEnv("SCANNER_MAX_INTERVAL_DAYS", 7),
-		resolversPath: envOr("SCANNER_RESOLVERS_PATH", "../mdns/client_resolvers.txt"),
-		statePath:     envOr("SCANNER_STATE_FILE", "scanner-state.json"),
-		autoScan:      atoiEnv("SCANNER_AUTO_SCAN", 0) == 1,
-		reloadURL:     os.Getenv("SCANNER_RELOAD_URL"),
-		apiAddr:       envOr("SCANNER_API_ADDR", ":8088"),
-		apiSecret:     os.Getenv("SCANNER_API_SECRET"),
+		domain:    os.Getenv("MDNS_DOMAIN"),
+		key:       os.Getenv("MDNS_ENCRYPTION_KEY"),
+		method:    1,
+		bindIP:    os.Getenv("SCANNER_BIND_IP"),
+		autoScan:  os.Getenv("SCANNER_AUTO_SCAN") == "1",
+		apiAddr:   envOr("SCANNER_API_ADDR", ":8088"),
+		apiSecret: os.Getenv("SCANNER_API_SECRET"),
 	}
-
-	// Fail fast on a malformed bind IP
+	if v := os.Getenv("MDNS_DATA_ENCRYPTION_METHOD"); v != "" {
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			slog.Error("invalid MDNS_DATA_ENCRYPTION_METHOD", "value", v)
+			os.Exit(1)
+		}
+		cfg.method = n
+	}
 	if cfg.bindIP != "" && net.ParseIP(cfg.bindIP) == nil {
 		slog.Error("invalid SCANNER_BIND_IP", "value", cfg.bindIP)
 		os.Exit(1)
 	}
 	return cfg
-}
-
-func atoiEnv(key string, def int) int {
-	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
-			return n
-		}
-		slog.Warn("malformed integer env ignored — using default", "key", key, "value", v, "default", def)
-	}
-	return def
 }
 
 func envOr(key, def string) string {

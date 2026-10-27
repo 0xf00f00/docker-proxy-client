@@ -1,9 +1,6 @@
 """Dashboard-side proxy for the dns-scanner Go control API."""
 
-import json
 import os
-import urllib.error
-import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -13,67 +10,20 @@ from app.models.schemas import (
     DnsResolver,
     DnsScannerStatus,
 )
-from app.services import docker_service
+from app.services.scanner_api import ScannerApi
 
-_CONTAINER = "dns-scanner"
+_api = ScannerApi(
+    os.environ.get("DASHBOARD_DNS_SCANNER_API_URL", "http://127.0.0.1:8088"),
+    "dns-scanner",
+    secret=os.environ.get("DASHBOARD_DNS_SCANNER_SECRET", ""),
+    events_path="/scan/events",
+)
+iter_events = _api.events
 
-# The scanner's Go control API + the shared secret it gates every endpoint with.
-_API_BASE = os.environ.get("DASHBOARD_DNS_SCANNER_API_URL", "http://127.0.0.1:8088")
-_API_SECRET = os.environ.get("DASHBOARD_DNS_SCANNER_SECRET", "")
-_API_TIMEOUT = 2.0
-# SSE read timeout: must exceed the scanner's heartbeat (15s) so a healthy idle
-# stream isn't torn down; a longer gap means the connection is dead -> reconnect.
-_EVENT_READ_TIMEOUT = 30.0
-
-# Degraded fallback: when the API is unreachable, the scanner-managed block of the
-# resolver file (mounted into the dashboard at /compose/mdns/...) still tells us how
-# many resolvers are live. Markers must match dns-scanner/internal/assign/assign.go.
+# Degraded fallback when the API is unreachable. Markers must match dns-scanner/internal/assign/assign.go.
 _RESOLVERS_FILE = Path(settings.compose_project_path) / "mdns" / "client_resolvers.txt"
 _MANAGED_BEGIN = "# >>> mdns-scanner managed (do not edit this block) >>>"
 _MANAGED_END = "# <<< mdns-scanner managed <<<"
-
-
-def _running() -> bool:
-    try:
-        return docker_service.get_client().containers.get(_CONTAINER).status == "running"
-    except Exception:
-        return False
-
-
-def _headers(extra: dict[str, str] | None = None) -> dict[str, str]:
-    h = dict(extra or {})
-    if _API_SECRET:
-        h["X-Scanner-Secret"] = _API_SECRET
-    return h
-
-
-def _api_get(path: str) -> dict | None:
-    req = urllib.request.Request(f"{_API_BASE}{path}", headers=_headers())
-    try:
-        with urllib.request.urlopen(req, timeout=_API_TIMEOUT) as resp:
-            return json.load(resp)
-    except (urllib.error.URLError, OSError, ValueError, TimeoutError):
-        return None
-
-
-def _api_post(path: str) -> None:
-    req = urllib.request.Request(f"{_API_BASE}{path}", data=b"", method="POST", headers=_headers())
-    with urllib.request.urlopen(req, timeout=_API_TIMEOUT) as resp:
-        resp.read()
-
-
-def iter_events():
-    """Block on the scanner's SSE event stream, yielding once per pushed event.
-
-    Used purely as a change signal -- the caller re-reads merged status via
-    get_status(). Returns (or raises) on disconnect; the caller reconnects.
-    """
-    headers = _headers({"Accept": "text/event-stream"})
-    req = urllib.request.Request(f"{_API_BASE}/scan/events", headers=headers)
-    with urllib.request.urlopen(req, timeout=_EVENT_READ_TIMEOUT) as resp:
-        for raw in resp:
-            if raw.startswith(b"data:"):
-                yield
 
 
 def _dt(unix: object) -> datetime | None:
@@ -147,13 +97,13 @@ def _managed_resolvers() -> list[str]:
 
 
 def get_status() -> DnsScannerStatus:
-    snap = _api_get("/scan")
-    running = _running()
+    snap = _api.get("/scan")
+    running = _api.running()
 
     if snap is not None:
         working = _resolvers_from_api(snap.get("working"))
         return DnsScannerStatus(
-            container=_CONTAINER,
+            container=_api.container,
             scanner_running=running,
             api_reachable=True,
             state=str(snap.get("state", "idle")),
@@ -181,7 +131,7 @@ def get_status() -> DnsScannerStatus:
     # of the resolver file). Live state (scanning/progress/schedule) is unknown.
     managed = _managed_resolvers()
     return DnsScannerStatus(
-        container=_CONTAINER,
+        container=_api.container,
         scanner_running=running,
         api_reachable=False,
         working_count=len(managed),
@@ -190,16 +140,16 @@ def get_status() -> DnsScannerStatus:
 
 
 def trigger_scan() -> None:
-    _api_post("/scan/start")
+    _api.post("/scan/start")
 
 
 def pause_scan() -> None:
-    _api_post("/scan/pause")
+    _api.post("/scan/pause")
 
 
 def resume_scan() -> None:
-    _api_post("/scan/resume")
+    _api.post("/scan/resume")
 
 
 def stop_scan() -> None:
-    _api_post("/scan/stop")
+    _api.post("/scan/stop")

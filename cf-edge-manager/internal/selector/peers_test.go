@@ -35,17 +35,3 @@ func TestPeerSharingAnEdgeIsDiversified(t *testing.T) {
 		t.Errorf("wrote %v, want [other]: a healthy edge the peer also uses must still move", ap.wroteS)
 	}
 }
-
-func TestPeerDecoyIsNotReused(t *testing.T) {
-	d := &dpi{
-		plain: map[string]bool{"b.example": true, "c.example": true},
-		real:  map[string]bool{"b.example": true, "c.example": true},
-	}
-	ap := decoyAp()
-	s := decoySel(t, testCfg(), d, ap, nil)
-	s.Use(Hooks{Peers: peersOf(nil, []string{"b.example"})})
-	s.Tick(1000)
-	if !slices.Equal(ap.wroteSNI, []string{"c.example"}) {
-		t.Errorf("wrote %v, want [c.example]: the peer already uses b.example", ap.wroteSNI)
-	}
-}

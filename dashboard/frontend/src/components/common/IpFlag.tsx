@@ -23,11 +23,7 @@ interface Props {
   className?: string;
 }
 
-/**
- * Tiny country-flag chip that reveals the public IP on hover (desktop) or
- * tap (mobile). Resting state is just the flag — IP is supplementary detail
- * for the curious, not a piece of UI fighting for attention.
- */
+/** Country-flag chip that reveals the public IP on hover or tap. */
 export default function IpFlag({ info, className }: Props) {
   const [pinned, setPinned] = useState(false);
 

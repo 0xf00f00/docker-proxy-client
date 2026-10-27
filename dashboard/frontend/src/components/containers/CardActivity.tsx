@@ -20,12 +20,7 @@ export function CardThroughput({ name, running }: { name: string; running: boole
   );
 }
 
-/**
- * A faint glow behind the card whose intensity tracks the proxy's share of the
- * busiest proxy right now — so the most-used proxies visibly "light up" with no
- * extra layout. Colour-neutral on purpose: brightness is the only signal, so it
- * never collides with the status palette (emerald/red/amber/sky).
- */
+/** A faint card glow scaled to the proxy's share of the busiest one; brightness only, so it never collides with status colors. */
 export function CardActivityGlow({ name }: { name: string }) {
   const { share } = useProxyThroughput(name);
   if (share <= 0.01) return null;

@@ -1,13 +1,10 @@
-// Package scanner is the stateful orchestration layer: a durable job queue with
-// two independent concurrency lanes (one heavy scan, N interactive tests), a
-// control API, and crash recovery. Probing itself is delegated to the cfst
-// package.
+// Package scanner is the orchestration layer: a durable job queue with two lanes (one heavy scan, N
+// interactive tests), a control API and crash recovery. Probing is delegated to cfst.
 package scanner
 
 import (
 	"context"
 	"log/slog"
-	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -15,14 +12,14 @@ import (
 
 	"github.com/0xf00f00/cf-edge-manager/internal/cfst"
 	"github.com/0xf00f00/cf-edge-manager/internal/config"
+	"github.com/0xf00f00/cf-edge-manager/internal/probe"
 )
 
 // scanBuffer is small: scans dedup to at most one active job.
 const scanBuffer = 4
 
-// survivalAcquireBudget bounds the wait for the single real-path slot; the probe
-// can't run concurrently (one NFQUEUE, fixed ports), so a contended test degrades
-// to cfst-only "busy" rather than blocking a worker.
+// survivalAcquireBudget bounds the wait for the single real-path slot (one NFQUEUE, fixed ports); a
+// contended test degrades to cfst-only "busy" rather than blocking a worker.
 const survivalAcquireBudget = 4 * time.Second
 
 // SurvivalResult is the real-path verdict. Survived==nil = inconclusive (probe
@@ -95,11 +92,9 @@ func New(cfg config.Config, log *slog.Logger) (*Service, error) {
 // SetSurvivalProbe installs the real-path probe hook; call once before serving.
 func (s *Service) SetSurvivalProbe(fn SurvivalFunc) { s.survival = fn }
 
-// Start launches the worker lanes and re-enqueues jobs left in flight by a
-// crash. ctx governs the whole service: cancelling it stops the lanes and
-// cancels any running cfst subprocess.
+// Start launches the worker lanes and re-enqueues jobs a crash left in flight; cancelling ctx stops them.
 func (s *Service) Start(ctx context.Context) {
-	s.egress = detectEgress()
+	s.egress = probe.DefaultInterfaceIPv4("1.1.1.1")
 	s.log.Info("egress self-check", "source_ip", s.egress)
 
 	s.wg.Add(1)
@@ -184,20 +179,4 @@ func (s *Service) markFailed(j *Job, err error) {
 	j.FinishedAt = &now
 	s.store.SaveJob(*j)
 	s.hub.notify()
-}
-
-// detectEgress reports the source IP the kernel would use to reach the public
-// internet. A UDP "connection" selects the route without sending any packet, so
-// this is a cheap assertion that we egress via the macvlan interface, not the
-// VPN default route.
-func detectEgress() string {
-	c, err := net.Dial("udp", "1.1.1.1:53")
-	if err != nil {
-		return ""
-	}
-	defer func() { _ = c.Close() }()
-	if a, ok := c.LocalAddr().(*net.UDPAddr); ok {
-		return a.IP.String()
-	}
-	return ""
 }

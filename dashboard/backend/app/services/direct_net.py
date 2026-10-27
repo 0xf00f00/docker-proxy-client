@@ -1,11 +1,5 @@
-"""Pin a probe to the raw uplink NIC, bypassing Clash's TUN.
-
-The dashboard runs network_mode:host, where the default route is the Clash TUN, so
-any probe to an internet host silently egresses THROUGH a proxy. Dashboard tests
-meant to measure the real internet (regime/baseline/system connectivity) must use
-these helpers; tests that intentionally exercise a proxy or the system proxy must
-not. The interface is the existing `host_lan_interface` setting (default eth0).
-"""
+"""Pin a probe to the raw uplink NIC. Under network_mode:host the default route is the Clash TUN, so an
+unpinned probe silently egresses through a proxy; anything measuring the real internet must use these."""
 
 import contextlib
 import socket

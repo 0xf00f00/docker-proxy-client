@@ -16,10 +16,11 @@ _CONNECTION_WIRE = 6000
 ESTIMATE = round(COUNT * _CONNECTION_WIRE * 1.3)
 
 
-async def _one(url: str, timeout: float) -> float | None:
+async def handshake(url: str, timeout: float, proxy: str | None = None) -> float | None:
+    """A brand-new connection and one tiny request; its latency in ms, or None if it failed."""
     start = time.monotonic()
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(proxy=proxy, timeout=timeout) as client:
             resp = await client.get(url, headers={"Connection": "close"})
         return (time.monotonic() - start) * 1000 if resp.status_code < 500 else None
     except Exception:
@@ -27,7 +28,7 @@ async def _one(url: str, timeout: float) -> float | None:
 
 
 async def run(count: int = COUNT, url: str = URL, timeout: float = TIMEOUT_S) -> ProbeResult:
-    times = await asyncio.gather(*(_one(url, timeout) for _ in range(count)))
+    times = await asyncio.gather(*(handshake(url, timeout) for _ in range(count)))
     done = [t for t in times if t is not None]
     p50 = percentile(done, 50)
     data = {

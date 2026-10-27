@@ -1,12 +1,7 @@
-"""Network-regime classifier (see docs/proxy-stability-detection.md §4a).
-
-Distinguishes "this edge is dirty" from "the whole link is down" so a censorship
-window isn't misread as a proxy fault. Regimes: normal (intl up) / iran_only
-(intl blocked, Iran sites up) / total_outage / unknown.
-"""
+"""Network-regime classifier: tells "this edge is dirty" from "the whole link is down" so a censorship window
+isn't misread as a proxy fault. Regimes: normal / iran_only (intl blocked, Iran sites up) / total_outage / unknown."""
 
 import asyncio
-import os
 import socket
 import ssl
 import time
@@ -16,12 +11,12 @@ import httpx
 from app.models.schemas import RegimeInfo
 from app.services import direct_net
 
-INTL_HOST = os.environ.get("STABILITY_INTL_ANCHOR", "www.google.com")
-IR_HOSTS = [h.strip() for h in os.environ.get("STABILITY_IR_ANCHORS", "digikala.com,snapp.ir").split(",") if h.strip()]
+INTL_HOST = "www.google.com"
+IR_HOSTS = ["digikala.com", "snapp.ir"]
 ANCHOR_PORT = 443
 ANCHOR_TIMEOUT = 5.0
-DIRECT_GOODPUT_URL = os.environ.get("STABILITY_DIRECT_GOODPUT_URL", "https://www.gstatic.com/generate_204")
-DIRECT_GOODPUT_BYTES = int(os.environ.get("STABILITY_DIRECT_GOODPUT_BYTES", str(3_000_000)))
+DIRECT_GOODPUT_URL = "https://www.gstatic.com/generate_204"
+DIRECT_GOODPUT_BYTES = 3_000_000
 DIRECT_GOODPUT_TIMEOUT = 20.0
 
 # Cache the regime so a batch of per-proxy tests resolves the link once, and the

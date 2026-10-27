@@ -1,7 +1,6 @@
-// Package netgate separates "this edge is bad" from "the network is bad": during a
-// blackout or a lossy stretch every edge reads bad and acting on it only churns. Control
-// edges unrelated to the instance are measured at the same moment, and the edge is only
-// to blame when they are fine.
+// Package netgate separates "this edge is bad" from "the network is bad": in a blackout every edge
+// reads bad and acting on it only churns, so an edge is blamed only when control edges measured at the
+// same moment are fine.
 package netgate
 
 import (

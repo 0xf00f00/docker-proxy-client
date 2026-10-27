@@ -1,22 +1,14 @@
-// Package api exposes the scanner's status, a control surface, and a live SSE
-// event stream, for the dashboard to surface run info and drive a scan.
+// Package api is the scanner's control surface for the dashboard: status, a live SSE stream and
+// start/pause/resume/stop. Every endpoint but /healthz needs the X-Scanner-Secret header when a
+// secret is configured.
 //
-// Endpoints (all but /healthz require the shared secret when one is configured,
-// via the X-Scanner-Secret header):
+//	GET  /healthz      liveness only, unauthenticated
+//	GET  /scan         JSON snapshot
+//	GET  /scan/events  SSE: the full snapshot on every change, plus heartbeats
+//	POST /scan/{start,pause,resume,stop}
 //
-//	GET  /healthz      -> liveness only, unauthenticated, leaks nothing
-//	GET  /scan         -> JSON snapshot (state, progress, last run, working set…)
-//	GET  /scan/events  -> text/event-stream; full snapshot on every change + heartbeats
-//	POST /scan/start   -> begin a scan
-//	POST /scan/pause   -> suspend the running scan
-//	POST /scan/resume  -> resume a paused scan
-//	POST /scan/stop    -> cancel the running/paused scan
-//
-// Each action is single-concern and idempotent in effect (requesting the state
-// you are already in is a 200 no-op), mirroring Docker's start/stop/pause verbs.
-// Control is a small state machine: idle -> scanning <-> paused, and any active
-// state -> idle via stop. Pause genuinely suspends the worker pool (via the Wait
-// gate) rather than abandoning progress; stop cancels the run.
+// Actions are idempotent (requesting the current state is a 200 no-op). Pause suspends the worker
+// pool through the Wait gate rather than abandoning progress.
 package api
 
 import (

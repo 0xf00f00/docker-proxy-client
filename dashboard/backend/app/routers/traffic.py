@@ -1,9 +1,4 @@
-"""Real-time traffic SSE.
-
-One shared collector (see ``traffic_service``) fans the latest throughput
-snapshot out to every connected client, so N open dashboards cost the same as
-one. Read-only — no auth dependency, matching the other ``/stream`` endpoints.
-"""
+"""Real-time traffic SSE: one shared collector fans out to every client. Read-only, no auth."""
 
 import asyncio
 from collections.abc import AsyncGenerator
@@ -22,16 +17,7 @@ HEARTBEAT_SEC = 10.0
 
 @router.get("/stream")
 async def stream_traffic():
-    """Stream a compact throughput snapshot ~once per second.
-
-    Each ``traffic`` event carries::
-
-        {"ts": <epoch>, "system": {"up": <B/s>, "down": <B/s>},
-         "proxies": {"<container.name>": <B/s>, ...}}
-
-    ``system`` is the TUN system-proxy total (from Clash); ``proxies`` is the
-    dominant per-container throughput. Values are bytes/second.
-    """
+    """~1/s `traffic` events: {"ts", "system": {"up", "down"}, "proxies": {<container.name>: B/s}}."""
 
     async def gen() -> AsyncGenerator[str]:
         q = await collector.subscribe()

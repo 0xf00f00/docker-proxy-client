@@ -1,40 +1,8 @@
-"""Proxy stability probe (see docs/realtime-stability-repro.md).
+"""Proxy stability probe: grades a proxy under the conditions a plain connectivity test never creates.
 
-A plain connectivity test (one request, mean latency) reports "stable" on
-proxies that are visibly broken in real use, because it never creates the two
-conditions that actually break under DPI: connection *concurrency* (what a docker
-pull does) and *sustained load* (what makes a Google Meet call choppy). This
-creates both and grades them separately:
-
-  Bulk  — under a burst of many simultaneous NEW connections (what a docker pull
-          does), how many the DPI resets. A single long download survives, so a
-          sized download under-detects this; a 0-byte handshake burst is both more
-          sensitive and ~free on metered data.
-  Call  — latency spikes/jitter while the UPLOAD is saturated. Calls break in the
-          upload direction: the uplink is the scarce side and a single muxed
-          tunnel head-of-line-blocks the call behind bulk bytes. The download
-          direction has headroom, so saturating downloads does NOT reproduce the
-          lag — Call is probed under its own short upload-saturation phase.
-  UDP   — can a STUN binding survive over the proxy? If not, real calls fall back
-          to a slower TCP relay. Best-effort, SOCKS5-only (HTTP proxies can't
-          carry UDP at all).
-
-The Call latency is measured on ONE warm, kept-open connection pinged at a fixed
-cadence — the way a live call sends media on an already-established path. An
-earlier version opened a fresh connection per sample, which charged every probe a
-TCP+proxy handshake *under load* and so measured connection-setup-under-load, not
-call lag; it also produced thin samples (a handful of slow probes reading "100%
-froze"). Idle and loaded samples now come from the same warm connection, so they
-are like-for-like and the inflation ratio compares matching percentiles (p95/p95),
-not loaded-max / idle-median.
-
-Quota: users pay for metered data, so this is kept light. The Bulk detector is a
-burst of 0-byte handshakes (no payload). The only real data cost is the upload
-phase, which saturates the scarce uplink for CALL_ROUNDS x UPLOAD_WINDOW_S and is
-then cancelled, so it moves only ~uplink-rate x window (a few MB).
-
-WARNING: it briefly saturates the tunnel (both directions), degrading any live
-user for its duration — on-demand / quiet-window only, never an unattended loop.
+Bulk: a burst of new handshakes (what a docker pull does) plus long-lived survival. Call: p95
+inflation, jitter and loss on one warm connection while the uplink is saturated. UDP: a STUN
+binding over SOCKS5. It briefly saturates the tunnel, so it is on-demand only, never a loop.
 """
 
 import asyncio
@@ -50,32 +18,28 @@ import httpx
 
 from app.models.schemas import ContainerInfo, RegimeInfo, StabilityResult
 from app.services.connectivity_tests import regime as regime_mod
+from app.services.health.probes import burst, jitter
+from app.services.health.settings import PROBE_URL, SPEED_HOST, STUN_HOST, STUN_PORT
 
 EventCb = Callable[[str, dict], Awaitable[None]]
 
-LATENCY_URL = "http://www.gstatic.com/generate_204"
+LATENCY_URL = PROBE_URL
 
-BURST_URL = "https://speed.cloudflare.com/__down?bytes=0"
+BURST_URL = burst.URL
 BURST_N = 20
 BURST_CYCLES = 3
 BURST_TIMEOUT_S = 20.0
 
-# Upload-saturation (Call) phase. Calls break in the upload direction, so call
-# latency is probed while the uplink is saturated — not during the (healthy)
-# download phase. The uplink is the scarce side, so a short fixed window saturates
-# it on a few streams; we cancel them when the window ends. The per-stream cap is
-# only a ceiling — actual data moved ≈ uplink-rate x window (a few MB). Two short
-# rounds sample two moments (DPI degradation is transient) instead of one window.
-UPLOAD_URL = "https://speed.cloudflare.com/__up"
+# Calls break in the upload direction (the scarce side), so latency is probed under upload load.
+# The stream cap is a ceiling; data moved is about uplink-rate x window. Two rounds sample two moments.
+UPLOAD_URL = f"https://{SPEED_HOST}/__up"
 UPLOAD_CONCURRENCY = 6
 UPLOAD_WINDOW_S = 8.0
 CALL_ROUNDS = 2
 UPLOAD_STREAM_CAP_BYTES = 2_000_000
 UPLOAD_CHUNK = 65_536
 
-# Warm call-path probe: one kept-open connection pinged at a fixed cadence, both
-# idle and under load. ~13 pings/s is dense enough for real jitter/percentiles
-# without itself being a load.
+# One kept-open connection pinged at a fixed cadence, idle and loaded, like a live call.
 PING_INTERVAL_S = 0.075
 PING_TIMEOUT_S = 8.0
 MIN_CALL_SAMPLES = 5  # below this the loaded sample is too thin to grade
@@ -83,29 +47,17 @@ MIN_CALL_SAMPLES = 5  # below this the loaded sample is too thin to grade
 STREAM_TIMEOUT = 45.0  # upload-stream ceiling (the Call phase)
 IDLE_PROBES = 10
 
-# Long-lived survival: small periodic requests over a held connection — trivial
-# data, models a call with talk gaps (DPI often resets long/idle sessions). The
-# hold must outlast typical idle-reset timers; 60s with a 30s gap between trickles
-# leaves a real multi-second silence for the timer to fire on (a tighter trickle
-# keeps the connection "active" and hides the reset).
+# The 30s gap leaves real silence for an idle-reset timer to fire; a tighter trickle would hide it.
 LONGLIVED_COUNT = 2
 LONGLIVED_HOLD_S = 60.0
 LONGLIVED_TRICKLE_S = 30.0
 
-# UDP/WebRTC reachability: a STUN binding over the proxy. Best-effort, short.
-STUN_HOST = "stun.l.google.com"
-STUN_PORT = 19302
 UDP_PROBE_TIMEOUT_S = 4.0
 
-# Worst-case data ceiling.
 DATA_BUDGET_MB = round((CALL_ROUNDS * UPLOAD_CONCURRENCY * UPLOAD_STREAM_CAP_BYTES) / 1_000_000)
 
-# Grading. Tail-spike based: p50 can look fine while the tail hits multiple seconds
-# — calls freeze on those spikes, so we grade on p95-inflation and the fraction of
-# pings over SPIKE_THRESHOLD. The Call signal comes from the UPLOAD-saturation
-# phase, measured on a warm connection (see _load_and_probe). NOTE: these
-# thresholds are reasonable defaults for warm-connection p95 numbers but still want
-# confirmation against a few live captures on this link.
+# Graded on the tail (p95 inflation, spike share): p50 can look fine while calls freeze on spikes.
+# Thresholds still want confirmation against live captures.
 SPIKE_THRESHOLD_MS = 1000.0  # an RTT spike past this freezes a Meet call
 BULK_BAD_RATE = 0.10
 BULK_DEGRADED_RATE = 0.03
@@ -128,15 +80,6 @@ def _proxy_url(protocol: str, address: str) -> str | None:
     return None
 
 
-def _jitter(samples: list[float]) -> float | None:
-    """Mean absolute difference between consecutive samples — the packet-delay-
-    variation definition WebRTC cares about, not raw stdev."""
-    if len(samples) < 2:
-        return None
-    diffs = [abs(samples[i] - samples[i - 1]) for i in range(1, len(samples))]
-    return round(statistics.fmean(diffs), 1)
-
-
 def _median(values: list[float]) -> float | None:
     return round(statistics.median(values), 1) if values else None
 
@@ -154,28 +97,15 @@ def _pct(values: list[float], p: float) -> float | None:
     return round(v, 1)
 
 
-async def _one_handshake(proxy_url: str) -> bool:
-    """Open a brand-new connection through the proxy and make one tiny request.
-    True = it completed; False = the connection was reset/failed. No pooling: each
-    call is a fresh handshake, so a concurrent batch is a *burst of new handshakes*
-    (what the DPI drops a few of)."""
-    try:
-        async with httpx.AsyncClient(proxy=proxy_url, timeout=httpx.Timeout(BURST_TIMEOUT_S)) as client:
-            resp = await client.get(BURST_URL)
-            return resp.status_code < 500
-    except Exception:
-        return False
-
-
 async def _handshake_burst(proxy_url: str, emit: EventCb) -> dict:
-    """Bulk grade: fire BURST_N brand-new connections at once, repeat BURST_CYCLES
-    times, count how many the DPI reset. Near-zero data, and more sensitive than a
-    sized download (it catches the connect-time RST a single long stream hides)."""
+    """Fire BURST_N new connections at once, BURST_CYCLES times, and count the resets. Near-zero data."""
     total = ok = 0
     for _ in range(BURST_CYCLES):
         await emit("progress", {"phase": "load"})
-        results = await asyncio.gather(*(_one_handshake(proxy_url) for _ in range(BURST_N)))
-        ok += sum(1 for r in results if r)
+        results = await asyncio.gather(
+            *(burst.handshake(BURST_URL, BURST_TIMEOUT_S, proxy_url) for _ in range(BURST_N))
+        )
+        ok += sum(1 for r in results if r is not None)
         total += len(results)
         await asyncio.sleep(1.0)
     resets = total - ok
@@ -192,10 +122,7 @@ async def _handshake_burst(proxy_url: str, emit: EventCb) -> dict:
 async def _warm_ping_series(
     client: httpx.AsyncClient, *, deadline: float | None = None, count: int | None = None
 ) -> tuple[list[float], int]:
-    """Ping LATENCY_URL over an already-warm `client` at PING_INTERVAL_S cadence
-    until `deadline` (time.monotonic) or `count` pings. Reuses the kept-open
-    connection, so after warm-up each sample is RTT on the established path — not a
-    fresh handshake. Returns (latencies_ms, loss)."""
+    """Ping over the already-warm `client` until `deadline` or `count`; returns (latencies_ms, loss)."""
     lat: list[float] = []
     loss = 0
     n = 0
@@ -222,10 +149,7 @@ async def _warm_ping_series(
 
 
 async def _one_upload_stream(proxy_url: str) -> None:
-    """Saturate the uplink with a byte-capped zero-body POST. The cap is only a
-    ceiling — on a slow uplink the surrounding window cancels the task first, so
-    this moves ~uplink-rate x window, not the cap. Outcome is unused: the Call
-    signal is the latency probed *during* this load, not the stream's fate."""
+    """Saturate the uplink with a byte-capped POST; its outcome is unused, the load is the point."""
     sent = 0
 
     async def body() -> AsyncIterator[bytes]:
@@ -245,23 +169,16 @@ async def _one_upload_stream(proxy_url: str) -> None:
 
 
 async def _load_and_probe(proxy_url: str, emit: EventCb) -> dict:
-    """Idle baseline + upload-saturation rounds, all over ONE warm call-path
-    connection — feeds the Call grade. Calls break in the upload direction (scarce
-    uplink + a muxed tunnel that HOL-blocks the call behind bulk), and the download
-    direction has headroom, so probing call latency under downloads would understate
-    the lag. The Bulk grade comes separately from _handshake_burst."""
+    """Idle baseline plus upload-saturation rounds over ONE warm connection; feeds the Call grade."""
     limits = httpx.Limits(max_keepalive_connections=1, max_connections=1)
     await emit("progress", {"phase": "idle"})
 
-    # Warm call-path client: idle + loaded samples share this kept-open connection,
-    # so they are like-for-like (no per-sample handshake charged under load).
+    # Idle and loaded samples share one connection so they are like-for-like.
     async with httpx.AsyncClient(proxy=proxy_url, timeout=PING_TIMEOUT_S, limits=limits) as ping:
         with contextlib.suppress(Exception):
             await ping.get(LATENCY_URL)  # warm the connection before the baseline
         idle, _ = await _warm_ping_series(ping, count=IDLE_PROBES)
 
-        # Call: saturate the uplink over CALL_ROUNDS short windows (two moments,
-        # not one), pinging the same warm connection throughout. Merge the samples.
         loaded: list[float] = []
         loss = 0
         for _ in range(CALL_ROUNDS):
@@ -280,13 +197,14 @@ async def _load_and_probe(proxy_url: str, emit: EventCb) -> dict:
     loaded_max = max(loaded) if loaded else None
     probed = len(loaded) + loss
     spike = sum(1 for v in loaded if v > SPIKE_THRESHOLD_MS)
+    loaded_jitter = jitter(loaded)
     return {
         "idle_p50_ms": _median(idle),
         "idle_p95_ms": idle_p95,
         "loaded_p50_ms": _median(loaded),
         "loaded_p95_ms": loaded_p95,
         "loaded_max_ms": round(loaded_max, 1) if loaded_max else None,
-        "loaded_jitter_ms": _jitter(loaded),
+        "loaded_jitter_ms": round(loaded_jitter, 1) if loaded_jitter is not None else None,
         "loaded_loss_pct": round(100 * loss / probed, 1) if probed else None,
         "loaded_spike_pct": round(100 * spike / len(loaded), 1) if loaded else None,
         "loaded_samples": len(loaded),
@@ -295,8 +213,7 @@ async def _load_and_probe(proxy_url: str, emit: EventCb) -> dict:
 
 
 async def _hold_one(proxy_url: str) -> float:
-    """Hold a connection open with periodic small requests; return seconds it
-    survived (== HOLD if it never reset)."""
+    """Hold a connection open with small periodic requests; returns the seconds it survived."""
     start = time.monotonic()
     try:
         async with httpx.AsyncClient(proxy=proxy_url, timeout=PING_TIMEOUT_S) as client:
@@ -311,10 +228,7 @@ async def _hold_one(proxy_url: str) -> float:
 
 
 async def _longlived(proxy_url: str, emit: EventCb) -> dict:
-    """Hold LONGLIVED_COUNT connections open for the fixed window. We announce the
-    duration *once* and let the browser run the visible countdown locally —
-    streaming a per-second tick is unreliable (SSE chunks can buffer mid-stream
-    and freeze the number), and the duration is fixed so the client can derive it."""
+    """Announce the fixed duration once; the browser runs the countdown (per-second SSE ticks buffer and freeze)."""
     await emit("progress", {"phase": "longlived", "total_s": int(LONGLIVED_HOLD_S)})
     ttls = await asyncio.gather(*(_hold_one(proxy_url) for _ in range(LONGLIVED_COUNT)))
     return {

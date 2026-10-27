@@ -11,7 +11,6 @@ from app.models.schemas import ContainerInfo, DashboardLabels
 _client: docker.DockerClient | None = None
 
 SOCKET_PATHS = [
-    settings.docker_host,
     os.environ.get("DOCKER_HOST", ""),
     "unix:///var/run/docker.sock",
     f"unix://{Path.home()}/.docker/run/docker.sock",
@@ -71,15 +70,10 @@ def _is_host_network(container: Container) -> bool:
 
 
 def _find_published_lan_address(container: Container, port: int) -> str | None:
-    """
-    Find a host-published binding whose host-side port == `port` AND is
-    reachable from other devices on the LAN. Returns `"host_ip:port"` or None.
+    """`host_ip:port` for a host-published binding of `port` that other LAN devices can reach.
 
-    - All-interfaces bindings (`0.0.0.0`, `::`, empty) → host's detected LAN IP.
-    - Loopback bindings (`127.x`, `::1`) → skipped. Reachable from the host
-      itself but not from a phone or laptop on the LAN, so they don't count
-      as a LAN address even though the dashboard's own backend could hit them.
-    - Specific non-loopback IPs → reported verbatim.
+    All-interfaces bindings map to the host's LAN IP; loopback bindings are skipped, since a phone
+    on the LAN can't use them even though the dashboard's own backend could.
     """
     ports = container.attrs.get("NetworkSettings", {}).get("Ports") or {}
     for bindings in ports.values():
@@ -96,94 +90,40 @@ def _find_published_lan_address(container: Container, port: int) -> str | None:
     return None
 
 
-def _get_macvlan_ip(container: Container) -> str | None:
-    """Get IP from the direct_internet (macvlan) network."""
+def _network_ip(container: Container, *, macvlan: bool) -> str | None:
     networks = container.attrs.get("NetworkSettings", {}).get("Networks") or {}
     for net_name, net_config in networks.items():
-        if "direct_internet" in net_name:
-            ip = net_config.get("IPAddress")
-            if ip:
-                return ip
+        if ("direct_internet" in net_name) == macvlan and net_config.get("IPAddress"):
+            return net_config["IPAddress"]
     return None
 
 
-def _get_bridge_ip(container: Container) -> str | None:
-    """Get IP from a non-macvlan (bridge) network. Reachable from the host."""
-    networks = container.attrs.get("NetworkSettings", {}).get("Networks") or {}
-    for net_name, net_config in networks.items():
-        if "direct_internet" in net_name:
-            continue
-        ip = net_config.get("IPAddress")
+def _resolve_address(container: Container, labels: DashboardLabels, macvlan_order: tuple[bool, ...]) -> str | None:
+    """`labels.port` is the port a user dials; the host side comes from Docker's live config:
+    host network, then a LAN-reachable published port, then the first network IP in `macvlan_order`."""
+    if labels.port is None:
+        return None
+    if _is_host_network(container):
+        return f"{settings.host_lan_ip}:{labels.port}"
+    published = _find_published_lan_address(container, labels.port)
+    if published:
+        return published
+    for macvlan in macvlan_order:
+        ip = _network_ip(container, macvlan=macvlan)
         if ip:
-            return ip
+            return f"{ip}:{labels.port}"
     return None
 
 
 def resolve_lan_address(container: Container, labels: DashboardLabels) -> str | None:
-    """
-    Resolve the address users type into their proxy app on the LAN: `<host>:<port>`.
-
-    "LAN" is the contract: this is what any device on the local network can
-    connect to. Services only reachable on loopback don't qualify and return
-    None — surfacing them would invite tests that pass for the dashboard but
-    fail for the user's phone.
-
-    `labels.port` is the single source of truth for the port — the port a
-    user dials. The host side is always derived from Docker's live config:
-
-      1. `network_mode: host` → host's LAN IP
-      2. Port published on a LAN-reachable interface → that interface IP
-      3. Attached to the `direct_internet` macvlan → the container's macvlan IP
-      4. Otherwise → None (internal-only or loopback-only)
-    """
-    if labels.port is None:
-        return None
-
-    if _is_host_network(container):
-        return f"{settings.host_lan_ip}:{labels.port}"
-
-    published = _find_published_lan_address(container, labels.port)
-    if published:
-        return published
-
-    macvlan_ip = _get_macvlan_ip(container)
-    if macvlan_ip:
-        return f"{macvlan_ip}:{labels.port}"
-
-    return None
+    """What a LAN device types into its proxy app. Loopback-only or internal services return None."""
+    return _resolve_address(container, labels, (True,))
 
 
 def resolve_probe_address(container: Container, labels: DashboardLabels) -> str | None:
-    """
-    Resolve the address the dashboard backend uses to *test* the container.
-
-    Diverges from `resolve_lan_address` only for macvlan-attached containers:
-    the dashboard runs with `network_mode: host`, and Linux blocks traffic
-    between the host and macvlan interfaces sharing the same parent. So a
-    192.168.88.x macvlan IP that a phone on the LAN can reach is unreachable
-    from this process. When the container is also on a bridge network we
-    probe via that bridge IP instead (the same trick Clash uses for its
-    upstream proxies).
-    """
-    if labels.port is None:
-        return None
-
-    if _is_host_network(container):
-        return f"{settings.host_lan_ip}:{labels.port}"
-
-    published = _find_published_lan_address(container, labels.port)
-    if published:
-        return published
-
-    bridge_ip = _get_bridge_ip(container)
-    if bridge_ip:
-        return f"{bridge_ip}:{labels.port}"
-
-    macvlan_ip = _get_macvlan_ip(container)
-    if macvlan_ip:
-        return f"{macvlan_ip}:{labels.port}"
-
-    return None
+    """Where the dashboard tests the container: the bridge IP is preferred because Linux blocks host
+    traffic to macvlan IPs on the host's own parent interface."""
+    return _resolve_address(container, labels, (False, True))
 
 
 def get_container_health(container: Container) -> str | None:

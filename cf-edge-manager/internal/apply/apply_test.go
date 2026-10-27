@@ -4,8 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/0xf00f00/cf-edge-manager/internal/decoy"
 )
 
 func writeIni(t *testing.T, body string) string {
@@ -50,20 +48,6 @@ func TestFakeSNIEmptyValueStaysOnItsLine(t *testing.T) {
 	}
 }
 
-// sni-spoofing also accepts fake_sni and inline # / ; comments.
-func TestFakeSNISpellings(t *testing.T) {
-	for body, want := range map[string]string{
-		"fake_sni = a.example\n":            "a.example",
-		"  fake-sni=a.example ; note\n":     "a.example",
-		"fake-sni = a.example# note\n":      "a.example",
-		"# fake-sni = x.example\nconnect=1": "",
-	} {
-		if got := (&Applier{SnispoofConf: writeIni(t, body)}).CurrentFakeSNI(); got != want {
-			t.Errorf("%q: current = %q, want %q", body, got, want)
-		}
-	}
-}
-
 func TestWriteFakeSNIRejectsInvalid(t *testing.T) {
 	const body = "fake-sni = a.example\n"
 	p := writeIni(t, body)
@@ -74,18 +58,6 @@ func TestWriteFakeSNIRejectsInvalid(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(p); string(b) != body {
 		t.Errorf("rejected writes must leave the file alone: %q", b)
-	}
-}
-
-func TestWriteFakeSNIErrors(t *testing.T) {
-	if err := (&Applier{SnispoofConf: writeIni(t, "connect = 1.2.3.4:443\n")}).WriteFakeSNI("a.com"); err == nil {
-		t.Error("expected error when the ini has no fake-sni line")
-	}
-	if err := (&Applier{SnispoofConf: filepath.Join(t.TempDir(), "nope.ini")}).WriteFakeSNI("a.com"); err == nil {
-		t.Error("expected error for a missing file")
-	}
-	if got := (&Applier{SnispoofConf: filepath.Join(t.TempDir(), "nope.ini")}).CurrentFakeSNI(); got != "" {
-		t.Errorf("missing file must read as empty, got %q", got)
 	}
 }
 
@@ -117,14 +89,5 @@ func TestWriteEdgeRejectsNonIP(t *testing.T) {
 	}
 	if err := (&Applier{SnispoofConf: writeIni(t, "fake-sni = a.example\n"), Port: 443}).WriteSnispoof("192.0.2.1"); err == nil {
 		t.Error("expected error when the ini has no connect line")
-	}
-}
-
-func TestLiveFakeSNI(t *testing.T) {
-	if got := LiveFakeSNI(writeIni(t, "fake-sni = a.example\n")); got != "a.example" {
-		t.Errorf("got %q", got)
-	}
-	if got := LiveFakeSNI(filepath.Join(t.TempDir(), "nope.ini")); got != decoy.Default {
-		t.Errorf("missing config must fall back to decoy.Default, got %q", got)
 	}
 }

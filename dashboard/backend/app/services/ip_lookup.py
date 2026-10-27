@@ -1,14 +1,7 @@
-"""Public-IP / country lookup, optionally tunneled through a given proxy.
+"""Public-IP / country lookup, optionally through a proxy.
 
-Used by the connectivity tests to enrich a successful probe with the egress
-IP+country (so the dashboard can show "via this proxy you exit as 🇺🇸 X.X.X.X").
-Same machinery serves the system-proxy widget — pass the active proxy URL.
-
-Several free APIs are tried in order. The list is ordered by: rich JSON
-first, then minimal-and-permissive, then a rate-limited last resort. Each
-provider gets a tight per-attempt timeout so a slow one can't hold up the
-whole probe. Results are cached briefly per (proxy_url) so rapid re-renders
-don't re-hammer the APIs.
+Free APIs are tried in order (rich JSON, then minimal, then a rate-limited last resort), each with a
+tight timeout, and results are cached briefly per proxy URL.
 """
 
 import asyncio
@@ -115,12 +108,7 @@ _PROVIDERS = (_try_cloudflare_trace, _try_ipwho_is, _try_country_is, _try_ifconf
 
 
 async def lookup(proxy_url: str | None) -> IpInfo | None:
-    """Return the public IP + country, optionally as seen through `proxy_url`.
-
-    Passing `None` queries from the dashboard backend's own egress (used for
-    e.g. the system-proxy widget when the dashboard host shares egress with
-    the proxy). Returns None if every provider fails.
-    """
+    """The public IP + country as seen through `proxy_url` (None = the backend's own egress), or None."""
     now = time.monotonic()
     async with _cache_lock:
         cached = _cache.get(proxy_url)

@@ -1,7 +1,6 @@
-// Package apply performs the selector's side-effects: rewriting the byedpi
-// (coredns hosts) and sni-spoofing (.ini connect=, fake-sni=) configs, and restarting
-// the sni-spoofing container. It is the "apply half" of the old picker — pure
-// I/O, no policy. The selector owns WHEN to restart (rate-limit); this owns HOW.
+// Package apply performs the selector's side effects: rewriting the byedpi (coredns hosts) and
+// sni-spoofing (.ini connect=, fake-sni=) configs and restarting the container. The selector owns WHEN
+// to restart; this owns HOW.
 package apply
 
 import (

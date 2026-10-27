@@ -8,17 +8,13 @@ class DashboardLabels(BaseModel):
     category: str = "infra"
     name: str = ""
     protocol: str = ""
-    # The LAN port a user connects to (NOT the container-internal port).
-    # The host side is derived from Docker's live network config — see
-    # services/docker_service.py::resolve_lan_address.
+    # The LAN port a user connects to, not the container-internal one.
     port: int | None = None
     config: str | None = None
     widget: str | None = None
     testable: bool = True
     env: list[str] = []
     # Name of the registered SystemProxyController this container implements.
-    # The system-proxy widget asks the registry for this name to find the
-    # active controller. See services/system_proxy/registry.py.
     controller: str | None = None
 
 
@@ -33,9 +29,7 @@ class ContainerInfo(BaseModel):
     # Address users dial from other LAN devices. May be a macvlan IP that the
     # dashboard backend itself cannot reach (host ↔ macvlan is blocked).
     lan_address: str | None = None
-    # Address the dashboard backend uses for connectivity probes. Same as
-    # lan_address except macvlan IPs are swapped for the bridge IP, which is
-    # reachable from the host network. See docker_service.resolve_probe_address.
+    # Where the backend probes: lan_address with macvlan IPs swapped for the host-reachable bridge IP.
     probe_address: str | None = None
 
 
@@ -62,9 +56,7 @@ class ConnectivityResult(BaseModel):
     error: str | None = None
     tested_via: str
     ip_info: IpInfo | None = None
-    # When this result was produced (UTC). Lets the dashboard show "tested N ago"
-    # and skip re-probing still-fresh results on page load. None for an un-cached
-    # / legacy result.
+    # When produced (UTC): drives "tested N ago" and skipping fresh results on load.
     tested_at: datetime | None = None
 
 
@@ -78,28 +70,19 @@ class ConnectivityResultsResponse(BaseModel):
 
 
 class RegimeInfo(BaseModel):
-    """Network-regime classification for a stability batch (see
-    docs/proxy-stability-detection.md §4a). Decides whether a proxy verdict is
-    even meaningful right now, and whether a direct international baseline is
-    usable."""
+    """Network-regime classification: whether a proxy verdict is meaningful now and a direct baseline usable."""
 
     # normal | dpi_degraded | iran_only | total_outage | unknown
     regime: str
-    # Is the direct international path usable as a throughput baseline? False
-    # during Iran-only blackouts / outages — proxy grades are then suppressed.
+    # False during Iran-only blackouts and outages, when proxy grades are suppressed.
     intl_up: bool
     direct_goodput_mbps: float | None = None
     detail: str = ""
 
 
 class StabilityResult(BaseModel):
-    """Outcome of the stability probe (see docs/realtime-stability-repro.md).
-
-    Grades two things users experience separately: bulk-transfer survival under
-    many parallel streams (downloads / docker pull) and real-time call quality
-    under load (loaded-latency spikes + jitter, what governs Google Meet).
-    Regime-gated: inconclusive during an Iran-only blackout.
-    """
+    """Stability probe outcome: bulk survival under parallel streams and call quality under load,
+    graded separately. Inconclusive during a blackout."""
 
     service: str
     # good | degraded | bad | inconclusive
@@ -116,9 +99,7 @@ class StabilityResult(BaseModel):
     reset_rate: float = 0.0
     stall_rate: float = 0.0
 
-    # Call: latency under load, measured on one warm connection (idle + loaded
-    # samples are like-for-like). Calls freeze on tail spikes (>1s), so the spike
-    # fraction and p95-inflation are the signals.
+    # Call: latency on one warm connection, idle vs loaded; calls freeze on >1s tail spikes.
     idle_p50_ms: float | None = None
     idle_p95_ms: float | None = None
     loaded_p50_ms: float | None = None
@@ -279,9 +260,7 @@ class DnsScannerStatus(BaseModel):
     paused: bool = False
     working_count: int = 0
     working: list[DnsResolver] = []
-    # Live progress during a run: `accepted` resolvers found of `target_n`, with
-    # `probed` of `candidates` IPs checked so far since `run_started`. `phase` is
-    # which leg is running ("verify" = re-checking known resolvers, "sweep" = new).
+    # Run progress: `accepted` of `target_n`, `probed` of `candidates`; `phase` is verify, sweep or backup.
     run_started: datetime | None = None
     phase: str = ""
     candidates: int = 0
@@ -305,10 +284,7 @@ class EdgeTestRequest(BaseModel):
 
 
 class EdgeTestResponse(BaseModel):
-    """Outcome of a single-IP test request. `pending` is True when a fresh probe
-    is actually running (the UI keeps its spinner until a new result streams in)
-    and False when the scanner served a cached result within its cooldown -- that
-    result is already in /scanner/status, so the UI must stop waiting."""
+    """`pending` is True while a fresh probe runs; False when a cooldown-cached result is already in /scanner/status."""
 
     success: bool
     message: str

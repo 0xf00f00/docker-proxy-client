@@ -1,10 +1,5 @@
-"""Pure timeline analytics over stored health segments.
-
-Stateless, I/O-free transforms shared by the monitor and the read API: resolve the
-live tail (``clip_segments``), aggregate into buckets/window totals (``bucketize``,
-``summarize``), and derive discrete incidents (``find_incidents``). Kept as plain
-functions so they're trivially unit-testable in isolation.
-"""
+"""Pure analytics over stored health segments: live tail (``clip_segments``), buckets and totals
+(``bucketize``, ``summarize``), and discrete incidents (``find_incidents``)."""
 
 from app.services.health.cause import cause_for, describe_detail
 from app.services.health.settings import MAX_GAP_S, STATUSES
@@ -13,13 +8,8 @@ from app.services.health.settings import MAX_GAP_S, STATUSES
 def clip_segments(
     rows: list[tuple[int, int, str, str, str | None]], until: int, alive_ts: int | None
 ) -> list[tuple[int, int, str]]:
-    """Stored segments -> ``(start, end, status)`` for bucketing/summary.
-
-    Stored rows are contiguous by construction, so the only fix-up is the tail: the
-    open (latest) row is extended to the monitor's live edge (``alive_ts``), and any
-    span beyond that wider than ``MAX_GAP_S`` (monitor was down) becomes ``unknown``
-    rather than stretching the last known state across it.
-    """
+    """Stored segments -> ``(start, end, status)``. Only the tail needs fixing: the open row extends to
+    ``alive_ts``, and a span past it wider than ``MAX_GAP_S`` (monitor down) becomes ``unknown``."""
     segs: list[list] = [[s, e, status] for s, e, status, _regime, _detail in rows]
     if not segs:
         return []
@@ -105,13 +95,8 @@ def summarize(segments: list[tuple[int, int, str]], since: int, until: int) -> d
 def find_incidents(
     rows: list[tuple[int, int, str, str, str | None]], until: int, alive_ts: int | None, min_duration_s: int = 60
 ) -> list[dict]:
-    """Discrete incidents = maximal contiguous runs of outage/degraded segments.
-
-    ``rows`` is stored ``(start, end, status, regime, detail)`` ascending. Each incident
-    reports its worst status, the regime that best explains it, a plain-language cause,
-    and (when known) a finer ``causeDetail`` of *why* — e.g. how slow the slowdown was,
-    or that DNS was failing. Runs shorter than ``min_duration_s`` are dropped as flaps.
-    """
+    """Incidents = maximal runs of outage/degraded segments, each with its worst status, best-explaining regime,
+    a plain-language cause and an optional finer ``causeDetail``. Runs under ``min_duration_s`` are flaps."""
     incidents: list[dict] = []
     run: list[tuple[int, int, str, str, str | None]] = []
 

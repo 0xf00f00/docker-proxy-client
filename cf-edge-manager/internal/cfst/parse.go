@@ -23,11 +23,9 @@ type Edge struct {
 	Stats
 }
 
-// parseEdges reads cfst's result CSV. The layout is positional —
-// IP,Sent,Received,LossRate,AvgLatency,Speed — with a localized header row we
-// skip by position rather than by name. Rows whose first field is not an IP, or
-// that are short/garbled, are dropped (cfst can write a partial file on a
-// non-zero exit, which we still want to salvage).
+// parseEdges reads cfst's positional result CSV (IP,Sent,Received,LossRate,AvgLatency,Speed), skipping the
+// localized header by position. Non-IP or garbled rows are dropped; cfst can leave a partial file on a
+// non-zero exit, which is still worth salvaging.
 func parseEdges(r io.Reader) ([]Edge, error) {
 	cr := csv.NewReader(r)
 	cr.FieldsPerRecord = -1

@@ -6,12 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
-	"slices"
 	"strconv"
-	"strings"
 	"time"
-	"unicode"
 )
 
 // Instance is one managed sni-spoofing container: its name (also the container
@@ -101,11 +97,13 @@ type Config struct {
 	SNIVersion string // embedded sni-spoofing module version, surfaced in /status
 }
 
-const (
-	defaultInstances = "sni-spoofing,sni-spoofing-fallback"
-	instanceDir      = "/instances"
-	stateDir         = "/state"
-)
+func instance(name string) Instance {
+	return Instance{
+		Name:  name,
+		Conf:  filepath.Join("/instances", name, "config.ini"),
+		State: filepath.Join("/state", "picker-"+name+".json"),
+	}
+}
 
 // Defaults is the fixed behavior; deliberately not configurable.
 func Defaults() Config {
@@ -130,6 +128,7 @@ func Defaults() Config {
 		ConfirmTicks: 3, MaxRotations: 4, PoolMinShare: 0.25,
 		AckWindow: 15 * time.Minute, AckMax: 0.08, AckMinSamples: 30,
 
+		Instances:    []Instance{instance("sni-spoofing"), instance("sni-spoofing-fallback")},
 		CorednsHosts: "/coredns-fallback/edge.hosts", DockerSock: "/var/run/docker.sock",
 		SNIVersion: "0.7.2",
 	}
@@ -138,10 +137,6 @@ func Defaults() Config {
 // Load is Defaults plus the operator's settings from the environment.
 func Load() (Config, error) {
 	c := Defaults()
-	var err error
-	if c.Instances, err = parseInstances(env("SNISPOOF_INSTANCES", defaultInstances), instanceDir, stateDir); err != nil {
-		return Config{}, err
-	}
 	c.ScanEnable = envBool("SCAN_ENABLE", false)
 	c.ScanCron = env("SCAN_CRON", "")
 	c.SelectEnable = envBool("SELECT_ENABLE", false)
@@ -163,32 +158,6 @@ func (c Config) validate() error {
 		}
 	}
 	return nil
-}
-
-var instanceName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
-
-// parseInstances turns a comma/space separated list of container names into
-// instances. A name is interpolated into a docker API path and file paths, hence
-// the strict pattern.
-func parseInstances(list, dir, stateDir string) ([]Instance, error) {
-	var out []Instance
-	for _, name := range strings.FieldsFunc(list, func(r rune) bool { return r == ',' || unicode.IsSpace(r) }) {
-		switch {
-		case !instanceName.MatchString(name):
-			return nil, fmt.Errorf("SNISPOOF_INSTANCES: invalid name %q", name)
-		case slices.ContainsFunc(out, func(i Instance) bool { return i.Name == name }):
-			return nil, fmt.Errorf("SNISPOOF_INSTANCES: %q listed twice", name)
-		}
-		out = append(out, Instance{
-			Name:  name,
-			Conf:  filepath.Join(dir, name, "config.ini"),
-			State: filepath.Join(stateDir, "picker-"+name+".json"),
-		})
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("SNISPOOF_INSTANCES must name at least one instance")
-	}
-	return out, nil
 }
 
 // PrimaryConf is the first instance's config, the decoy source for probes that

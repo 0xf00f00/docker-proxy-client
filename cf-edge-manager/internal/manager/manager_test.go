@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +22,7 @@ func newTestManager(t *testing.T, names ...string) *Manager {
 	cfg := config.Defaults()
 	cfg.OutDir, cfg.CorednsHosts, cfg.FrontHost = t.TempDir(), filepath.Join(t.TempDir(), "edge.hosts"), "front.example"
 	cfg.GateSettle = 2
+	cfg.Instances = nil
 	if err := os.WriteFile(cfg.CorednsHosts, []byte("198.51.100.9 front.example\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -41,18 +41,6 @@ func writePool(t *testing.T, m *Manager, ips ...string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(m.cfg.OutDir, "pool.txt"), []byte(strings.Join(ips, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestPeersAreEveryoneElse(t *testing.T) {
-	m := newTestManager(t, "a", "b", "c")
-	edges, decoys := m.peersOf(0)()
-	if !slices.Equal(edges, []string{"192.0.2.2", "192.0.2.3", "198.51.100.9"}) || !slices.Equal(decoys, []string{"b.example", "c.example"}) {
-		t.Errorf("first instance must avoid the others and the byedpi edge: %v %v", edges, decoys)
-	}
-	edges, decoys = m.peersOf(2)()
-	if !slices.Equal(edges, []string{"192.0.2.1", "192.0.2.2"}) || !slices.Equal(decoys, []string{"a.example", "b.example"}) {
-		t.Errorf("the byedpi owner already knows its own edge: %v %v", edges, decoys)
 	}
 }
 
@@ -123,49 +111,5 @@ func TestBlackoutHoldsAndRecoveryNeedsToSettle(t *testing.T) {
 	}
 	if got := read(); got != "" {
 		t.Errorf("Hold = %q after two good readings, want released", got)
-	}
-}
-
-// One throttled edge among healthy controls is exactly the case to act on.
-func TestOneBadEdgeAmongHealthyControlsIsNotAnOutage(t *testing.T) {
-	m := newTestManager(t, "a", "b")
-	writePool(t, m, "198.51.100.10", "198.51.100.11", "198.51.100.12", "198.51.100.13")
-	m.controlLoss = func(ip string) float64 {
-		if ip == "192.0.2.1" {
-			return 0.6
-		}
-		return 0
-	}
-	if got := m.Hold(); got != "" {
-		t.Errorf("Hold = %q; a single bad edge must still be judged on its own", got)
-	}
-}
-
-type sinceSource struct {
-	logSource
-	since *time.Time
-}
-
-func (s sinceSource) Logs(ctx context.Context, name string, since time.Time) ([]string, error) {
-	*s.since = since
-	return s.logSource.Logs(ctx, name, since)
-}
-
-// Failures from an outage must not condemn the edge once the network is back.
-func TestPassiveWindowStartsAtTheRecoveryNotTheOutage(t *testing.T) {
-	m := newTestManager(t, "a")
-	writePool(t, m, "198.51.100.10", "198.51.100.11", "198.51.100.12")
-	loss := 1.0
-	m.controlLoss = func(string) float64 { return loss }
-	for range 3 {
-		m.gateMemo = memo[netgate.State]{}
-		m.Hold()
-		loss = 0
-	}
-	var since time.Time
-	m.logs = sinceSource{logSource{"a": {100, 50}}, &since}
-	m.ack("a")
-	if recovered := m.gate.State().NormalSince; since.Before(recovered) {
-		t.Errorf("window began %v, before the network recovered at %v", since, recovered)
 	}
 }

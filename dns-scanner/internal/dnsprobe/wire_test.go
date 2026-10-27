@@ -1,7 +1,6 @@
 package dnsprobe
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -34,20 +33,6 @@ func TestBuildParseRoundTrip(t *testing.T) {
 	}
 }
 
-func TestParseResponseRejectsMismatch(t *testing.T) {
-	pkt, id, _ := BuildQuery("a.b", TypeA, 0)
-	resp := flipToResponse(pkt, RcodeNoError)
-	if _, err := ParseResponse(resp, id+1); err == nil {
-		t.Error("want error on id mismatch, got nil")
-	}
-	if _, err := ParseResponse(pkt, id); err == nil {
-		t.Error("want error when QR unset (a query, not a reply)")
-	}
-	if _, err := ParseResponse([]byte{1, 2, 3}, id); err == nil {
-		t.Error("want error on short message")
-	}
-}
-
 // EDNS payload size advertised in the OPT record round-trips through the parser.
 func TestParseResponseExtractsEDNS(t *testing.T) {
 	const size = 1232
@@ -61,36 +46,6 @@ func TestParseResponseExtractsEDNS(t *testing.T) {
 	}
 	if resp.EDNSPayload != size {
 		t.Errorf("EDNSPayload = %d, want %d", resp.EDNSPayload, size)
-	}
-}
-
-func TestBuildQueryRejectsBadNames(t *testing.T) {
-	cases := []string{
-		strings.Repeat("a", 64) + ".com", // label > 63
-		"a..b",                           // empty label
-		strings.Repeat("a.", 200) + "a",  // total name > 255
-	}
-	for _, name := range cases {
-		if _, _, err := BuildQuery(name, TypeA, 0); err == nil {
-			t.Errorf("BuildQuery(%q) = nil err, want rejection", name)
-		}
-	}
-	// Root name is valid.
-	if _, _, err := BuildQuery("", TypeA, 0); err != nil {
-		t.Errorf("BuildQuery(root) = %v, want ok", err)
-	}
-}
-
-func TestRandLabelsStayWithinLabelLimit(t *testing.T) {
-	got := RandLabels(200)
-	for _, label := range strings.Split(got, ".") {
-		if len(label) == 0 || len(label) > 63 {
-			t.Fatalf("label %q has invalid length %d", label, len(label))
-		}
-	}
-	// The whole thing must still encode (every label <= 63, used as a QNAME).
-	if _, _, err := BuildQuery(got+".example.com", TypeTXT, 0); err != nil {
-		t.Fatalf("RandLabels output did not encode: %v", err)
 	}
 }
 

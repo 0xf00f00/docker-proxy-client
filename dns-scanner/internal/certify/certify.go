@@ -33,21 +33,17 @@ type verdict struct {
 	RTTMillis     int64  `json:"rttMillis"`
 }
 
-// Config configures a Prober. Bin is the mdns client binary. ConfigPath, if set,
-// is an existing client config file the probe reads directly (key stays in that
-// file). Otherwise certify generates one from Domain+Key (+method/MTU), which
-// are required for certification.
+// Config configures a Prober: the mdns client binary and the tunnel identity the
+// generated probe config carries.
 type Config struct {
-	Bin        string
-	ConfigPath string
-	Domain     string
-	Key        string
-	Method     int
-	BaseEncode bool
-	MinUp      int
-	MaxUp      int
-	MinDown    int
-	MaxDown    int
+	Bin     string
+	Domain  string
+	Key     string
+	Method  int
+	MinUp   int
+	MaxUp   int
+	MinDown int
+	MaxDown int
 }
 
 // Prober certifies resolvers via the external probe binary. Safe for concurrent
@@ -68,7 +64,7 @@ var ErrNoProbeSubcommand = fmt.Errorf("certify: probe binary lacks a usable `pro
 
 // New builds a Prober.
 func New(c Config) (*Prober, error) {
-	if c.ConfigPath == "" && (c.Domain == "" || c.Key == "") {
+	if c.Domain == "" || c.Key == "" {
 		return nil, nil
 	}
 	if c.Bin == "" {
@@ -82,14 +78,9 @@ func New(c Config) (*Prober, error) {
 		return nil, err
 	}
 
-	cfgPath := c.ConfigPath
-	if cfgPath == "" {
-		cfgPath, err = writeProbeConfig(c)
-		if err != nil {
-			return nil, fmt.Errorf("certify: write probe config: %w", err)
-		}
-	} else if _, err := os.Stat(cfgPath); err != nil {
-		return nil, fmt.Errorf("certify: MDNS_CLIENT_CONFIG not readable: %w", err)
+	cfgPath, err := writeProbeConfig(c)
+	if err != nil {
+		return nil, fmt.Errorf("certify: write probe config: %w", err)
 	}
 	return &Prober{bin: path, cfgPath: cfgPath}, nil
 }
@@ -99,26 +90,17 @@ func New(c Config) (*Prober, error) {
 // The key lives in this file, never on the probe's argv. Single fixed path so
 // scanner restarts overwrite rather than accumulate secrets in temp.
 func writeProbeConfig(c Config) (string, error) {
-	m := map[string]any{
+	b, err := json.Marshal(map[string]any{
 		"ENCRYPTION_KEY":         c.Key,
 		"DOMAINS":                []string{c.Domain},
 		"DATA_ENCRYPTION_METHOD": c.Method,
-		"BASE_ENCODE_DATA":       c.BaseEncode,
+		"BASE_ENCODE_DATA":       false,
 		"LOG_LEVEL":              "ERROR",
-	}
-	if c.MinUp > 0 {
-		m["MIN_UPLOAD_MTU"] = c.MinUp
-	}
-	if c.MaxUp > 0 {
-		m["MAX_UPLOAD_MTU"] = c.MaxUp
-	}
-	if c.MinDown > 0 {
-		m["MIN_DOWNLOAD_MTU"] = c.MinDown
-	}
-	if c.MaxDown > 0 {
-		m["MAX_DOWNLOAD_MTU"] = c.MaxDown
-	}
-	b, err := json.Marshal(m)
+		"MIN_UPLOAD_MTU":         c.MinUp,
+		"MAX_UPLOAD_MTU":         c.MaxUp,
+		"MIN_DOWNLOAD_MTU":       c.MinDown,
+		"MAX_DOWNLOAD_MTU":       c.MaxDown,
+	})
 	if err != nil {
 		return "", err
 	}

@@ -7,11 +7,7 @@ from app.models.schemas import SystemProxyReorderResult, SystemProxyState
 
 
 class Capability(StrEnum):
-    """Optional capabilities a controller may implement, as named feature tags.
-
-    The value doubles as the API-facing tag; ``registry`` maps each to the
-    protocol a controller must satisfy to offer it.
-    """
+    """Optional controller features; the value is the API-facing tag, and ``registry`` maps each to its protocol."""
 
     CONNECTIONS = "connections"
     TRAFFIC = "traffic"
@@ -21,12 +17,7 @@ class Capability(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Connection:
-    """One live connection, normalized across controllers.
-
-    This is the contract consumers depend on — each controller translates its
-    own wire format into this shape, so no consumer knows Clash's (or any other
-    backend's) JSON schema.
-    """
+    """One live connection, normalized so no consumer depends on a controller's wire format."""
 
     id: str
     host: str  # SNI/hostname the connection targets; "" when unknown (raw-IP dest).
@@ -73,12 +64,7 @@ class PathStatus:
 
 @runtime_checkable
 class SystemProxyController(Protocol):
-    """The interface every system-proxy implementation must satisfy.
-
-    Implementations are constructed per-request from the registered factory
-    so they pick up live container/config state — they should be cheap to
-    construct and must not hold long-lived state across calls.
-    """
+    """What every system-proxy implementation provides. Built per request, so keep construction cheap and stateless."""
 
     # Name of the container in Docker. Used by the router for restart actions.
     container_name: str
@@ -107,11 +93,7 @@ class SupportsTrafficStream(Protocol):
     """Optional capability: a controller that can report whole-system throughput."""
 
     def stream_traffic(self) -> AsyncIterator[tuple[int, int]]:
-        """Return an async iterator of ``(up_bps, down_bps)`` samples as they arrive.
-
-        Implemented as an async generator. Long-lived: runs until the underlying
-        connection drops, then returns or raises so the caller can reconnect.
-        """
+        """Async iterator of ``(up_bps, down_bps)`` samples; ends or raises when the connection drops."""
         ...
 
 
@@ -120,13 +102,7 @@ class SupportsConnectionsStream(Protocol):
     """Optional capability: a controller that can report live per-connection state."""
 
     def stream_connections(self) -> AsyncIterator[ConnectionSnapshot]:
-        """Return an async iterator of normalized snapshots as they arrive.
-
-        Each yielded ``ConnectionSnapshot`` is one whole-state view: session byte
-        totals plus every currently-open connection. Implemented as an async
-        generator; long-lived until the source drops, then returns/raises so the
-        caller can reconnect.
-        """
+        """Async iterator of whole-state snapshots (session totals plus every open connection)."""
         ...
 
 

@@ -24,13 +24,11 @@ RECHECK_INACTIVE_SERVERS_ENABLED = true
 AUTO_DISABLE_TIMEOUT_SERVERS = true
 
 # --- MTU discovery -------------------------------------------------------------
-# Bounds the client searches per resolver. Lower = more resolvers pass / slower
-# throughput. The binary drops bottleneck resolvers when AUTO_REMOVE_LOW_MTU_SERVERS
-# is on so weak servers don't drag the synced MTU down.
-MIN_UPLOAD_MTU = @@MIN_UPLOAD_MTU@@
-MAX_UPLOAD_MTU = @@MAX_UPLOAD_MTU@@
-MIN_DOWNLOAD_MTU = @@MIN_DOWNLOAD_MTU@@
-MAX_DOWNLOAD_MTU = @@MAX_DOWNLOAD_MTU@@
+# Keep in sync with the bounds in dns-scanner/cmd/scanner/main.go.
+MIN_UPLOAD_MTU = 38
+MAX_UPLOAD_MTU = 150
+MIN_DOWNLOAD_MTU = 200
+MAX_DOWNLOAD_MTU = 4000
 AUTO_REMOVE_LOW_MTU_SERVERS = true
 
 # --- Logging -------------------------------------------------------------------

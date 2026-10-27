@@ -13,13 +13,7 @@ function dayLabel(b: HealthBucket): string {
   return b.status === "unknown" ? `${when} · not measured` : `${when} · ${uptimeLabel(b.uptimePct)} up`;
 }
 
-/**
- * GitHub-contributions-style calendar grid: one cell per day, colored by that
- * day's worst status, weekday-aligned (Monday first). The grid spans the full
- * width of its container — cells are square and size themselves to fill it — and
- * each is tappable to drill into a day; the parent scrolls when the grid is
- * taller than the viewport.
- */
+/** Calendar grid, one tappable cell per day colored by its worst status (Monday first), filling its container. */
 export default function HealthHeatmap({
   buckets,
   selectedTs,

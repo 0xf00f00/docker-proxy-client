@@ -1,11 +1,5 @@
-"""Real-time network-traffic collection for the dashboard.
-
-A single shared collector samples throughput and fans it out to every connected
-SSE client. It is *lazily* started when the first subscriber attaches and fully
-stopped when the last one leaves, so an idle dashboard costs nothing.
-
-We never inspect payloads — byte counts only.
-"""
+"""One shared throughput collector fanned out to every SSE client; started by the first subscriber and
+stopped by the last, so an idle dashboard costs nothing. Byte counts only, never payloads."""
 
 import asyncio
 import contextlib
@@ -34,11 +28,7 @@ QUEUE_MAXSIZE = 8
 
 
 def _fetch_net_counters(container_id: str) -> tuple[int, int] | None:
-    """Return (rx_bytes, tx_bytes) summed across the container's interfaces.
-
-    Uses a one-shot stats read (no daemon-side sampling delay) since we compute
-    our own deltas. Returns None if the container vanished or stats are absent.
-    """
+    """(rx_bytes, tx_bytes) summed across the container's interfaces from a one-shot stats read, or None."""
     client = get_client()
     try:
         try:
@@ -59,11 +49,7 @@ def _fetch_net_counters(container_id: str) -> tuple[int, int] | None:
 
 
 def _list_measurable() -> dict[str, str]:
-    """Map ``container.name`` -> id for running, dashboard-enabled, non-host-net containers.
-
-    Keyed by Docker name to match the frontend's ``container.name``. Host-network
-    containers are excluded: their stats reflect the whole host, not the proxy.
-    """
+    """``container.name`` -> id of running dashboard containers, minus host-network ones (host stats)."""
     out: dict[str, str] = {}
     for c in get_client().containers.list():
         if parse_dashboard_labels(c.labels) is None:

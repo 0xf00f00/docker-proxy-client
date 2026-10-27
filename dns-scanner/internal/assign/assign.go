@@ -53,23 +53,17 @@ func ReadAll(path string) []string {
 	return out
 }
 
-// WriteManaged replaces the scanner-managed block in path with ips, preserving
-// every line a human kept outside the markers. Atomic (temp + rename). Reports
-// whether the managed set changed (so the caller can debounce the reload).
-//
-// An empty ips is a deliberate no-op: we never clobber the last-known-good set
-// with nothing just because a scan came up empty — a stale resolver that might
-// recover beats none, and mdns auto-disables dead entries itself.
+// WriteManaged replaces the scanner-managed block in path with ips, preserving every line a human kept
+// outside the markers. Atomic (temp + rename); reports whether the managed set changed. An empty ips is a
+// deliberate no-op: a stale resolver that might recover beats none, and mdns disables dead entries itself.
 func WriteManaged(path string, ips []string) (changed bool, err error) {
 	if len(ips) == 0 {
 		return false, nil
 	}
 	human, oldManaged := splitManaged(path)
 
-	// A resolver the user kept outside the block stays theirs: if the scanner also
-	// verified it, leave it as their line and keep it out of the managed block so
-	// the file never lists the same IP twice. (It still counts toward the target —
-	// it was verified this cycle — it just isn't re-homed into the managed block.)
+	// A resolver the user kept outside the block stays theirs; keep it out of the managed block so the file
+	// never lists an IP twice.
 	if humanIPs := parseIPSet(human); len(humanIPs) > 0 {
 		kept := make([]string, 0, len(ips))
 		for _, ip := range ips {
@@ -100,10 +94,7 @@ func WriteManaged(path string, ips []string) (changed bool, err error) {
 	return true, atomicWrite(path, []byte(b.String()))
 }
 
-// Reload triggers the mdns reload by POSTing to url — the docker-socket-proxy
-// container-restart endpoint. Empty = no-op. Called only when WriteManaged
-// reported a change. A native HTTP call (no shell, no curl dependency) keeps the
-// reload free of injection surface and testable.
+// Reload restarts mdns by POSTing to url (the docker-socket-proxy container-restart endpoint); empty is a no-op.
 func Reload(url string) error {
 	url = strings.TrimSpace(url)
 	if url == "" {

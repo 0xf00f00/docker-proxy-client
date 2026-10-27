@@ -44,10 +44,7 @@ func main() {
 
 	svc.Start(ctx)
 
-	// Runtime edge selection (the in-process picker+prober). Optional: off keeps
-	// this a pure scanner. When on, it runs its select loop and exposes
-	// GET /manager/status alongside the scanner's control API. Constructed before
-	// the survival hook so an on-demand (dashboard) test can reuse its prober.
+	// Edge selection is opt-in; built before the survival hook so an on-demand test can reuse its prober.
 	var mgr *manager.Manager
 	if cfg.SelectEnable {
 		mgr = manager.New(cfg, log)

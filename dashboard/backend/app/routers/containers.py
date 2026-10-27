@@ -12,17 +12,27 @@ from app.auth import RequireAuth
 from app.config import settings
 from app.models.schemas import ContainerActionResponse, ContainerListResponse
 from app.services import docker_service, env_service
-from app.sse import event, sse_response
+from app.sse import event, snapshot_stream, sse_response
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/containers", tags=["containers"])
 
 HEARTBEAT_SEC = 10.0
-EVENT_DEBOUNCE_SEC = 0.3
 
 # Docker actions that affect what the dashboard cares about. Health-status
 # events come through as "health_status: healthy" etc., so we match on prefix.
 STATE_ACTIONS = {"start", "stop", "die", "kill", "restart", "create", "destroy", "pause", "unpause"}
+
+
+async def _docker(fn, *args, fail: str = "Container action failed"):
+    """Run a blocking docker call, mapping NotFound to 404 and anything else to 500."""
+    try:
+        return await asyncio.to_thread(fn, *args)
+    except docker.errors.NotFound:
+        raise HTTPException(status_code=404, detail="Container not found") from None
+    except Exception:
+        logger.exception("%s (%s)", fail, args)
+        raise HTTPException(status_code=500, detail=fail) from None
 
 
 @router.get("/", response_model=ContainerListResponse)
@@ -37,14 +47,8 @@ async def list_containers():
 
 @router.post("/{container_name}/restart", response_model=ContainerActionResponse, dependencies=[RequireAuth])
 async def restart_container(container_name: str):
-    try:
-        await asyncio.to_thread(docker_service.restart_container, container_name)
-        return ContainerActionResponse(success=True, message=f"Container {container_name} restarted")
-    except docker.errors.NotFound:
-        raise HTTPException(status_code=404, detail="Container not found") from None
-    except Exception:
-        logger.exception("Failed to restart container %s", container_name)
-        raise HTTPException(status_code=500, detail="Container action failed") from None
+    await _docker(docker_service.restart_container, container_name)
+    return ContainerActionResponse(success=True, message=f"Container {container_name} restarted")
 
 
 @router.post("/{container_name}/start", response_model=ContainerActionResponse, dependencies=[RequireAuth])
@@ -70,131 +74,52 @@ async def start_container(container_name: str):
 
 @router.post("/{container_name}/stop", response_model=ContainerActionResponse, dependencies=[RequireAuth])
 async def stop_container(container_name: str):
-    try:
-        await asyncio.to_thread(docker_service.stop_container, container_name)
-        return ContainerActionResponse(success=True, message=f"Container {container_name} stopped")
-    except docker.errors.NotFound:
-        raise HTTPException(status_code=404, detail="Container not found") from None
-    except Exception:
-        logger.exception("Failed to stop container %s", container_name)
-        raise HTTPException(status_code=500, detail="Container action failed") from None
+    await _docker(docker_service.stop_container, container_name)
+    return ContainerActionResponse(success=True, message=f"Container {container_name} stopped")
 
 
 @router.get("/{container_name}/logs", dependencies=[RequireAuth])
 async def get_logs(container_name: str, tail: int = 100):
-    try:
-        logs = await asyncio.to_thread(docker_service.get_container_logs, container_name, tail)
-        return {"logs": logs}
-    except docker.errors.NotFound:
-        raise HTTPException(status_code=404, detail="Container not found") from None
-    except Exception:
-        logger.exception("Failed to fetch logs for %s", container_name)
-        raise HTTPException(status_code=500, detail="Failed to fetch logs") from None
+    return {"logs": await _docker(docker_service.get_container_logs, container_name, tail, fail="Failed to fetch logs")}
 
 
 @router.get("/{container_name}/logs/history", dependencies=[RequireAuth])
 async def get_logs_history(container_name: str, until: float, limit: int = 500):
-    """Older log lines for scroll-up history paging.
-
-    Returns up to `limit` lines that occurred before the `until` epoch
-    timestamp (Unix seconds, sub-second precision honoured by Docker). The
-    client passes the oldest timestamp it currently holds to walk backwards.
-    """
+    """Up to `limit` log lines older than the `until` epoch, for scroll-up paging."""
     limit = max(1, min(limit, 2000))
-    try:
-        text = await asyncio.to_thread(docker_service.get_container_logs_before, container_name, until, limit)
-        return {"text": text}
-    except docker.errors.NotFound:
-        raise HTTPException(status_code=404, detail="Container not found") from None
-    except Exception:
-        logger.exception("Failed to fetch log history for %s", container_name)
-        raise HTTPException(status_code=500, detail="Failed to fetch logs") from None
+    text = await _docker(
+        docker_service.get_container_logs_before, container_name, until, limit, fail="Failed to fetch logs"
+    )
+    return {"text": text}
 
 
 @router.get("/stream")
 async def stream_containers():
-    """Push container state changes in near real-time.
-
-    Subscribes to the Docker events stream so transitions (start/stop/restart/
-    die/health_status/…) trigger an immediate snapshot, instead of waiting for
-    the next poll tick. A ``HEARTBEAT_SEC`` periodic tick still runs so the
-    stream stays healthy and recovers if the events socket drops.
-    """
-    loop = asyncio.get_running_loop()
-    wake = asyncio.Event()
-    stopped = threading.Event()
-
+    """Push a container snapshot on every Docker state or health transition, plus a heartbeat floor."""
     try:
         client = docker_service.get_client()
     except Exception:
         logger.exception("Cannot connect to Docker for stream")
         raise HTTPException(status_code=503, detail="Cannot connect to Docker") from None
 
-    event_stream = client.events(decode=True, filters={"type": "container"})
+    def feed():
+        for ev in client.events(decode=True, filters={"type": "container"}):
+            head = str(ev.get("Action") or ev.get("status") or "").split(":", 1)[0].strip()
+            if head in STATE_ACTIONS or head == "health_status":
+                yield
 
-    def listen() -> None:
-        try:
-            for ev in event_stream:
-                if stopped.is_set():
-                    return
-                action = str(ev.get("Action") or ev.get("status") or "")
-                head = action.split(":", 1)[0].strip()
-                if head in STATE_ACTIONS or head == "health_status":
-                    try:
-                        loop.call_soon_threadsafe(wake.set)
-                    except RuntimeError:
-                        return
-        except Exception:
-            # Stream closed or daemon disconnected — fall back to heartbeat polling.
-            pass
+    async def read() -> str:
+        containers = await asyncio.to_thread(docker_service.list_dashboard_containers)
+        return ContainerListResponse(containers=containers, host_lan_ip=settings.host_lan_ip).model_dump_json()
 
-    threading.Thread(target=listen, daemon=True).start()
-
-    async def gen() -> AsyncGenerator[str]:
-        last_payload: str | None = None
-        try:
-            while True:
-                try:
-                    containers = await asyncio.to_thread(docker_service.list_dashboard_containers)
-                    payload = ContainerListResponse(
-                        containers=containers, host_lan_ip=settings.host_lan_ip
-                    ).model_dump_json()
-                    if payload != last_payload:
-                        yield f"event: snapshot\ndata: {payload}\n\n"
-                        last_payload = payload
-                    else:
-                        yield ": ping\n\n"
-                except Exception as e:
-                    yield event("stream-error", {"detail": str(e)})
-
-                try:
-                    await asyncio.wait_for(wake.wait(), timeout=HEARTBEAT_SEC)
-                except TimeoutError:
-                    continue
-                wake.clear()
-                # Coalesce bursts (a `docker restart` fires kill+die+start within ms)
-                await asyncio.sleep(EVENT_DEBOUNCE_SEC)
-                wake.clear()
-        finally:
-            stopped.set()
-            with contextlib.suppress(Exception):
-                event_stream.close()
-
-    return sse_response(gen())
+    return snapshot_stream("snapshot", read, interval=HEARTBEAT_SEC, feed=feed)
 
 
 @router.get("/{container_name}/logs/stream", dependencies=[RequireAuth])
 async def stream_container_logs(container_name: str, tail: int = 200, since: float = 0.0):
-    """Follow a container's logs over SSE.
+    """Follow a container's raw log stream (ANSI included, for xterm.js) as ``chunk`` events, then ``end``.
 
-    Emits ``chunk`` events carrying the raw decoded log stream (carriage
-    returns, ANSI escapes and all) for an xterm.js terminal to render, plus a
-    terminal ``end`` event when the container exits or the client disconnects.
-
-    With ``since`` (a Unix epoch) the stream backfills everything from that
-    timestamp before following live — used to resume without a gap after the
-    viewer dropped the connection to browse history. Otherwise it starts from
-    the last ``tail`` lines.
+    ``since`` (epoch) backfills from that point to resume without a gap; otherwise start at the last ``tail`` lines.
     """
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue[tuple[str, str] | None] = asyncio.Queue(maxsize=4000)

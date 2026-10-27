@@ -46,6 +46,4 @@ RUN set -eux; \
 WORKDIR /app
 COPY --from=build /out/scanner /usr/local/bin/scanner
 COPY data /app/data
-ENV SCANNER_DATA_DIR=/app/data
-ENV MDNS_PROBE_BIN=/usr/local/bin/mdns-client
 ENTRYPOINT ["scanner"]

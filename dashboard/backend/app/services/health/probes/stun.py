@@ -4,9 +4,8 @@ import asyncio
 import os
 import socket
 import time
-from itertools import pairwise
 
-from app.services.health.probes import ProbeResult, percentile
+from app.services.health.probes import ProbeResult, jitter, percentile
 from app.services.health.settings import STUN_HOST as HOST
 from app.services.health.settings import STUN_PORT as PORT
 
@@ -30,15 +29,14 @@ def reply_txid(data: bytes) -> bytes | None:
 
 def summarize(sent: int, rtts_ms: list[float]) -> dict:
     """RTT p50/p95, jitter (mean step between consecutive replies) and loss."""
-    steps = [abs(b - a) for a, b in pairwise(rtts_ms)]
-    p50, p95 = percentile(rtts_ms, 50), percentile(rtts_ms, 95)
+    p50, p95, jit = percentile(rtts_ms, 50), percentile(rtts_ms, 95), jitter(rtts_ms)
     return {
         "sent": sent,
         "recv": len(rtts_ms),
         "loss": round(100 * (sent - len(rtts_ms)) / sent, 1) if sent else None,
         "rtt_p50": round(p50, 1) if p50 is not None else None,
         "rtt_p95": round(p95, 1) if p95 is not None else None,
-        "jitter": round(sum(steps) / len(steps), 1) if steps else None,
+        "jitter": round(jit, 1) if jit is not None else None,
     }
 
 

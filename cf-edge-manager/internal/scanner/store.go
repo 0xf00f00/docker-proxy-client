@@ -12,18 +12,16 @@ import (
 	"github.com/0xf00f00/cf-edge-manager/internal/cfst"
 )
 
-// TestResult is the latest measurement for one IP. cfst.Stats is embedded so
-// its fields (sent/received/loss/latency_ms) promote into the JSON object the
-// dashboard renders. Survival is the real-path verdict, nil for cfst-only.
+// TestResult is the latest measurement for one IP; cfst.Stats is embedded so its fields promote into the
+// JSON the dashboard renders. Survival is the real-path verdict, nil for cfst-only.
 type TestResult struct {
 	cfst.Stats
 	At       time.Time `json:"ts"`
 	Survival *Survival `json:"survival,omitempty"`
 }
 
-// Survival is the real-path verdict. Survived==nil = inconclusive (probe stack
-// didn't come up), not a failure. Checked==false means it didn't run; Skipped
-// says why (gate, busy, or not configured).
+// Survival is the real-path verdict. Survived==nil is inconclusive, not a failure; Checked==false means
+// it didn't run, and Skipped says why.
 type Survival struct {
 	Checked  bool    `json:"checked"`
 	Survived *bool   `json:"survived,omitempty"`
@@ -44,10 +42,8 @@ type Snapshot struct {
 	Tests       map[string]TestResult `json:"tests"`
 }
 
-// Store persists scanner state and answers the queries the worker and API need.
-// The in-memory implementation is the durable source of truth for job/test
-// history; the ranked pool is additionally written to pool.txt for the picker.
-// An interface keeps a future SQLite backend a drop-in swap.
+// Store persists scanner state and answers the worker's and API's queries. The ranked pool is also
+// written to pool.txt for the selector.
 type Store interface {
 	SaveJob(j Job)
 	Job(id string) (Job, bool)
@@ -128,10 +124,8 @@ func (s *memStore) load() {
 	s.lastScan = p.LastScan
 }
 
-// persist writes the whole (small) state atomically. Callers hold s.mu. A
-// failure (e.g. a full disk) is logged but non-fatal: the service keeps running
-// on its in-memory state, and pool.txt -- the artifact the picker needs -- is
-// written separately.
+// persist writes the whole (small) state atomically; callers hold s.mu. A failure is logged but non-fatal,
+// since pool.txt is written separately.
 func (s *memStore) persist() {
 	if err := s.writeState(); err != nil {
 		s.log.Warn("state persist failed", "path", s.path, "err", err)

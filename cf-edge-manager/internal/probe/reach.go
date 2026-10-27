@@ -6,13 +6,8 @@ import (
 	"time"
 )
 
-// AnyReachable reports whether at least one target accepts a TCP connection
-// within timeout. Used as a lenient preflight: a single success is enough to
-// proceed, so partial censorship (where some edges are blocked) never suppresses
-// a scan -- only a genuine outage, where every diverse target fails, does.
-//
-// Targets are dialled concurrently, so the whole check resolves within one
-// timeout window rather than the sum across targets.
+// AnyReachable reports whether at least one target accepts a TCP connection within timeout; targets are
+// dialled concurrently. A lenient preflight: partial censorship never suppresses a scan, only a full outage.
 func AnyReachable(ctx context.Context, targets []string, timeout time.Duration) bool {
 	if len(targets) == 0 {
 		return false

@@ -1,10 +1,6 @@
-"""The always-on monitor: probe on a self-tuning cadence, fold each sample into the
-RLE segment timeline (one row per state change), and keep a live snapshot in memory.
-
-This is composite system health, not per-proxy: the dashboard runs in the host netns
-where the default route is the Clash TUN, so a plain probe egresses through the active
-system proxy (exactly the path a user experiences). See ``probe`` for cause attribution.
-"""
+"""The always-on monitor: probe on a self-tuning cadence, fold samples into a run-length segment timeline,
+and keep a live snapshot. Under host netns the default route is the Clash TUN, so a plain probe takes the
+user's real path."""
 
 import asyncio
 import contextlib
@@ -71,14 +67,8 @@ class HealthMonitor:
         self._loaded = True
 
     def _persist(self, now: int, status: str, regime: str, detail: str | None) -> None:
-        """Fold one probe into the segment timeline (runs in a worker thread).
-
-        Same state as the open segment -> just extend its end (a heartbeat, written
-        only every HEARTBEAT_S). A real change -> close the open segment and open a
-        new one, stamping its onset ``detail`` (the granular "why"). A gap wider than
-        MAX_GAP_S (monitor was down) -> insert an ``unknown`` span for the time we
-        couldn't measure before opening the new state.
-        """
+        """Fold one probe into the timeline (worker thread): same state extends the open segment (persisted
+        every HEARTBEAT_S), a change closes it and opens a new one, and a gap past MAX_GAP_S inserts ``unknown``."""
         open_ = self._open
         if open_.start is None:
             store.add_segment(now, now, status, regime, detail)

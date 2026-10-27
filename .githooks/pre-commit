@@ -14,7 +14,7 @@ check_module() {
   local module="$1"
   if grep -qE "^${module}/.*\.go\$|^${module}/go\.(mod|sum)\$" <<<"$staged"; then
     echo "${module} changed -- running CI checks"
-    "${repo_root}/${module}/scripts/check.sh"
+    "${repo_root}/scripts/go-check.sh" "${module}"
   fi
 }
 

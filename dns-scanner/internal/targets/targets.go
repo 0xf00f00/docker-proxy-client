@@ -20,14 +20,9 @@ type Tier struct {
 	IPs  []string
 }
 
-// Load builds the tiers from dataDir:
-//
-//	A "seed"   — white_dns_iran.txt + ir-resolvers.txt (pre-vetted, scanned first)
-//	B "ir-cidr"— sampled from ir-cidrs.txt (only if the seed runs short)
-//	C "public" — public_resolvers.txt (last resort)
-//
-// seed makes the shuffle/sampling deterministic so a resumed scan maps to the
-// same IPs. cidrSampleMax bounds how many IPs the CIDR tier contributes.
+// Load builds the tiers from dataDir: "seed" (pre-vetted Iran lists, scanned first), "ir-cidr" (sampled,
+// only if the seed runs short), "public" (last resort). seed makes sampling deterministic so a resumed scan
+// maps to the same IPs; cidrSampleMax bounds the CIDR tier.
 func Load(dataDir string, seed int64, cidrSampleMax int) ([]Tier, error) {
 	rng := rand.New(rand.NewSource(seed))
 	seen := make(map[string]struct{})

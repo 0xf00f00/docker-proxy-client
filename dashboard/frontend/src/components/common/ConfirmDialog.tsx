@@ -15,12 +15,7 @@ interface Props {
   onConfirm: () => void;
 }
 
-/**
- * Centered confirm prompt for actions that disrupt the user's setup (Stop,
- * Restart). Built on Radix Dialog so focus/escape/scroll-lock are handled
- * without reusing Modal — Modal is a full-screen shell with a header bar,
- * which is overkill for a single yes/no question.
- */
+/** Centered yes/no prompt for disruptive actions (Stop, Restart); Radix Dialog rather than the full-screen Modal shell. */
 export default function ConfirmDialog({
   open,
   onOpenChange,

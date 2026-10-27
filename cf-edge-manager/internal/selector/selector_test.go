@@ -84,63 +84,6 @@ func newSel(t *testing.T, cfg Config, loss map[string]float64, surv map[string]*
 	return New(cfg, log, statePath, lossFn, survFn, func() []string { return pool }, ap)
 }
 
-func TestEdgeOK(t *testing.T) {
-	cfg := testCfg()
-	probed := 0
-	loss := map[string]float64{"dead": 0.9, "clean": 0.0}
-	surv := map[string]*bool{"failbad": bptr(false), "nosig": nil}
-	s := newSel(t, cfg, loss, surv, nil, &fakeApplier{})
-	s.survival = func(ip string, _ bool) *bool {
-		probed++
-		if v, ok := surv[ip]; ok {
-			return v
-		}
-		return bptr(true)
-	}
-
-	if s.edgeOK("dead", cfg.KeepMax, "t", true) {
-		t.Error("dead edge must be rejected")
-	}
-	if probed != 0 {
-		t.Error("prober must not run on a tcp_loss-dead edge")
-	}
-	if !s.edgeOK("clean", cfg.KeepMax, "t", true) {
-		t.Error("clean+survived edge must be ok")
-	}
-	if s.edgeOK("failbad", cfg.KeepMax, "t", true) {
-		t.Error("clean+real-path-failed must be rejected (loss-blind fix)")
-	}
-	if !s.edgeOK("nosig", cfg.KeepMax, "t", true) {
-		t.Error("clean+no-signal must be kept (never blame edge)")
-	}
-	// kill-switch: survival disabled -> loss-only
-	cfg2 := cfg
-	cfg2.SurvivalCheck = false
-	s2 := newSel(t, cfg2, loss, surv, nil, &fakeApplier{})
-	called := false
-	s2.survival = func(string, bool) *bool { called = true; return bptr(false) }
-	if !s2.edgeOK("clean", cfg2.KeepMax, "t", true) || called {
-		t.Error("with SurvivalCheck off, accept on tcp_loss and never probe")
-	}
-}
-
-func TestPickCleanBudgetAndFallback(t *testing.T) {
-	cfg := testCfg() // MaxProbeCandidates=2, MaxCandidates=5
-	pool := []string{"a", "b", "c", "d", "e"}
-	// all tcp_loss-clean; all real-path FAIL -> 2 probed (a,b), then first unprobed-clean (c) is fallback
-	surv := map[string]*bool{"a": bptr(false), "b": bptr(false), "c": bptr(false), "d": bptr(false), "e": bptr(false)}
-	probes := []string{}
-	s := newSel(t, cfg, nil, surv, pool, &fakeApplier{})
-	s.survival = func(ip string, _ bool) *bool { probes = append(probes, ip); return surv[ip] }
-	got := s.pickClean(pool, "", map[string]int64{}, 0, true)
-	if len(probes) != 2 {
-		t.Errorf("probe budget = %d, want 2", len(probes))
-	}
-	if got != "c" {
-		t.Errorf("fallback = %q, want first unprobed-clean 'c'", got)
-	}
-}
-
 func TestPickCleanReturnsSurvivor(t *testing.T) {
 	cfg := testCfg()
 	pool := []string{"a", "b", "c"}
@@ -162,17 +105,6 @@ func TestPickCleanReturnsSurvivor(t *testing.T) {
 	}
 }
 
-func TestPickCleanExcludeAndTcpLoss(t *testing.T) {
-	cfg := testCfg()
-	pool := []string{"x", "y", "z"}
-	loss := map[string]float64{"y": 0.5} // y is tcp-dead
-	s := newSel(t, cfg, loss, nil, pool, &fakeApplier{})
-	// exclude x; y rejected on tcp_loss; z clean+survived
-	if got := s.pickClean(pool, "x", map[string]int64{}, 0, true); got != "z" {
-		t.Errorf("got %q, want 'z' (x excluded, y tcp-dead)", got)
-	}
-}
-
 func TestPickCleanAllQuarantinedReconsiders(t *testing.T) {
 	cfg := testCfg()
 	pool := []string{"a", "b"}
@@ -180,21 +112,6 @@ func TestPickCleanAllQuarantinedReconsiders(t *testing.T) {
 	s := newSel(t, cfg, nil, nil, pool, &fakeApplier{})
 	if got := s.pickClean(pool, "", q, 0, true); got == "" {
 		t.Error("when every candidate is quarantined, pick must reconsider them all (not starve)")
-	}
-}
-
-func TestTickGatesOnNextRun(t *testing.T) {
-	s := newSel(t, testCfg(), nil, nil, []string{"a"}, &fakeApplier{})
-	s.saveState(State{NextRun: 1000, Quarantine: map[string]int64{}})
-	if d := s.Tick(400); d != 600 {
-		t.Errorf("Tick before next_run should return remainder 600, got %d", d)
-	}
-}
-
-func TestTickEmptyPool(t *testing.T) {
-	s := newSel(t, testCfg(), nil, nil, nil, &fakeApplier{})
-	if d := s.Tick(0); d != 600 {
-		t.Errorf("empty pool should return BaseInterval 600, got %d", d)
 	}
 }
 

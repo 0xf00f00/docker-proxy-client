@@ -72,18 +72,8 @@ async def cached_results(max_age: float = DEFAULT_FRESH_MAX_AGE_S):
 
 @router.get("/test/stream")
 async def test_stream(max_age: float = DEFAULT_FRESH_MAX_AGE_S):
-    """Stream per-proxy connectivity results as they complete.
-
-    With `max_age > 0` (the default) only proxies whose cached result is missing
-    or older than `max_age` are re-probed; fresh ones are replayed from the cache
-    instantly. Pass `max_age=0` to force a full re-test (the manual "Test All").
-
-    Emits one `services` event listing the services about to be *probed* (so fresh
-    cards never flash a spinner), one `result` event per service — replayed-fresh
-    first, then freshly-probed in completion order — and a final `done` event.
-    Probes are launched with jittered delays and a concurrency cap so limited
-    networks don't suffer cross-test interference.
-    """
+    """Stream per-proxy results as they complete: `services` (those about to be probed), one `result` each
+    (cached-fresh first, then probed), then `done`. `max_age=0` forces a full re-test."""
     containers = await asyncio.to_thread(docker_service.list_dashboard_containers)
     testable = docker_service.filter_testable(containers)
     fresh_names = {c.name for c in testable if max_age > 0 and connectivity_service.is_fresh(c.name, max_age)}
@@ -117,13 +107,8 @@ async def test_single(container_name: str):
 
 
 def _stream_probe(container_name: str, run):
-    """SSE wrapper shared by the stability probes. `run(container, on_event)` is
-    the probe coroutine; its events are forwarded live and its return value is
-    sent as a final `result`. The probe runs as a background task feeding a
-    queue, so a client disconnect cancels it (tearing down in-flight httpx
-    requests); a heartbeat every 10s keeps intermediaries from dropping an idle
-    stream.
-    """
+    """SSE wrapper for a probe `run(container, on_event)`: events stream live, its return value is the final
+    `result`. It runs as a task so a client disconnect cancels it; a 10s heartbeat keeps the stream open."""
 
     async def gen() -> AsyncGenerator[str]:
         container = await asyncio.to_thread(docker_service.find_dashboard_container, container_name)
@@ -175,9 +160,5 @@ def _stream_probe(container_name: str, run):
 
 @router.get("/stability/{container_name}/stream")
 async def test_stability_stream(container_name: str):
-    """Stability probe, streamed (see docs/realtime-stability-repro.md).
-
-    DISRUPTIVE: it briefly saturates the tunnel to reproduce download drops and
-    call degradation, so it hurts any live user for its duration. On-demand only.
-    """
+    """Stability probe, streamed. Disruptive: it briefly saturates the tunnel, so on-demand only."""
     return _stream_probe(container_name, stability.test_stability)

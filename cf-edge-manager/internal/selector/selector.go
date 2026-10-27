@@ -1,11 +1,7 @@
-// Package selector is the runtime guardian (the old cf-edge-picker's policy
-// half): every tick it checks the in-use byedpi + sni-spoofing edges and rotates
-// them off a degraded edge, picking replacements from the scanned pool. It is
-// loss-blind no longer — health is TIERED: cheap tcp_loss for liveness, then the
-// expensive real-path survival probe (only for edges that passed tcp_loss, only
-// the in-use edge + a small candidate budget). Side-effects (config rewrites,
-// container restart) are delegated to an Applier; probing is injected, so the
-// decision logic is unit-testable without network or docker.
+// Package selector rotates the in-use byedpi and sni-spoofing edges off degraded ones. Health is
+// tiered: cheap tcp_loss for liveness, then the real-path survival probe for the in-use edge and a
+// small candidate budget. Side effects go through an Applier and probing is injected, so the
+// decisions are testable without network or docker.
 package selector
 
 import (
@@ -171,11 +167,9 @@ func (s *Selector) edgeOK(ip string, lossMax float64, label string, useSurvival 
 	return true
 }
 
-// pickClean returns the best-first pool IP that is clean and != exclude. Only the
-// first MaxProbeCandidates tcp_loss-clean candidates get the expensive probe;
-// if the budget is spent without a confirmed survivor, fall back to the first
-// tcp_loss-clean-but-unprobed edge. A known-real-path-bad edge is never returned.
-// realPath=false picks on tcp_loss alone.
+// pickClean returns the best pool IP that is clean and != exclude. Only the first MaxProbeCandidates
+// tcp_loss-clean ones get the real-path probe; if none is confirmed it falls back to the first unprobed
+// one. A known-bad edge is never returned; realPath=false picks on tcp_loss alone.
 func (s *Selector) pickClean(pool []string, exclude string, q map[string]int64, now int64, realPath bool) string {
 	candidates := make([]string, 0, len(pool))
 	for _, ip := range pool {

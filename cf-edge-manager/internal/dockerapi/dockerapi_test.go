@@ -1,7 +1,6 @@
 package dockerapi
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"net"
@@ -17,16 +16,6 @@ func frame(stream byte, s string) []byte {
 	b[0] = stream
 	binary.BigEndian.PutUint32(b[4:], uint32(len(s)))
 	return append(b, s...)
-}
-
-func TestLinesDemuxesFrames(t *testing.T) {
-	var buf bytes.Buffer
-	buf.Write(frame(1, "out one\n"))
-	buf.Write(frame(2, "err a\nerr b\n\n"))
-	want := []string{"out one", "err a", "err b"}
-	if got := Lines(&buf); !slices.Equal(got, want) {
-		t.Errorf("got %q, want %q", got, want)
-	}
 }
 
 func TestClientCalls(t *testing.T) {

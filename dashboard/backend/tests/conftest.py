@@ -1,10 +1,8 @@
-import sys
-
 import pytest
 
 from app.config import settings
 from app.services import store
-from app.services.health import engine, scheduler, verdict
+from app.services.health import scheduler, verdict
 from app.services.health.collectors import containers
 from tests.health.series import EDGES
 
@@ -22,14 +20,7 @@ def no_active_probes(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def fresh_engine_cache():
-    engine._memo.clear()
-
-
-@pytest.fixture(autouse=True)
 def made_up_topology(monkeypatch):
     """Tests run on invented route/edge names, so nothing can lean on the production ones."""
     for module in (scheduler, verdict, containers):
         monkeypatch.setattr(module, "PATH_EDGES", EDGES)
-    # the package re-exports the recorder instance under the module's name
-    monkeypatch.setattr(sys.modules["app.services.health.recorder"], "EDGE_CONTAINERS", tuple(EDGES.values()))

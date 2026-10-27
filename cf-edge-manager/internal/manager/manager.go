@@ -1,6 +1,5 @@
-// Package manager wires the tiered probes (tcp_loss + the embedded real-path
-// prober), the config appliers, and the pool reader into a selector and runs its
-// tick loop. It replaces the standalone cf-edge-picker + cf-edge-prober.
+// Package manager wires the tiered probes, the config appliers and the pool reader into a selector and
+// runs its tick loop.
 package manager
 
 import (
@@ -106,9 +105,8 @@ func (m *Manager) peersOf(i int) selector.Peers {
 	}
 }
 
-// ProberConfig builds the probe config; the wire params MUST match the live xray
-// "proxy" outbound or the probe false-fails. Exported so an on-demand test can
-// reuse the selector's exact parameters.
+// ProberConfig builds the probe config; the wire params MUST match the live xray "proxy" outbound or
+// the probe false-fails. Exported so an on-demand test reuses them.
 func ProberConfig(cfg config.Config) realpath.Config {
 	return realpath.Config{
 		OriginHost: cfg.ProbeOriginHost, UUID: cfg.ProbeUUID, Path: cfg.ProbePath,
@@ -173,9 +171,8 @@ func (m *Manager) tick() int64 {
 // Stop terminates the embedded xray subprocess.
 func (m *Manager) Stop() { m.prober.Stop() }
 
-// Status reports the in-use edge and decoy per instance, in priority order, plus
-// the probe's sni-spoofing version (surfaced so drift against the live container
-// is visible).
+// Status reports the in-use edge and decoy per instance, in priority order, plus the probe's
+// sni-spoofing version so drift against the live container is visible.
 func (m *Manager) Status() map[string]any {
 	insts := make([]map[string]any, 0, len(m.insts))
 	for _, in := range m.insts {

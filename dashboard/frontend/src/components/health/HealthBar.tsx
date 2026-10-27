@@ -23,15 +23,8 @@ function tickLabel(b: HealthBucket, i: number, every: number): string {
 }
 
 /**
- * The classic horizontal uptime bar: one colored segment per time bucket, oldest
- * on the left, with a sparse time axis beneath.
- *
- * When `onSelect` is given the whole bar is a drag scrubber (native pointer
- * events, so mouse + touch behave the same): dragging moves a floating readout
- * across the buckets and releasing selects the one under the finger. This is the
- * primary phone affordance — individual segments are far too thin to tap, but a
- * drag is forgiving. Without `onSelect` it renders as an inert bar (e.g. the mini
- * bar on the dashboard card).
+ * Horizontal uptime bar, one segment per bucket. With `onSelect` it is a drag scrubber (pointer events, so
+ * mouse and touch match): segments are too thin to tap, a drag is forgiving.
  */
 export default function HealthBar({
   buckets,

@@ -251,11 +251,8 @@ function createEventSource(
   es.onerror = (e) => {
     onError?.(e);
     if (!probeAuth) return;
-    // Only probe /auth/status on the first error — once we know whether
-    // auth is the cause, subsequent reconnect-attempt errors don't need
-    // to re-check. We deliberately don't close the stream: EventSource
-    // sends cookies fresh on each retry, so the next reconnect after a
-    // successful login picks up the new session and resumes automatically.
+    // Probe /auth/status only on the first error. The stream stays open: EventSource resends cookies on each
+    // retry, so it resumes after login.
     if (probed) return;
     probed = true;
     fetchAuthStatus().then(
@@ -301,14 +298,10 @@ export interface StabilityStreamHandlers {
   onDone?: () => void;
 }
 
-/** Open the streamed stability probe (see docs/realtime-stability-repro.md). It
- *  briefly saturates the tunnel, so it's DISRUPTIVE and runs on demand only;
- *  streaming gives live progress and a definite end on success/error/disconnect. */
+/** Open the streamed stability probe. It briefly saturates the tunnel, so it runs on demand only. */
 export function openStabilityStream(name: string, handlers: StabilityStreamHandlers): EventSource {
   const url = `/api/v1/connectivity/stability/${encodeURIComponent(name)}/stream`;
-  // Guard so the terminal callbacks fire exactly once: a server-side close right
-  // after "done" can also surface as an onerror, and a mid-run drop must clear
-  // loading rather than silently reconnect.
+  // Terminal callbacks fire once: a close after "done" also surfaces as onerror, and a mid-run drop must not reconnect.
   let finished = false;
   const finish = (cb: () => void) => {
     if (finished) return;

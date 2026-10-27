@@ -1,23 +1,8 @@
-"""System-proxy controller plugin system.
+"""System-proxy controller plugins. The active one is the container labelled `dashboard.controller=<name>`.
 
-A "system proxy" is the container that routes the host's traffic (clash,
-xray, sing-box, …). At most one is active at a time, designated by the
-`dashboard.controller=<name>` label on its container.
-
-To add a new controller:
-
-  1. Implement `SystemProxyController` in a new module under this package.
-  2. Optionally implement capability protocols (`SupportsConnectionsStream`,
-     `SupportsTrafficStream`) — translating the backend's wire format into the
-     normalized `ConnectionSnapshot`. Features auto-enable for controllers that
-     implement them and stay hidden for those that don't (see `active_capabilities`).
-  3. Register it by calling `registry.register("<name>", FactoryFn)` at
-     module import time (see `clash.py` for the canonical example).
-  4. Add `dashboard.controller=<name>` to the container's labels in
-     docker-compose.yml.
-
-The HTTP router in `routers/system_proxy.py` is intentionally generic and
-does not know about any specific controller.
+To add one: implement `SystemProxyController` in a module here (plus any capability protocols; features
+auto-enable per `active_capabilities`), call `registry.register("<name>", Factory)` at import (see
+`clash.py`), and add the label in docker-compose.yml. `routers/system_proxy.py` stays controller-agnostic.
 """
 
 # Import side-effects: each controller module registers itself on import.
