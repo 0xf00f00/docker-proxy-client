@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+	"slices"
 
 	"github.com/0xf00f00/cf-edge-manager/internal/decoy"
 )
@@ -38,7 +39,12 @@ type Config struct {
 	MinRestartGap      int64   // min seconds between snispoof restarts
 	QuarantineTTL      int64   // skip a confirmed-bad in-use IP this long (s)
 	SurvivalCheck      bool    // gate the real-path tier (false = loss-only)
+	NoByedpi           bool    // manage the snispoof path only
 }
+
+// Peers reports the edges and decoys the other sni-spoofing instances are on, so
+// instances stay on different edges and different decoys.
+type Peers func() (edges, decoys []string)
 
 // State is the durable picker state.
 type State struct {
@@ -65,6 +71,17 @@ type Selector struct {
 	hello  decoy.Check                // plain TLS hello; nil == decoy self-healing off
 	trial  func(ip, sni string) *bool // real-path probe with decoy sni
 	decoys []string                   // candidate decoys, preferred first
+	peers  Peers                      // nil == the only instance
+}
+
+// SetPeers makes this selector keep clear of the other instances' edges and decoys.
+func (s *Selector) SetPeers(p Peers) { s.peers = p }
+
+func (s *Selector) peerSets() (edges, decoys []string) {
+	if s.peers == nil {
+		return nil, nil
+	}
+	return s.peers()
 }
 
 // New builds a Selector from config, injected probes (loss/survival), a pool
@@ -199,7 +216,8 @@ func (s *Selector) Tick(now int64) int64 {
 	if now < st.NextRun {
 		return st.NextRun - now
 	}
-	pool := s.pool()
+	peerEdges, _ := s.peerSets()
+	pool := slices.DeleteFunc(slices.Clone(s.pool()), func(ip string) bool { return slices.Contains(peerEdges, ip) })
 	if len(pool) == 0 {
 		s.log.Info("pool empty/missing; keeping current edges")
 		st.NextRun = now + s.cfg.BaseInterval
@@ -215,7 +233,11 @@ func (s *Selector) Tick(now int64) int64 {
 	}
 	st.Quarantine = q
 
-	bip, sip := s.apply.CurrentByedpi(), s.apply.CurrentSnispoof()
+	var bip string
+	if !s.cfg.NoByedpi {
+		bip = s.apply.CurrentByedpi()
+	}
+	sip := s.apply.CurrentSnispoof()
 	s.log.Info("current", "byedpi", bip, "snispoof", sip, "pool_size", len(pool))
 	switched := s.checkDecoy(&st, now, pool, sip)
 	// byedpi doesn't carry the decoy, so a dead decoy's real-path verdicts say nothing about its edge
@@ -240,17 +262,22 @@ func (s *Selector) Tick(now int64) int64 {
 		s.log.Info("snispoof path ->", "ip", ip)
 	}
 
-	bip, bok := s.settle("byedpi", bip, pool, sip, q, now, byedpiRealPath, applyB)
+	paths, healthy := 1, 0
+	if !s.cfg.NoByedpi {
+		var bok bool
+		bip, bok = s.settle("byedpi", bip, pool, sip, q, now, byedpiRealPath, applyB)
+		paths, healthy = 2, b2i(bok)
+	}
 	sip, sok := s.settle("snispoof", sip, pool, bip, q, now, true, applyS)
-	healthy := b2i(bok) + b2i(sok)
+	healthy += b2i(sok)
 
-	// distinct-IP guard: the two paths must not share fate.
-	if bip != "" && bip == sip {
-		s.log.Warn("both paths on same ip; diversifying snispoof", "ip", bip)
+	// distinct-IP guard: the paths must not share fate.
+	if (bip != "" && bip == sip) || slices.Contains(peerEdges, sip) {
+		s.log.Warn("path shares an edge with another path; diversifying snispoof", "ip", sip)
 		if next := s.pickClean(pool, bip, q, now, true); next != "" {
 			applyS(next)
 		} else {
-			s.log.Warn("pool lacks a 2nd distinct clean IP; leaving both", "ip", bip)
+			s.log.Warn("pool lacks a 2nd distinct clean IP; leaving both", "ip", sip)
 		}
 	}
 	// one restart carries every staged snispoof edit; a new decoy doesn't wait out MinRestartGap
@@ -280,7 +307,7 @@ func (s *Selector) Tick(now int64) int64 {
 		if delay > s.cfg.MaxBackoff || delay <= 0 {
 			delay = s.cfg.MaxBackoff
 		}
-		s.log.Info("outage: 0/2 healthy, no clean candidates; backing off", "next_s", delay, "fails", st.Fails)
+		s.log.Info("outage: no healthy path, no clean candidates; backing off", "paths", paths, "next_s", delay, "fails", st.Fails)
 	}
 	st.NextRun = now + delay
 	s.saveState(st)

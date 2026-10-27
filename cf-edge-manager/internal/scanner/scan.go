@@ -159,7 +159,7 @@ func survivedStr(s *Survival) string {
 // nothing survives the gate, the TCP-ranked pool is kept as-is rather than
 // emptied (a network-wide bad window must not wipe the pool).
 func (s *Service) tlsGate(ctx context.Context, pool []string) []string {
-	sni := apply.LiveFakeSNI(s.cfg.SnispoofConf) // the decoy production sends
+	sni := apply.LiveFakeSNI(s.cfg.PrimaryConf()) // the decoy production sends
 	s.log.Info("connect-survival gate", "candidates", len(pool), "sni", sni,
 		"burst", s.cfg.TLSBurst, "fail_max", s.cfg.TLSFailMax)
 	type ranked struct {

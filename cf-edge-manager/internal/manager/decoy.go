@@ -28,5 +28,5 @@ func (m *Manager) decoyTrial(ip, sni string) *bool {
 
 // ScreenDecoys screens the decoy candidates by plain TLS now, without switching.
 func (m *Manager) ScreenDecoys(ctx context.Context) map[string]any {
-	return m.sel.ScreenDecoys(ctx)
+	return m.insts[0].sel.ScreenDecoys(ctx)
 }

@@ -7,8 +7,8 @@ external-controller: 127.0.0.1:9697
 secret: REQUIRE_ENV_CLASH_API_SECRET
 
 hosts:
-  naive: 127.0.0.1
-  naive-uot: 127.0.0.1
+  # naive: 127.0.0.1
+  # naive-uot: 127.0.0.1
   frpc-proxy: 10.20.0.15
   psiphon: 10.20.0.14
   xray: 10.20.0.18
@@ -59,16 +59,16 @@ tun:
   auto-detect-interface: true
 
 proxies:
-  - name: "naive"
-    type: socks5
-    server: naive
-    port: 1080
-    udp: false
-  - name: "naive-uot"
-    type: socks5
-    server: naive-uot
-    port: 1081
-    udp: true
+  # - name: "naive"
+  #   type: socks5
+  #   server: naive
+  #   port: 1080
+  #   udp: false
+  # - name: "naive-uot"
+  #   type: socks5
+  #   server: naive-uot
+  #   port: 1081
+  #   udp: true
   - name: "frpc"
     type: socks5
     server: frpc-proxy
@@ -104,8 +104,8 @@ proxy-groups:
     proxies:
       - xray
       - xray-fallback
-      - naive-uot
-      - naive
+      # - naive-uot
+      # - naive
       - frpc
     url: 'http://www.gstatic.com/generate_204'
     interval: 300

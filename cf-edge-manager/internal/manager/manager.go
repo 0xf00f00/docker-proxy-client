@@ -5,7 +5,9 @@ package manager
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"math"
 	"path/filepath"
 	"time"
 
@@ -18,41 +20,68 @@ import (
 	"github.com/0xf00f00/cf-edge-manager/internal/selector"
 )
 
-// Manager runs the runtime edge-selection loop and owns the embedded prober.
-type Manager struct {
-	cfg     config.Config
-	log     *slog.Logger
-	prober  *realpath.Prober
+// instance is one managed sni-spoofing container and its selector.
+type instance struct {
+	name    string
 	applier *apply.Applier
 	sel     *selector.Selector
 }
 
-// New wires the probes, applier, pool reader and selector from config.
-func New(cfg config.Config, log *slog.Logger) *Manager {
-	applier := &apply.Applier{
-		FrontHost: cfg.FrontHost, Port: cfg.Port,
-		CorednsHosts: cfg.CorednsHosts, SnispoofConf: cfg.SnispoofConf,
-		SnispoofName: cfg.SnispoofName, DockerSock: cfg.DockerSock,
-	}
-	prober := realpath.New(ProberConfig(cfg), log)
+// Manager runs the runtime edge-selection loop and owns the embedded prober. The
+// instances are kept on different edges and decoys; the last one also owns the
+// byedpi path.
+type Manager struct {
+	cfg    config.Config
+	log    *slog.Logger
+	prober *realpath.Prober
+	insts  []*instance // priority order
+}
 
+// New wires the probes, appliers, pool reader and one selector per instance.
+func New(cfg config.Config, log *slog.Logger) *Manager {
+	prober := realpath.New(ProberConfig(cfg), log)
 	loss := func(ip string) float64 { return probe.TCPLoss(ip, cfg.Port, cfg.LossPings, cfg.LossTimeout) }
-	survival := func(ip string) *bool {
-		return prober.Probe(context.Background(), ip, realpath.Options{FakeSNI: applier.CurrentFakeSNI()}).Survived
-	}
 	poolFn := func() []string { return pool.Read(filepath.Join(cfg.OutDir, "pool.txt")) }
 
-	sel := selector.New(selector.Config{
-		KeepMax: cfg.KeepMax, PickMax: cfg.PickMax,
-		MaxCandidates: cfg.MaxCandidates, MaxProbeCandidates: cfg.MaxProbeCandidates,
-		BaseInterval: secs(cfg.SelectInterval), MaxBackoff: secs(cfg.SelectMaxBackoff),
-		MinRestartGap: secs(cfg.MinRestartGap), QuarantineTTL: secs(cfg.QuarantineTTL),
-		SurvivalCheck: cfg.SurvivalCheck,
-	}, log, cfg.SelectState, loss, survival, poolFn, applier)
-
-	m := &Manager{cfg: cfg, log: log, prober: prober, applier: applier, sel: sel}
-	sel.SetDecoy(m.decoyHello, m.decoyTrial, decoy.Seeds())
+	m := &Manager{cfg: cfg, log: log, prober: prober}
+	last := len(cfg.Instances) - 1
+	for i, c := range cfg.Instances {
+		a := &apply.Applier{Port: cfg.Port, SnispoofConf: c.Conf, SnispoofName: c.Name, DockerSock: cfg.DockerSock}
+		if i == last {
+			a.FrontHost, a.CorednsHosts = cfg.FrontHost, cfg.CorednsHosts
+		}
+		survival := func(ip string) *bool {
+			return prober.Probe(context.Background(), ip, realpath.Options{FakeSNI: a.CurrentFakeSNI()}).Survived
+		}
+		sel := selector.New(selector.Config{
+			KeepMax: cfg.KeepMax, PickMax: cfg.PickMax,
+			MaxCandidates: cfg.MaxCandidates, MaxProbeCandidates: cfg.MaxProbeCandidates,
+			BaseInterval: secs(cfg.SelectInterval), MaxBackoff: secs(cfg.SelectMaxBackoff),
+			MinRestartGap: secs(cfg.MinRestartGap), QuarantineTTL: secs(cfg.QuarantineTTL),
+			SurvivalCheck: cfg.SurvivalCheck, NoByedpi: i != last,
+		}, log, c.State, loss, survival, poolFn, a)
+		sel.SetDecoy(m.decoyHello, m.decoyTrial, decoy.Seeds())
+		sel.SetPeers(m.peersOf(i))
+		m.insts = append(m.insts, &instance{name: c.Name, applier: a, sel: sel})
+	}
 	return m
+}
+
+// peersOf is what instance i must keep clear of: the other instances' edges and
+// decoys, plus the byedpi edge when another instance owns that path.
+func (m *Manager) peersOf(i int) selector.Peers {
+	return func() (edges, decoys []string) {
+		for j, o := range m.insts {
+			if j != i {
+				edges = append(edges, o.applier.CurrentSnispoof())
+				decoys = append(decoys, o.applier.CurrentFakeSNI())
+			}
+		}
+		if owner := m.insts[len(m.insts)-1]; owner != m.insts[i] {
+			edges = append(edges, owner.applier.CurrentByedpi())
+		}
+		return edges, decoys
+	}
 }
 
 // ProberConfig builds the probe config; the wire params MUST match the live xray
@@ -61,7 +90,7 @@ func New(cfg config.Config, log *slog.Logger) *Manager {
 func ProberConfig(cfg config.Config) realpath.Config {
 	return realpath.Config{
 		OriginHost: cfg.ProbeOriginHost, UUID: cfg.ProbeUUID, Path: cfg.ProbePath,
-		RealUTLS: cfg.ProbeRealUTLS, FakeSNI: apply.LiveFakeSNI(cfg.SnispoofConf), FakeUTLS: cfg.ProbeFakeUTLS,
+		RealUTLS: cfg.ProbeRealUTLS, FakeSNI: apply.LiveFakeSNI(cfg.PrimaryConf()), FakeUTLS: cfg.ProbeFakeUTLS,
 		Fragment: cfg.ProbeFragment, EdgePort: cfg.Port, ProbeURL: cfg.ProbeURL,
 		PreGate: cfg.ProbePreGate, DoHURL: cfg.ProbeDoHURL,
 		Count: cfg.ProbeCount, Concurrency: cfg.ProbeConcurrency, Spacing: 300 * time.Millisecond,
@@ -73,11 +102,17 @@ func ProberConfig(cfg config.Config) realpath.Config {
 // ProbeSurvival runs an on-demand real-path probe on the manager's long-lived
 // prober (reusing its xray/NFQUEUE), single-flighted against the selector.
 func (m *Manager) ProbeSurvival(ctx context.Context, ip string) realpath.Result {
-	return m.prober.Probe(ctx, ip, realpath.Options{Force: true, Interactive: true, FakeSNI: m.applier.CurrentFakeSNI()})
+	return m.prober.Probe(ctx, ip, realpath.Options{Force: true, Interactive: true, FakeSNI: m.insts[0].applier.CurrentFakeSNI()})
 }
 
-// Start launches the long-lived xray subprocess and the select loop.
+// Start launches the long-lived xray subprocess and the select loop. An instance
+// without a readable connect= would never be managed, so that is an error.
 func (m *Manager) Start(ctx context.Context) error {
+	for _, in := range m.insts {
+		if in.applier.CurrentSnispoof() == "" {
+			return fmt.Errorf("instance %s: no connect= in %s", in.name, in.applier.SnispoofConf)
+		}
+	}
 	if err := m.prober.Start(); err != nil {
 		return err
 	}
@@ -89,7 +124,7 @@ func (m *Manager) Start(ctx context.Context) error {
 func (m *Manager) loop(ctx context.Context) {
 	sleepCap := m.cfg.SelectSleepCap
 	for {
-		delay := time.Duration(m.sel.Tick(time.Now().Unix())) * time.Second
+		delay := time.Duration(m.tick()) * time.Second
 		if delay > sleepCap {
 			delay = sleepCap // re-tick at the cap; Tick re-gates on next_run (keeps shutdown responsive)
 		}
@@ -104,18 +139,34 @@ func (m *Manager) loop(ctx context.Context) {
 	}
 }
 
+// tick runs the due selectors in priority order, so the first instance gets the
+// pick of the pool, and returns the seconds until the earliest next one.
+func (m *Manager) tick() int64 {
+	next := int64(math.MaxInt64)
+	for _, in := range m.insts {
+		next = min(next, in.sel.Tick(time.Now().Unix()))
+	}
+	return next
+}
+
 // Stop terminates the embedded xray subprocess.
 func (m *Manager) Stop() { m.prober.Stop() }
 
-// Status reports the current in-use edges + the probe's sni-spoofing version
-// (surfaced so drift against the live 0.5.1 container is visible).
+// Status reports the in-use edge and decoy per instance, in priority order, plus
+// the probe's sni-spoofing version (surfaced so drift against the live container
+// is visible).
 func (m *Manager) Status() map[string]any {
+	insts := make([]map[string]string, 0, len(m.insts))
+	for _, in := range m.insts {
+		insts = append(insts, map[string]string{
+			"name": in.name, "edge": in.applier.CurrentSnispoof(), "fake_sni": in.applier.CurrentFakeSNI(),
+		})
+	}
 	return map[string]any{
-		"byedpi":                     m.applier.CurrentByedpi(),
-		"snispoof":                   m.applier.CurrentSnispoof(),
+		"instances":                  insts,
+		"byedpi":                     m.insts[len(m.insts)-1].applier.CurrentByedpi(),
 		"sni_spoofing_probe_version": m.cfg.SNIVersion,
 		"survival_check":             m.cfg.SurvivalCheck,
-		"fake_sni":                   m.applier.CurrentFakeSNI(),
 	}
 }
 

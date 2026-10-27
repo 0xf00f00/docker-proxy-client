@@ -7,9 +7,18 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
+	"unicode"
 )
+
+// Instance is one managed sni-spoofing container: its name (also the container
+// and the directory holding its config.ini), config path and selector state file.
+type Instance struct{ Name, Conf, State string }
 
 // Config is the scanner's runtime configuration, sourced from the environment.
 type Config struct {
@@ -110,9 +119,11 @@ type Config struct {
 	ProbePreGate bool
 	ProbeDoHURL  string
 
-	// Apply targets (the fallback edge-path configs the manager rewrites).
-	FrontHost, CorednsHosts, SnispoofConf string
-	SnispoofName, DockerSock, SelectState string
+	// Apply targets: the sni-spoofing instances the manager rewrites + restarts, in
+	// priority order (always on different edges and decoys), and the byedpi front
+	// host + hosts file, owned by the last instance.
+	Instances                           []Instance
+	FrontHost, CorednsHosts, DockerSock string
 
 	// SNIVersion is the embedded sni-spoofing module version, surfaced in /status
 	// so drift against the live container is visible.
@@ -127,6 +138,10 @@ func Load() (Config, error) {
 	// _MS milliseconds, _MAX a 0..1 fraction), and use _ENABLE for on/off toggles.
 	// docker-compose.yml maps the user-facing CF_<NAME> vars onto these. See the
 	// migration table in README.md for the old (pre-rename) names.
+	instances, err := parseInstances(env("SNISPOOF_INSTANCES", "sni-spoofing,sni-spoofing-fallback"), env("INSTANCE_DIR", "/instances"), env("STATE_DIR", "/state"))
+	if err != nil {
+		return Config{}, err
+	}
 	c := Config{
 		APIAddr:         env("API_ADDR", ":8088"),
 		RangesFile:      env("RANGES_FILE", "/cf-ranges.txt"),
@@ -187,12 +202,10 @@ func Load() (Config, error) {
 		ProbePreGate:     envBool("PROBE_PREGATE_ENABLE", true),
 		ProbeDoHURL:      env("PROBE_DOH_URL", "https://one.one.one.one/dns-query?name=cloudflare.com&type=A"),
 
+		Instances:    instances,
 		FrontHost:    env("FALLBACK_FRONT_HOST", ""),
 		CorednsHosts: env("COREDNS_HOSTS", "/coredns-fallback/edge.hosts"),
-		SnispoofConf: env("SNISPOOF_CONF", "/snispoof2/config.ini"),
-		SnispoofName: env("SNISPOOF_CONTAINER", "sni-spoofing-fallback"),
 		DockerSock:   env("DOCKER_SOCK", "/var/run/docker.sock"),
-		SelectState:  env("SELECT_STATE", "/state/picker.json"),
 
 		SNIVersion: "0.7.2",
 	}
@@ -226,6 +239,41 @@ func (c Config) validate() error {
 		}
 	}
 	return nil
+}
+
+var instanceName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+
+// parseInstances turns a comma/space separated list of container names into
+// instances. A name is interpolated into a docker API path and file paths, hence
+// the strict pattern.
+func parseInstances(list, dir, stateDir string) ([]Instance, error) {
+	var out []Instance
+	for _, name := range strings.FieldsFunc(list, func(r rune) bool { return r == ',' || unicode.IsSpace(r) }) {
+		switch {
+		case !instanceName.MatchString(name):
+			return nil, fmt.Errorf("SNISPOOF_INSTANCES: invalid name %q", name)
+		case slices.ContainsFunc(out, func(i Instance) bool { return i.Name == name }):
+			return nil, fmt.Errorf("SNISPOOF_INSTANCES: %q listed twice", name)
+		}
+		out = append(out, Instance{
+			Name:  name,
+			Conf:  filepath.Join(dir, name, "config.ini"),
+			State: filepath.Join(stateDir, "picker-"+name+".json"),
+		})
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("SNISPOOF_INSTANCES must name at least one instance")
+	}
+	return out, nil
+}
+
+// PrimaryConf is the first instance's config, the decoy source for probes that
+// aren't tied to one instance.
+func (c Config) PrimaryConf() string {
+	if len(c.Instances) == 0 {
+		return ""
+	}
+	return c.Instances[0].Conf
 }
 
 func env(key, def string) string {

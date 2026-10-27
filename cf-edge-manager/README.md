@@ -10,8 +10,8 @@ dashboard talks to, plus `GET /manager/status`.
 
 > **Out of the box, this container does no automated work.** It boots, serves its
 > control API, and then waits. No scan runs until the dashboard (or you) triggers
-> one; no edge gets probed, rotated, or quarantined; `sni-spoofing-fallback` is
-> never rewritten or restarted.
+> one; no edge gets probed, rotated, or quarantined; `sni-spoofing` and
+> `sni-spoofing-fallback` are never rewritten or restarted.
 
 Every autonomous behavior is **opt-in**.
 
@@ -20,7 +20,7 @@ Every autonomous behavior is **opt-in**.
 | Behavior | Switch (`.env` / internal) | Default | What it does when ON | Blast radius |
 |----------|---------------------------|---------|----------------------|--------------|
 | **Scheduled discovery scan** | `CF_SCAN_CRON` / `SCAN_CRON` | *empty (off)* | Runs a full cfst scan on a cron schedule and rewrites the edge pool. | Saturates probe traffic on the uplink for its duration; does **not** touch live routing. The dashboard can always scan on demand regardless. |
-| **Runtime edge selection** | `CF_SELECT_ENABLE` / `SELECT_ENABLE` | `false` | Health-checks the in-use edge, probes candidates, rotates off degraded edges, quarantines bad ones, and **rewrites + restarts `sni-spoofing-fallback`**. | The one that changes live routing; restarts the fallback edge container when it repoints (rate-limited by `RESTART_MIN_GAP_S`). |
+| **Runtime edge selection** | `CF_SELECT_ENABLE` / `SELECT_ENABLE` | `false` | Health-checks the in-use edge, probes candidates, rotates off degraded edges, quarantines bad ones, and **rewrites + restarts `sni-spoofing` and `sni-spoofing-fallback`**. | The one that changes live routing; restarts an edge container when it repoints (rate-limited per instance by `RESTART_MIN_GAP_S`). |
 
 `SELECT_ENABLE` gates *all* runtime autonomy: the select loop, the real-path
 probe (`PROBE_ENABLE`), quarantine, config rewrites, and container restarts. With
@@ -76,9 +76,17 @@ real-path probe reads every edge as a false failure.
 | `CF_PROBE_REAL_UTLS` | `chrome` | xray real-hello uTLS fingerprint (the hello that reaches CF/origin). |
 | `CF_PROBE_FRAGMENT` | `false` | Real-ClientHello fragmentation. Keep `false` — A/B showed fragment-on is *worse* here. |
 
+### sni-spoofing instances
+
+`CF_SNISPOOF_INSTANCES` lists the sni-spoofing containers to manage (default
+`sni-spoofing,sni-spoofing-fallback`), in priority order. Each name is the
+container name and the directory holding its `config.ini`, which
+`docker-compose.yml` mounts at `/instances/<name>`. To manage another instance,
+add its name to the list and mount its directory.
+
 ### Decoy SNI
 
-`fake-sni` in the fallback sni-spoofing config is kept working automatically (needs
+`fake-sni` in each sni-spoofing config is kept working automatically (needs
 `PROBE_ENABLE`): when it stops working on the real path, the manager switches to a
 name from `internal/decoy/seeds.txt` that does, rewrites the config and restarts
 sni-spoofing. `POST /manager/decoys/screen` shows which names pass plain TLS now.
@@ -113,8 +121,7 @@ false reverts the picker to loss-only): `PROBE_URL`
 `PROBE_CACHE_TTL_S` (1800).
 
 **Apply targets / wiring:** `API_ADDR` (`:8088`), `COREDNS_HOSTS`,
-`SNISPOOF_CONF`, `SNISPOOF_CONTAINER` (`sni-spoofing-fallback`), `DOCKER_SOCK`,
-`SELECT_STATE` (`/state/picker.json`).
+`INSTANCE_DIR` (`/instances`), `STATE_DIR` (`/state`), `DOCKER_SOCK`.
 
 ## Disabling everything (return to inert state)
 
