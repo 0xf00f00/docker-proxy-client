@@ -325,7 +325,7 @@ services:
       - NET_RAW
     dns:
       - 10.20.0.21
-    command: "-i 0.0.0.0 -p 1080 ${BYEDPI_DESYNC:--s 1:5:3+s}"
+    command: "-i 0.0.0.0 -p 1080 ${BYEDPI_DESYNC:--r 1+s}"
     healthcheck:
       test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 1080 || exit 1"]
       <<: *proxy-healthcheck

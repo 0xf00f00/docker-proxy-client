@@ -10,7 +10,7 @@
 #   - gvt0/1/2/3.com: the redirector is GFE-reachable, but the component download
 #     it 302s to lands on the SAME GGC edge (r#---sn-*.gvt1.com, 216.19.188.x) and
 #     fronts to 421. Left unmatched so they resolve to their real edge, where
-#     byedpi splits the SNI instead.
+#     byedpi splits the TLS record at the SNI instead.
 .:53 {
     errors
     reload
