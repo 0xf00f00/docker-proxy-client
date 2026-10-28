@@ -637,14 +637,19 @@ function progressText(progress: StabilityProgress | null, countdown: number | nu
   return PROGRESS_TEXT[phase];
 }
 
-// Abnormal regimes are about the whole internet link, not this proxy — say so in
+// Abnormal regimes are about the whole connection, not this proxy — say so in
 // plain language so a non-technical user doesn't blame the proxy.
 function regimeBanner(result: StabilityResult): string | null {
-  if (result.regime.regime === "iran_only")
-    return "Your internet is in Iran-only mode right now — international sites are blocked for everyone, so no proxy can be judged. This isn't a problem with this proxy.";
-  if (result.regime.regime === "total_outage")
-    return "Your internet appears to be down right now — nothing is reachable. Try again once it's back.";
-  return null;
+  switch (result.regime.regime) {
+    case "iran_only":
+      return "International sites are blocked right now, so no proxy can be judged. This isn't a problem with this proxy.";
+    case "total_outage":
+      return "Your internet connection is down right now — nothing can be reached. Check the modem or ISP, then try again.";
+    case "local_network":
+      return "The proxy device can't reach your router right now. Check that the router is on and connected, then try again.";
+    default:
+      return null;
+  }
 }
 
 function GradeChip({ label, grade }: { label: string; grade: StabilityGrade }) {

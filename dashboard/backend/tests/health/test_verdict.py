@@ -84,10 +84,12 @@ def test_decoy_blocked_when_every_instance_times_out_and_the_outside_world_is_re
     assert r.minutes[20].state == DOWN and r.minutes[20].cause == "decoy_blocked"
 
 
-def test_country_wide_block_and_local_outage_come_from_the_outside_check():
+def test_the_outside_check_names_which_layer_is_down():
     dead = lambda i: sample(i, alive=DEAD, down=0, chains={})  # noqa: E731
-    assert run(seq((dead, 10)), probes=[ladder(1, "iran_only")]).minutes[-1].cause == "regime"
-    assert run(seq((dead, 10)), probes=[ladder(1, "total_outage")]).minutes[-1].cause == "local"
+    cause = lambda regime: run(seq((dead, 10)), probes=[ladder(1, regime)]).minutes[-1].cause  # noqa: E731
+    assert cause("iran_only") == "regime"
+    assert cause("total_outage") == "internet"
+    assert cause("local_network") == "local_network"
 
 
 def test_a_goodput_far_below_the_usual_is_slow_the_august_shape():

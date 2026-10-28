@@ -1,31 +1,29 @@
-"""Network-regime classifier: tells "this edge is dirty" from "the whole link is down" so a censorship window
-isn't misread as a proxy fault. Regimes: normal / iran_only (intl blocked, Iran sites up) / total_outage / unknown."""
+"""Network-regime classifier: tells "this edge is dirty" from "the whole link is down" so an outage isn't misread as
+a proxy fault. Regimes: normal / iran_only (intl blocked, Iran sites up) / total_outage (router reachable, nothing
+beyond it) / local_network (router unreachable) / unknown."""
 
 import asyncio
 import socket
 import ssl
 import time
 
-import httpx
-
 from app.models.schemas import RegimeInfo
 from app.services import direct_net
 
-INTL_HOST = "www.google.com"
+# Independent operators, so one name being filtered or one handshake lost can't read as "the world is down".
+INTL_HOSTS = ["www.google.com", "www.cloudflare.com", "www.microsoft.com"]
 IR_HOSTS = ["digikala.com", "snapp.ir"]
 ANCHOR_PORT = 443
 ANCHOR_TIMEOUT = 5.0
-DIRECT_GOODPUT_URL = "https://www.gstatic.com/generate_204"
-DIRECT_GOODPUT_BYTES = 3_000_000
-DIRECT_GOODPUT_TIMEOUT = 20.0
+CONFIRM_DELAY_S = 1.0
 
-# Cache the regime so a batch of per-proxy tests resolves the link once, and the
-# real Iran-resident anchor sites aren't hit repeatedly.
-CACHE_TTL_S = 300.0
+# Short enough that an outage is attributed to its real cause, long enough that the Iran-resident anchors
+# aren't hit on every call.
+CACHE_TTL_S = 60.0
 
 _cache: tuple[float, RegimeInfo] | None = None
 _cache_lock = asyncio.Lock()
-_intl_lkg_ip: str | None = None
+_lkg_ips: dict[str, str] = {}
 
 
 def _resolve(host: str) -> str | None:
@@ -53,21 +51,33 @@ def _tls_reachable(host: str, ip: str, timeout: float) -> bool:
         sock.close()
 
 
-def _probe_intl_sync() -> tuple[bool, bool]:
-    """Returns (reachable, dns_ok). Resolves Google by name and caches a
-    last-known-good IP; on resolution failure retries against the cache, so a
-    dead (international) resolver doesn't masquerade as "Google is down"."""
-    global _intl_lkg_ip
-    ip = _resolve(INTL_HOST)
+def _probe_host_sync(host: str) -> tuple[bool, bool]:
+    """Returns (reachable, dns_ok). Resolves the host by name and caches a last-known-good IP; on resolution
+    failure retries against the cache, so a dead (international) resolver doesn't masquerade as "host is down"."""
+    ip = _resolve(host)
     dns_ok = ip is not None
     if ip is None:
-        ip = _intl_lkg_ip
+        ip = _lkg_ips.get(host)
         if ip is None:
             return False, False
-    reachable = _tls_reachable(INTL_HOST, ip, ANCHOR_TIMEOUT)
+    reachable = _tls_reachable(host, ip, ANCHOR_TIMEOUT)
     if reachable and dns_ok:
-        _intl_lkg_ip = ip
+        _lkg_ips[host] = ip
     return reachable, dns_ok
+
+
+async def _probe_intl() -> tuple[bool, bool]:
+    """(reachable, dns_ok): any anchor answering means the outside world is reachable. A failure is re-checked
+    once before it counts, so a single lost handshake can't flip the verdict."""
+    dns_ok = False
+    for attempt in range(2):
+        results = await asyncio.gather(*(asyncio.to_thread(_probe_host_sync, h) for h in INTL_HOSTS))
+        dns_ok = dns_ok or any(d for _, d in results)
+        if any(r for r, _ in results):
+            return True, dns_ok
+        if attempt == 0:
+            await asyncio.sleep(CONFIRM_DELAY_S)
+    return False, dns_ok
 
 
 def _probe_ir_sync() -> bool:
@@ -78,52 +88,38 @@ def _probe_ir_sync() -> bool:
     return False
 
 
-async def _measure_direct_goodput() -> float | None:
-    """Direct (un-proxied) throughput in MB/s — the §3 baseline, only meaningful
-    when international is up."""
-    start = time.monotonic()
-    total = 0
-    transport = httpx.AsyncHTTPTransport(socket_options=direct_net.socket_options())
-    try:
-        async with (
-            httpx.AsyncClient(timeout=DIRECT_GOODPUT_TIMEOUT, transport=transport) as client,
-            client.stream("GET", DIRECT_GOODPUT_URL) as resp,
-        ):
-            async for chunk in resp.aiter_bytes():
-                total += len(chunk)
-                if total >= DIRECT_GOODPUT_BYTES:
-                    break
-    except Exception:
-        return None
-    elapsed = time.monotonic() - start
-    if elapsed <= 0 or total == 0:
-        return None
-    return round((total / 1_000_000) / elapsed, 2)
+async def _gateway_reachable() -> bool | None:
+    reachable = await direct_net.gateway_reachable()
+    if reachable is False:
+        await asyncio.sleep(CONFIRM_DELAY_S)
+        reachable = await direct_net.gateway_reachable()
+    return reachable
 
 
 async def _classify() -> RegimeInfo:
-    intl_reachable, dns_ok = await asyncio.to_thread(_probe_intl_sync)
+    if await _gateway_reachable() is False:
+        return RegimeInfo(
+            regime="local_network",
+            intl_up=False,
+            detail="Local network down: this device can't reach its router, so nothing else was tested.",
+        )
+
+    intl_reachable, dns_ok = await _probe_intl()
 
     if intl_reachable:
-        goodput = await _measure_direct_goodput()
-        return RegimeInfo(
-            regime="normal",
-            intl_up=True,
-            direct_goodput_mbps=goodput,
-            detail="International reachable (Google OK).",
-        )
+        return RegimeInfo(regime="normal", intl_up=True, detail="International reachable.")
 
     # Only touch the real Iran-resident sites once international already looks down.
     if await asyncio.to_thread(_probe_ir_sync):
-        why = "Iran-only mode: international blocked, Iran sites reachable."
+        why = "International blocked: foreign sites unreachable, Iran sites reachable."
         if not dns_ok:
-            why += " International DNS is also failing (corroborates Iran-only)."
+            why += " International DNS is also failing (corroborates the block)."
         return RegimeInfo(regime="iran_only", intl_up=False, detail=why)
 
     return RegimeInfo(
         regime="total_outage",
         intl_up=False,
-        detail="Nothing reachable — international and Iran-resident sites both down.",
+        detail="Internet down: the router answers but neither foreign nor Iran-resident sites do.",
     )
 
 

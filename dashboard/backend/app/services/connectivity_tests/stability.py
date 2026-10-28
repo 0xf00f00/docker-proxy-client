@@ -415,9 +415,9 @@ async def test_stability(container: ContainerInfo, on_event: EventCb | None = No
     if proxy_url is None:
         detail = f"Unsupported protocol: {container.dashboard.protocol}"
         return _inconclusive(container.name, "n/a", regime, detail, error=detail)
-    # Blackout/outage: every edge fails for the same reason (the link), so a fault
+    # Block/outage: every edge fails for the same reason (the link), so a fault
     # can't be attributed to this proxy.
-    if regime.regime in ("iran_only", "total_outage"):
+    if regime.regime in ("iran_only", "total_outage", "local_network"):
         return _inconclusive(container.name, proxy_url, regime, regime.detail)
 
     await emit("phase", {"phase": "load"})

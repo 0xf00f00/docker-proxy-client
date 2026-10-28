@@ -14,8 +14,9 @@ LABELS = {
     "busy": "The connection is full right now",
     "calls": "Calls may be choppy",
     "calls_busy": "Calls may be choppy while the connection is full",
-    "regime": "Country-wide block",
-    "local": "Internet appears down",
+    "regime": "International internet blocked",
+    "internet": "Internet is down",
+    "local_network": "Home network is down",
     "proxy": "Proxy unreachable",
     "proxy_restarted": "The proxy was restarting",
     "decoy_blocked": "The network is blocking our connections",
@@ -75,13 +76,15 @@ def _cause(f: Facts) -> str:
     if f.regime == "iran_only":
         return "regime"
     if f.regime == "total_outage":
-        return "local"
+        return "internet"
+    if f.regime == "local_network":
+        return "local_network"
     if f.restarted:
         return "proxy_restarted"
     if decoy_blocked(f.edges) and f.regime in (None, "normal") and f.unreach < UNREACH_BURST:
         return "decoy_blocked"
     if f.unreach >= UNREACH_BURST and f.regime is None:
-        return "local"
+        return "internet"
     if f.state == DOWN:
         return "proxy"
     if f.hot:

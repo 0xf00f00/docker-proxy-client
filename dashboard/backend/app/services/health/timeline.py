@@ -1,6 +1,8 @@
 """Pure analytics over stored health segments: live tail (``clip_segments``), buckets and totals
 (``bucketize``, ``summarize``), and discrete incidents (``find_incidents``)."""
 
+from collections import Counter
+
 from app.services.health.cause import cause_for, describe_detail
 from app.services.health.settings import MAX_GAP_S, STATUSES
 
@@ -92,6 +94,15 @@ def summarize(segments: list[tuple[int, int, str]], since: int, until: int) -> d
     }
 
 
+def dominant_regime(run: list[tuple[int, int, str, str, str | None]]) -> str:
+    """The regime holding the most outage time, so a long incident is named for what lasted, not what came first."""
+    secs: Counter[str] = Counter()
+    for s, e, status, regime, _detail in run:
+        if status == "outage":
+            secs[regime] += max(e - s, 1)
+    return secs.most_common(1)[0][0] if secs else run[-1][3]
+
+
 def find_incidents(
     rows: list[tuple[int, int, str, str, str | None]], until: int, alive_ts: int | None, min_duration_s: int = 60
 ) -> list[dict]:
@@ -108,8 +119,7 @@ def find_incidents(
         if duration < min_duration_s:
             return
         worst = "outage" if any(seg[2] == "outage" for seg in run) else "degraded"
-        # Prefer a regime that explains an outage; fall back to the last seen.
-        regime = next((seg[3] for seg in run if seg[2] == "outage" and seg[3] != "normal"), run[-1][3])
+        regime = dominant_regime(run)
         kind, label = cause_for(worst, regime)
         # The "why": take the onset detail of the first segment at the worst status.
         detail = next((seg[4] for seg in run if seg[2] == worst), None)

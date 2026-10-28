@@ -282,7 +282,7 @@ function IncidentRow({ inc }: { inc: HealthIncident }) {
             </span>
           )}
         </span>
-        {inc.causeDetail && <span className="text-muted truncate text-xs">{inc.causeDetail}</span>}
+        {inc.causeDetail && <span className="text-muted text-xs">{inc.causeDetail}</span>}
         <span className="text-muted truncate text-xs tabular-nums">{incidentRange(inc.start, inc.end)}</span>
       </div>
       <span className="text-muted shrink-0 text-xs font-medium tabular-nums">{durationLabel(inc.durationS)}</span>

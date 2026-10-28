@@ -159,12 +159,11 @@ export interface ConnectivityResults {
   stale: boolean;
 }
 
-export type NetworkRegime = "normal" | "dpi_degraded" | "iran_only" | "total_outage" | "unknown";
+export type NetworkRegime = "normal" | "iran_only" | "total_outage" | "local_network" | "unknown";
 
 export interface RegimeInfo {
   regime: NetworkRegime;
   intl_up: boolean;
-  direct_goodput_mbps: number | null;
   detail: string;
 }
 

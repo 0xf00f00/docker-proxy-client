@@ -31,10 +31,19 @@ def cause_for(status: str, regime: str) -> tuple[str, str]:
         return "unknown", "Not measured"
     # outage — regime says why
     if regime == "iran_only":
-        return "regime", "Country-wide block"
+        return "regime", "International internet blocked"
     if regime == "total_outage":
-        return "local", "Internet appears down"
+        return "internet", "Internet is down"
+    if regime == "local_network":
+        return "local_network", "Home network is down"
     return "proxy", "Proxy unreachable"
+
+
+REGIME_DETAIL = {
+    "iran_only": "Iranian websites work, but sites outside Iran can't be reached.",
+    "total_outage": "Neither Iranian nor foreign sites can be reached. Check the modem or ISP, not the proxy.",
+    "local_network": "The proxy device can't reach your router. Check that the router is on and connected.",
+}
 
 
 def detail_for(status: str, latency_ms: float | None, dns_ok: bool) -> str | None:
@@ -54,6 +63,8 @@ def detail_for(status: str, latency_ms: float | None, dns_ok: bool) -> str | Non
 def describe_detail(status: str, regime: str, detail: str | None) -> str | None:
     """Plain-language "why" for the incident detail view, or None when the headline
     ``causeLabel`` already says everything (or no detail was captured)."""
+    if status == "outage" and regime in REGIME_DETAIL:
+        return REGIME_DETAIL[regime]
     if not detail:
         return None
     try:
@@ -63,9 +74,7 @@ def describe_detail(status: str, regime: str, detail: str | None) -> str | None:
     if status == "degraded" and isinstance(info.get("latencyMs"), (int, float)):
         secs = info["latencyMs"] / 1000
         return f"Responses were taking about {secs:.1f}s"
-    # A failed name lookup only adds signal when the regime points at the proxy/path;
-    # under a country-wide block or total outage, DNS failing is expected, not the story.
-    if status == "outage" and info.get("dns") is False and regime not in ("iran_only", "total_outage"):
+    if status == "outage" and info.get("dns") is False:
         return "Name lookups (DNS) were failing"
     return None
 

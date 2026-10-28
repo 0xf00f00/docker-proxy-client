@@ -72,11 +72,10 @@ class ConnectivityResultsResponse(BaseModel):
 class RegimeInfo(BaseModel):
     """Network-regime classification: whether a proxy verdict is meaningful now and a direct baseline usable."""
 
-    # normal | dpi_degraded | iran_only | total_outage | unknown
+    # normal | iran_only | total_outage | local_network | unknown
     regime: str
-    # False during Iran-only blackouts and outages, when proxy grades are suppressed.
+    # False during blocks and outages, when proxy grades are suppressed.
     intl_up: bool
-    direct_goodput_mbps: float | None = None
     detail: str = ""
 
 
